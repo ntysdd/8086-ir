@@ -133,9 +133,13 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    Each belongs to exactly one target, is marked as such in the pipeline
    listing, and lives with that target rather than in the generic pass package.
 6. **Instruction selection**: pick the instruction *form* — which instruction,
-   which addressing mode, which encoding, which immediate width — by size first,
-   with the target's cost estimates breaking ties (*Optimised for size*, above).
-   Selection only selects: it never synthesizes a new
+   which addressing mode — by size first, with the target's cost estimates
+   breaking ties (*Optimised for size*, above). Byte-level encoding choices are
+   deliberately **not** made here: whether a displacement is 8 or 16 bits, or
+   whether an immediate needs the sign-extended form, depends on values that are
+   only known once everything has been placed — a forward-referenced label's
+   address, most obviously. Those belong to the assembler (step 9). Selection
+   only selects: it never synthesizes a new
    instruction sequence, because lowering already guaranteed legal operand
    combinations. Virtual flag registers are absorbed here, into the implicit
    flag effects of the instructions that produce them, so the allocator deals
@@ -149,8 +153,10 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    stack slots.
 8. **Emit** assembly text for the selected target.
 9. **Assemble** (optionally, in the same run): the bundled `asm` front end
-   encodes instructions, resolves and relaxes labels, and writes a flat binary
-   or a listing.
+   encodes instructions, choosing the shortest encoding for each form it is
+   given, resolves and relaxes labels (the shortest jump that reaches its
+   target), and writes a flat binary or a listing. The syntax it reads and the
+   emitter writes is specified in [`docs/asm.md`](docs/asm.md).
 
 This pass list is the description of record: adding, removing, reordering or
 re-targeting a pass means updating it in the same change, and a target-specific
@@ -175,6 +181,7 @@ src/test/java/...             unit tests, golden tests, round-trip tests
 src/test/resources/           golden files: IR samples, expected assembly/bytes
 examples/                     hand-written IR samples and expected output
 docs/ir.md                    the IR surface: syntax and semantics
+docs/asm.md                   the assembly text: syntax and encoding rules
 ```
 
 ### Building and running

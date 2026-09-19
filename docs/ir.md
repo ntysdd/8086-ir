@@ -395,9 +395,12 @@ Because variables are virtual registers, the meaning is exact:
 ## 9. Inline assembly — [decided]
 
 Inline assembly is the escape hatch: register-based BIOS/DOS calls, port
-sequences, string operations, and anything the surface cannot express. A block
-declares the registers it clobbers, and just as importantly the flags it
-**reads**, not only the ones it writes — a block containing `adc` reads `CF`, and
+sequences, string operations, and anything the surface cannot express. **The
+text inside a block is the assembly text of [`docs/asm.md`](asm.md)** — the same
+syntax the emitter writes and the bundled assembler reads — so there is one
+assembly language in the project rather than two. A block declares the registers
+it clobbers, and just as importantly the flags it **reads**, not only the ones
+it writes — a block containing `adc` reads `CF`, and
 without a declared use the optimiser may move a flag-clobbering `expr` in front
 of it.
 

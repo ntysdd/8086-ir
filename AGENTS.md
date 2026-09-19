@@ -92,6 +92,24 @@ Other Java-level rules:
   Explicit registration keeps the pipeline readable and greppable.
 * Keep command-line entry points thin. All real logic lives in library code
   that a test can call directly without spawning a process.
+* **Strings are not data structures.** A set of names or characters is never
+  packed into one string and searched with `contains`/`indexOf`, and fields are
+  never recovered by splitting a string on a separator. Both look like a
+  membership test and are not one:
+  * a window taken from the input can span the packed string's separators and
+    match text that is not an element, and
+  * the empty string is a substring of every string, so an empty window always
+    matches.
+  Use a `switch`, an explicit comparison, or a typed collection instead. A
+  `switch` is strictly better even for single characters: the compiler rejects a
+  duplicated `case`, while a duplicated element in a packed string is invisible.
+  (Iteration order of a collection is still subject to invariant 6.)
+
+  This is not hypothetical. The first version of the tokenizer packed its
+  two-character punctuation into `"<= >= == !="` and searched it, and so:
+  `=` followed by a space matched the `= ` inside `<= ` and was lexed as one
+  two-character token, and a closing `)` at the end of the input matched the
+  empty string and swallowed the end of the input.
 
 ---
 
@@ -110,11 +128,18 @@ build.bat run assemble hello.asm -o hello.bin
 * Plain batch only. No PowerShell-only constructs, no downloaded tools, no
   network access during build.
 * Build output goes to `build/` and is never edited by hand, never committed.
-* Compile with `--release 8 -Xlint:all`, and keep the build warning-clean.
-  `--release 8` pins the language level and the API together, so a newer JDK
-  cannot leak a newer library method into Java 8 code, and it avoids the
-  bootstrap-classpath warning that `-source 8 -target 8` produces. Suppress a
-  warning only with a comment explaining why.
+* Compile with `--release 8 -Xlint:all,-options`, and keep the build
+  warning-clean.
+  * `--release 8` pins the language level and the API together, so a newer JDK
+    cannot leak a newer library method into Java 8 code, and it avoids the
+    bootstrap-classpath warning that `-source 8 -target 8` produces.
+  * `options` is the only lint that is off, and it is off deliberately. JDK 9
+    and later warn that source/target 8 is obsolete; that warning is about the
+    choice above rather than about the code, and leaving it on would make
+    "warning-clean" unattainable. `build.bat` repeats the reason next to the
+    flag.
+  * Suppress a warning in source only for the line it applies to, and only with
+    a comment explaining why.
 
 ### The test harness is ours
 
