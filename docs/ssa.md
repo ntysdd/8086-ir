@@ -130,6 +130,12 @@ such a read before the form exists. If that rule is ever relaxed to a dataflow
 question, the two have to be told apart, and the flags one becomes what LLVM calls
 *poison* rather than *undef*.
 
+One more thing a pass may not assume, and it is not about `undef`: a value whose
+only use is inside an inline assembly block is **live**, because a block declares
+the registers it destroys but not the values it reads ([`docs/ir.md`](ir.md) §2.3,
+§9). Until it can declare them, liveness is taken conservatively across a block,
+and a dead-value pass has to respect that.
+
 ### Why there is no poison — [decided]
 
 LLVM needs `poison` because one IR has to serve machines that disagree: a shift by

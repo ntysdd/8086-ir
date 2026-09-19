@@ -26,7 +26,7 @@ unions); 64-bit arithmetic; dynamic memory; a module/link model beyond a single
 segment. Integers, pointers, flags, ports, interrupts and inline assembly are
 the whole surface.
 
-## 2. Two rules to test every addition against
+## 2. Rules to test every addition against
 
 ### 2.1 The spine — [decided]
 
@@ -62,6 +62,32 @@ The compiler's own obligation is therefore the narrow one: **it never introduces
 a fault the program did not already contain.** That single sentence is the whole
 content of the non-speculation rule in §5.5, and it is the reason that rule
 exists.
+
+### 2.3 A program's effects are not its registers — [decided]
+
+The IR knows the target's memory world, and **memory, ports, interrupts and the
+flags somebody reads are what a program does.** The register file is not among
+them. Which register holds which value at which point is the allocator's business,
+so a value nothing reads is **dead**, even when the code that computed it happened
+to leave it in `AX`.
+
+So `ret` promises nothing about the registers, and neither does the end of any
+other path: a `.COM` hands DOS whatever happens to be in the registers, and a
+module that needs a particular register to hold a particular value at that point
+says so — today with an inline assembly block (§9), and one day with a first-class
+form for saying it (§12, item 12). Leaving it to the allocator is what lets a value
+the program never reads disappear instead of being computed for a register's sake.
+
+Two consequences are worth stating now, because they are rules for passes rather
+than matters of opinion:
+
+* An inline assembly block is an **interface**, not a value. What it reads and
+  writes is what it declares, which is what keeps the register file out of the
+  rest of the surface.
+* A value that is only fed to something the compiler cannot see into is **not
+  dead**. Until a block can declare its inputs (§9), every variable in scope is
+  taken to be live across it. Fixing that is what item 12 in §12 is for, and until
+  it is fixed, this is the conservative reading an optimiser has to take.
 
 ## 3. Values, variables and memory
 
@@ -497,6 +523,9 @@ does not ship one. Hence 32-bit multiply without 32-bit divide.
 
 Labels, `jmp`, and the `jcc` family. This is what the pipeline sees.
 
+`ret` ends the program's path, and it promises nothing about the registers: what
+it leaves behind is the allocator's business, not an effect of the program (§2.3).
+
 ### 7.2 MASM-style sugar — [decided]
 
 ```
@@ -606,6 +635,13 @@ this is also what defines "address taken" in §5.2.
 filled by the allocator, or forcing the variable into memory — and whether
 inputs and outputs are part of the syntax or only clobbers are.
 
+Until that is decided, a block is opaque in the one direction that matters to an
+optimiser: it says which registers it destroys, but not which ones it **reads**,
+so a variable whose only other use is inside a block cannot be shown to be live
+(§2.3, §12 item 12). The workaround an author can write today is to read the value
+into a variable *after* the block as well, or to keep the computation the block
+depends on; the thing that must not happen is a pass deciding it is dead.
+
 ## 10. The header, and data
 
 ### 10.1 The module header — [decided]
@@ -713,6 +749,16 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 11. Whether reading a variable before anything has assigned it is refused (§3.1),
     and therefore whether the undefined value of a variable (§5 of
     [`docs/ssa.md`](ssa.md)) is a construct the surface keeps.
+12. A first-class way to require a value in a register at a point — "`ax` has to
+    be this here" — so that a module using a register-based interface (BIOS, DOS,
+    or a caller of its own) does not have to write an inline assembly block and
+    pay for the moves a block's opacity forces. The spelling is undecided; what is
+    decided is that it stays **bounded**: it names a register at a boundary rather
+    than letting a program address the register file, the allocator treats it as a
+    pre-coloured live range rather than as an instruction, and a pinned value
+    cannot be spilled (§8.2). Whether it extends to *reading* a register the
+    compiler never put anything in is the harder half of the question, and is
+    probably a different construct.
 
 ## 13. Non-goals for v1
 
