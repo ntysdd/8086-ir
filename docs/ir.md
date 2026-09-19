@@ -739,6 +739,12 @@ like every other encoding choice.
 than general registers, so `ds = 0` and `sp = 0x7C00` are the natural spellings
 for what an assembly programmer writes as `mov ds, ax`.
 
+**Not built**, and it is worth being exact about what that means: the surface
+today refuses `ds = 0` and `sp = 0x7C00`, and what it says is that no variable or
+label has that name. Until these are places, a module that has to set a segment up
+says so inside an inline block — `mov ax, 0xB800` then `mov es, ax` — which is the
+same thing the spelling above will compile to.
+
 ### 8.2 No-spill functions — [decided]
 
 Early boot code has no valid `SS`/`SP`, so the allocator must never use the
