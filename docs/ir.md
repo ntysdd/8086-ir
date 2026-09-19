@@ -102,7 +102,9 @@ than matters of opinion:
 
 `var x: u16` introduces a mutable **virtual register**. Reading it is not a
 memory access. Whether the allocator keeps it in a register or spills it to the
-frame is invisible at this level.
+frame is invisible at this level — unless the declaration says where the variable
+lives, and then it is memory and the answer is not the allocator's to give
+(§3.1.2).
 
 **Nothing is reserved.** A word means what its position says it means, and every
 word the surface knows can also be an author's name:
@@ -111,6 +113,7 @@ word the surface knows can also be an author's name:
 var adc: i16        ; an operator's spelling, and a variable
 var pad: i16        ; and a word of a statement form
 var ax: i16         ; and a register's name: this surface has no registers
+var in: i16         ; and the word a declaration reads after its type (§3.1.2)
 adc = 1
 add pad, 1          ; the statement 'add', not a variable called add
 word [ax] = 1       ; the size word, and the variable inside the brackets
@@ -123,7 +126,8 @@ it is an operator, so a word's role is decided by what stands beside it, and one
 token of lookahead settles the few places where a word could begin two things:
 `eval` and `expr` are the operation only in front of `(`; a size word is a size
 only when a value follows it; a dot word is the sugar only where the line is
-neither an assignment nor a label.
+neither an assignment nor a label; and `in` gives a variable a home only after the
+type of its declaration (§3.1.2).
 
 The price is paid on the way out rather than on the way in. The printer writes the
 canonical form, and the canonical form of a name that looks like a word carries a
@@ -160,7 +164,8 @@ The two prefixes are worth stating plainly, and the list that goes with them:
   spelling a name has: the operators, both the ones spelled as words and the ones
   spelled as symbols; the size words and directives; the conversions; the
   conditions, every spelling of them; the type names; the words that shape a
-  statement — `var`, `ret`, `asm`, `jmp`, `cmp`, `test`, `target`, `org`, `entry`;
+  statement — `var`, `in`, `ret`, `asm`, `jmp`, `cmp`, `test`, `target`, `org`,
+  `entry`;
   the words of the forms — `eval`, `expr`, `volatile`, `clobbers`, `pad`, `to`; the
   sugar's `.if`, `.elseif`, `.else`, `.endif`, `.while`, `.endw`; and the target's
   register names. A symbol like `-` is left out, because a name cannot be one, so
@@ -194,6 +199,131 @@ produces is described.
   ([`docs/ssa.md`](ssa.md) §5). Adding the check is a decision rather than an
   implementation detail, because it would refuse programs this compiler accepts
   today, and precision may only ever grow (§4.3).
+
+### 3.1.2 A variable may be given a home in memory — [proposed]
+
+```
+tries: pad 2
+
+main:
+    var left: u16 in tries      ; left is those two bytes, not a register
+    left = 4
+again:
+    int 0x13                    ; a handler this compiler has never seen
+    jnc done
+    left = eval(left - 1)
+    cmp left, 0
+    jne again
+done:
+    ret
+```
+
+`var x: u16 in place` says that `x` **is** bytes in the image at `place`, rather
+than a virtual register the allocator may keep in a register. Every read is a
+load, every definition is a store, and no register copy is kept: the value has one
+home and it is memory. `left` above survives `int 0x13` without the program saying
+what the handler keeps, which is the whole point of it.
+
+Why it earns its place:
+
+* **A home that outlives anything opaque.** A value that has to live across an
+  `int`, across an inline block, or across anything the compiler cannot see is kept
+  today in registers the thing is declared not to destroy (§11.1). That is a
+  promise about the *handler*, and it cannot be made in general: nothing in the
+  surface says what memory an `int` writes, so only registers can be reasoned about
+  at all. A declared home gives the program bytes whose contents *it* controls, and
+  what the compiler cannot see inside a block stops mattering.
+* **The pressure escape hatch.** Needing more simultaneously live values than the
+  six registers is a hard error (§8.2), and this is how a program says "this one
+  lives in memory" without writing the load and the store by hand — which is what
+  §11.1's second route does manually, with the reload landing in a *fresh name*. It
+  is a promise the compiler keeps for free: there is nothing to spill, because
+  nothing was ever in a register.
+* **It is what hand-written boot code does**, and that is why the home is a *name*
+  rather than a number. A boot sector keeps its few bytes in the sector and
+  addresses them, because there is nowhere else: the stack may not exist yet
+  (§8.2), and the next stage may be loaded over everything below it. Syslinux's MBR
+  keeps its disk address packet in a labelled cell of the image; Rufus's MBR
+  relocates itself to another segment while deliberately keeping the same *offset*,
+  so that every in-image label keeps its value; GRUB's installer patches fields at
+  fixed byte offsets of stage1. A name survives all of that; a number does not.
+
+**It is not a spill, and §8.2 is unchanged.** Nothing here is handed to a variable
+by the allocator: the home is named by the program, it is in the image rather than
+on the stack, and no value is ever moved between the home and a register behind the
+writer's back. "No frame, no spill slot" is a promise about what the *compiler*
+invents, and this is not invented.
+
+Three rules, and what each is for:
+
+* **The home must name bytes, and be wide enough.** `place` must be an item that
+  names bytes in the image whose width the front end can work out — a labelled
+  `db`/`dw`/`dd` list, or a labelled `pad` with a count — and it must be at least as
+  wide as the variable. A bare label names a position and not bytes, a `pad to`
+  item's length is known only to the assembler (§10.3), a code label is not
+  storage, and a narrow home is a program that would read the byte after it. Each
+  is refused with its own reason, which is a static error and so the compiler's job
+  (§2.2). The check is the verifier's rather than the parser's, because the item may
+  be declared after the code that names it — the same reason a `dw` list of labels
+  is checked by the verifier (§10.2).
+* **Nothing is assumed about who else touches those bytes.** A home *is* the bytes
+  of the item it names, and the compiler claims nothing about the two in either
+  direction: a write through `x` is not assumed visible through a read of `place`,
+  and a read of `x` is not folded to something written earlier. That is the rule
+  §3.4 already takes about two accesses, and here it is not a limitation but the
+  feature: a program that asks for a home is saying it wants those bytes written, so
+  believing anything about them would be believing the opposite. Two variables may
+  therefore name the same bytes — a 16-bit value and the two bytes it is made of —
+  and nothing needs to be said about that either, because nothing is inferred.
+* **Its writes are effects; its reads are loads.** A store to a home is never
+  removed, never duplicated, and never moved across another access to memory, which
+  is what the home is for. A read whose value nobody uses changes nothing and may
+  go, as a plain read of memory may today; `volatile` keeps the meaning §3.4 gives
+  it and stays the way to say that a read is itself an effect.
+
+**What it lowers to, since that is where the cost is.** Before SSA, and without the
+surface saying so: a read is a load into a fresh value, a definition is a store, and
+an operation on a home reads it, computes in a register, and writes back — so
+`left = eval(left - 1)` is a load, a subtraction and a store. Whether the machine
+can do some of that in place (`sub word [tries], 1` is one instruction on this one)
+is the target's business and not the surface's. A variable with a home therefore
+costs a load per use and a store per definition, and a program pays that
+deliberately: bytes and instructions are what this project measures, and what is
+bought with them is a home that outlives what the compiler cannot see. The lowered
+accesses have to stay distinguishable from an authored `[0x40] = x` — not in the
+syntax, which says nothing about it, but for the pass that would one day promote
+memory to values (*README*, step 3): a home was asked for, so it may not be quietly
+promoted back into a register.
+
+**[open]** where the absoluteness stops. This proposal confines a home to bytes the
+image already contains, so the address is a label and stays right whatever `org`
+says — including under the self-relocation a boot sector does. Giving a variable an
+address the image does not contain — `0x0413`, `0x046C`, `0xB800:0000` — is the
+other half, and boot code uses all three; that is §12 item 6, and the spelling is
+deliberately not shared with it: `in place` names storage that exists, and `at
+address` would name a place that does not. Whether such a variable is `volatile` by
+default, and whether its segment can be stated at all (§8.1), belong to that
+question.
+
+**What it does not change.** Reading a *virtual register* before anything writes it
+stays unchecked (§3.1) — a variable with a home is a different thing, and it is
+defined from the start, because its bytes are in the image and what they hold is
+what the image says (`pad` counts as zeros, §10.2). The address of a virtual
+register is still refused, for the reason §10.2 gives: it would be whatever the
+allocator chose. That reason is about the allocator's choice and so it does not
+reach a home, which makes whether a home's address may be written as a value
+**[open]** — §12 item 16.
+
+The word `in` is a word of the surface from now on, so the printer marks it
+(§3.1.1): a variable or a label called `in` is written `$in`, as with every other
+word the surface knows. **It is marked and not reserved**, which is the rule for
+every word here (§3.1): `var in: u16` is still a variable called `in`, and a
+declaration whose home is a data item called `in` is written `var x: u16 in in` —
+which the printer writes back as `var x: u16 in $in`, because the second `in` is
+where a name stands and the first is where the surface's word does. `in` at the
+start of a statement is still the port instruction and is still refused with its
+reason (§11); the three never stand in the same place, which is the argument the
+whole surface rests on (§3.1).
 
 ### 3.2 Widths and signedness — [decided]
 
@@ -1026,7 +1156,11 @@ Three things about the form are deliberate:
   `db`, and a `dd` list would be a far pointer — segment *and* offset — which this
   surface cannot express yet.
 * **A variable is not a candidate.** A variable is a register, not an address, and
-  naming one is refused rather than turned into whatever the allocator chose.
+  naming one is refused rather than turned into whatever the allocator chose. That
+  reason is about the allocator's choice, so it does not reach a variable that was
+  given a home in memory by its declaration (§3.1.2): such a variable *does* have an
+  address — the one the program named. Whether the surface may then write that
+  address is a separate decision, and is **[open]** in §12 item 16.
 
 ### 10.3 `pad to` — laying out an image that has a fixed shape — [decided]
 
@@ -1144,6 +1278,11 @@ gives each name one register**, so a name that spans the call cannot be given on
 all, whichever route is taken. Reading into `m` rather than back into `n` is what
 makes the memory route work.
 
+**This route can also be declared rather than written.** `var m: u16 in save`
+(§3.1.2) gives a variable that home, so the store and the load are the compiler's to
+place, the fresh name the route needs is the compiler's business, and the program
+uses `m` like any other name.
+
 `pusha` and `popa` are **not 8086 instructions** — they arrived with the 80186 — so
 they are not statements this target can provide, and a block that writes them is
 writing 186 code. The third route above is their 8086 equivalent, and the first one
@@ -1165,10 +1304,11 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 3. The no-spill marker's spelling (§8.2).
 4. Inline assembly operand binding for variables, and inputs/outputs (§9).
 5. Whether string operations and `jcxz` get a surface (§11).
-6. Whether anything beyond the image is ever offered (§10), the alignment form that
-   reaches a multiple rather than a length (`align`), and whether `dd` can hold a
-   far pointer — a segment and an offset — which is the other half of §10.2's `dw`
-   label.
+6. Whether anything beyond the image is ever offered (§10) — which real boot code
+   needs, at `0x0413`, `0x046C` and `0xB800:0000`, and which §3.1.2's `in`
+   deliberately does not reach — the alignment form that reaches a multiple rather
+   than a length (`align`), and whether `dd` can hold a far pointer — a segment and
+   an offset — which is the other half of §10.2's `dw` label.
 7. What a conversion does to the flags (§3.5), which the target's flag effects
    will answer.
 8. Whether `expr` may take a label, which is a constant and not a load, but is
@@ -1238,6 +1378,14 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     under *What the compiler may assume about two accesses*). Until it is answered,
     a load is reusable only when it is written twice in a row, and a load from the
     image is not folded to the bytes in the image.
+16. Whether a variable that has a home in memory (§3.1.2) may have that home's
+    address written as a value — `p = x`, `dw x` — which §10.2 refuses for a
+    variable, and refuses for the reason that the address would be whatever the
+    allocator chose. A home is named by the program, so that reason is gone, and what
+    is left is a link-time constant of the same kind as a label's address — where
+    item 8 already stands. Answering it means deciding whether a home *is* a label
+    that a variable happens to have, or a second kind of thing that has an address of
+    its own.
 
 ## 13. Non-goals for v1
 
