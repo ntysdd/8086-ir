@@ -48,14 +48,23 @@ public final class CompilerTest {
         suite.add("Compiler refuses a form whose flags are still wanted",
                 CompilerTest::refusesFlagLosingForm);
         suite.add("Compiler gives a dead value's register away", CompilerTest::reusesRegisters);
+        suite.add("Compiler keeps a value out of a register an inline block destroys",
+                CompilerTest::keepsValuesOffClobbers);
+        suite.add("Compiler leaves a dead value in a register an inline block destroys",
+                CompilerTest::ignoresClobbersOfDeadValues);
         suite.add("Compiler refuses rather than spilling", CompilerTest::refusesToSpill);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
         suite.add("Compiler reads the signedness of a comparison",
                 CompilerTest::readsComparisonSignedness);
         suite.add("Compiler refuses bad input with a position", CompilerTest::refusesBadInput);
+        suite.add("Command line prints to standard output without an output file",
+                CompilerTest::printsToStandardOutput);
+        suite.add("Command line stops at the IR it was given", CompilerTest::emitsIr);
+        suite.add("Command line stops at the SSA form", CompilerTest::emitsSsa);
+        suite.add("Command line refuses a stage it does not know",
+                CompilerTest::refusesUnknownStage);
         suite.add("Command line reports an unreadable input", CompilerTest::reportsUnreadableInput);
         suite.add("Command line refuses an unknown command", CompilerTest::refusesUnknownCommand);
-        suite.add("Command line refuses a missing output file", CompilerTest::refusesMissingOutput);
         suite.add("Command line says that assembling does not exist yet",
                 CompilerTest::saysAssembleIsMissing);
     }
@@ -146,6 +155,55 @@ public final class CompilerTest {
     }
 
     /**
+     * A value that is still to be read after an inline block may not live in a
+     * register that block declares it destroys.
+     *
+     * <p>This is the whole of what a clobber list is for. Ignoring it produced
+     * code that read a register the block had already destroyed, which is the kind
+     * of bug that is invisible until the program runs: `x` was put in `ax`, the
+     * block destroyed `ax`, and `mov ax, cx` read the wreckage.
+     */
+    private static void keepsValuesOffClobbers() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov cx, 1\n"
+                        + "    int 0x21\n"
+                        + "    mov ax, cx\n"
+                        + "    add ax, 1\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: u16\n    var y: u16\n"
+                        + "    x = 1\n"
+                        + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
+                        + "    y = eval(x + 1)\n    ret\n"));
+    }
+
+    /**
+     * And a value whose life is over before the block is left where it is.
+     *
+     * <p>Striking a register off for a value the block cannot destroy would cost
+     * registers for nothing, which on a machine with six of them is not a small
+     * thing.
+     */
+    private static void ignoresClobbersOfDeadValues() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov ax, 1\n"
+                        + "    mov cx, ax\n"
+                        + "    add cx, 1\n"
+                        + "    int 0x21\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: u16\n    var y: u16\n"
+                        + "    x = 1\n"
+                        + "    y = eval(x + 1)\n"
+                        + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
+                        + "    ret\n"));
+    }
+
+    /**
      * Seven values alive at once, on a machine with six registers to hold them: a
      * hard error rather than a frame, because a program that needs more registers
      * than the machine has is not quietly given the stack.
@@ -232,10 +290,38 @@ public final class CompilerTest {
         Assert.assertTrue(run.err.contains("unknown command 'bake'"), run.err);
     }
 
-    private static void refusesMissingOutput() {
+    /** No {@code -o} means standard output, which is what a dump wants. */
+    private static void printsToStandardOutput() {
         Run run = run("optimize", "examples/hello.ir");
+        Assert.assertEquals(0L, run.status);
+        Assert.assertEquals(EXPECTED_ASM, run.out);
+        Assert.assertEquals("", run.err);
+    }
+
+    /**
+     * {@code --emit ir} stops before anything is selected, so a program the
+     * instruction selector cannot compile can still be printed back.
+     */
+    private static void emitsIr() {
+        Run run = run("optimize", "--emit", "ir", "examples/hello.ir");
+        Assert.assertEquals(0L, run.status);
+        Assert.assertTrue(run.out.startsWith("target 8086\norg 0x100\nentry main\n"), run.out);
+        Assert.assertTrue(run.out.contains("asm clobbers(ax, dx, flags) {"), run.out);
+    }
+
+    /** {@code --emit ssa} is where the renamed form can be looked at. */
+    private static void emitsSsa() {
+        Run run = run("optimize", "--emit", "ssa", "examples/hello.ir");
+        Assert.assertEquals(0L, run.status);
+        Assert.assertTrue(run.out.startsWith("; SSA form of target 8086"), run.out);
+        Assert.assertTrue(run.out.contains("block0 (main):"), run.out);
+    }
+
+    private static void refusesUnknownStage() {
+        Run run = run("optimize", "--emit", "bake", "examples/hello.ir");
         Assert.assertEquals(2L, run.status);
-        Assert.assertTrue(run.err.contains("expected an input file and '-o OUTPUT'"), run.err);
+        Assert.assertTrue(run.err.contains("unknown --emit 'bake'"), run.err);
+        Assert.assertTrue(run.err.contains("expected ir, ssa or asm"), run.err);
     }
 
     private static void saysAssembleIsMissing() {

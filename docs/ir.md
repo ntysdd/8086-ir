@@ -620,6 +620,14 @@ it writes — a block containing `adc` reads `CF`, and
 without a declared use the optimiser may move a flag-clobbering `expr` in front
 of it.
 
+The list is the **complete** set of registers the block destroys, and it is a
+promise in both directions. A register it does not name survives the block, so a
+value may live there; a register it names does not, so the allocator keeps any
+value that is still to be read after the block out of it. That is the whole of
+what this declaration buys today: not the registers the block *reads*, which it
+still cannot say, but a value it is allowed to destroy being known to be dead
+anyway.
+
 ```
 asm clobbers(ax, dx, flags) {
     mov ah, 9
@@ -759,6 +767,32 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     cannot be spilled (§8.2). Whether it extends to *reading* a register the
     compiler never put anything in is the harder half of the question, and is
     probably a different construct.
+13. A **calling convention**: how a call is written at all, where the arguments
+    go, what a callee preserves, and who tidies up afterwards. None of it exists —
+    the surface has no call, so a module's only interfaces are its entry point and
+    its inline assembly blocks (§1, §9). What is decided is where the answer lives
+    and what it has to be able to say:
+
+    * A convention is a **target** fact by default (`AGENTS.md`, invariant 2),
+      because the machine's interfaces are register-based, and a **declared** fact
+      per function or per call when a module wants another one, because real 8086
+      code mixes them: BIOS takes arguments in registers, DOS takes a function
+      number in `AH`, and a boot loader's own routines follow whatever the author
+      decided.
+    * A stack convention cannot be the only one. Pushing arguments and cleaning
+      them up is the obvious way to pass more than a couple, and on this machine
+      it is cheap — but early boot code has no valid `SS`/`SP` at all (§8.2), and
+      the interfaces this IR exists for pass their arguments in registers. So a
+      register convention has to be expressible, and it is the *same* vocabulary
+      as an instruction's implicit registers and a block's clobber list — item 12's
+      mechanism, not a second one.
+    * "Callee-saved" then needs no machinery of its own: it is the clobber list on
+      the call. A register the call does not destroy is one the allocator may leave
+      a value in, and a register it does destroy is one a value alive across the
+      call is kept out of. What the callee has to do to earn the promise — save and
+      restore, or use other registers — is the callee's own code, and in a no-spill
+      function (§8.2) it is the difference between using a register and not being
+      allowed to touch it.
 
 ## 13. Non-goals for v1
 

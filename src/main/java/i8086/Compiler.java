@@ -2,6 +2,7 @@ package i8086;
 
 import i8086.emit.AsmEmitter;
 import i8086.ir.IrParser;
+import i8086.ir.IrPrinter;
 import i8086.ir.IrVerifier;
 import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
@@ -39,6 +40,23 @@ import i8086.target.Targets;
  */
 public final class Compiler {
 
+    /**
+     * Which stage of the pipeline to stop after.
+     *
+     * <p>The stages are in the order they run, and `--emit` stops after one: the
+     * IR as the transformations left it, the SSA form, or the assembly. Naming
+     * them is what lets one command show any of the three, and what keeps "which
+     * stage is this" out of the command line's own vocabulary.
+     */
+    public enum Stage {
+        /** The IR, printed. */
+        IR,
+        /** The SSA form, printed. */
+        SSA,
+        /** The assembly text. */
+        ASM
+    }
+
     private Compiler() {
     }
 
@@ -51,8 +69,27 @@ public final class Compiler {
      * @throws CompileError if the input is not something this compiler accepts
      */
     public static String compile(String file, String source) {
+        return compile(file, source, Stage.ASM);
+    }
+
+    /**
+     * Runs the pipeline as far as a stage and returns what that stage produces.
+     *
+     * <p>Every stage after the first is only reached by way of the verifications
+     * before it, so a stage's output is something the compiler accepted, whichever
+     * stage was asked for. That matters most for the two dumps: they are the only
+     * way to see the middle of the pipeline, and a dump of a form that would not
+     * have been compiled would be worse than no dump.
+     */
+    public static String compile(String file, String source, Stage stage) {
         Module module = IrParser.parse(file, source);
-        verify(module);
+        SsaForm form = verify(module);
+        if (stage == Stage.IR) {
+            return IrPrinter.print(module);
+        }
+        if (stage == Stage.SSA) {
+            return SsaPrinter.print(form);
+        }
         Target target = targetOf(module);
         Selection selected = InstructionSelector.select(module, target);
         Selection allocated = RegisterAllocator.allocate(selected, target);
@@ -69,9 +106,9 @@ public final class Compiler {
         return verify(IrParser.parse(file, source));
     }
 
-    /** The SSA form, printed. This is what the {@code ssa} command writes. */
+    /** The SSA form, printed. This is what {@code --emit ssa} writes. */
     public static String printSsa(String file, String source) {
-        return SsaPrinter.print(ssa(file, source));
+        return compile(file, source, Stage.SSA);
     }
 
     /**

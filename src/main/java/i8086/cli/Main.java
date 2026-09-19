@@ -45,9 +45,6 @@ public final class Main {
             err.println("error: 'assemble' is not implemented yet; only the IR can be compiled");
             return EXIT_FAILED;
         }
-        if (command.equals("ssa")) {
-            return dumpSsa(args, first + 1, out, err);
-        }
         if (!command.equals("optimize")) {
             err.println("error: unknown command '" + command + "'");
             printUsage(err);
@@ -57,31 +54,15 @@ public final class Main {
     }
 
     /**
-     * Writes the SSA form of a module, which is a dump rather than a file to keep:
-     * it goes to standard output and takes no {@code -o}.
+     * Compiles a module, or stops at a stage and prints what is there.
+     *
+     * <p>Without {@code -o} the result goes to standard output, which is what a
+     * dump wants and what makes the three stages one command rather than three.
      */
-    private static int dumpSsa(String[] args, int from, PrintStream out, PrintStream err) {
-        if (args.length - from != 1) {
-            err.println("error: expected one input file");
-            return EXIT_USAGE;
-        }
-        String input = args[from];
-        String source = read(input, err);
-        if (source == null) {
-            return EXIT_FAILED;
-        }
-        try {
-            out.print(Compiler.printSsa(input, source));
-            return EXIT_OK;
-        } catch (CompileError refused) {
-            err.println(refused.format());
-            return EXIT_FAILED;
-        }
-    }
-
     private static int optimize(String[] args, int from, PrintStream out, PrintStream err) {
         String input = null;
         String output = null;
+        Compiler.Stage stage = Compiler.Stage.ASM;
         for (int i = from; i < args.length; i++) {
             if (args[i].equals("-o")) {
                 if (i + 1 >= args.length) {
@@ -89,6 +70,16 @@ public final class Main {
                     return EXIT_USAGE;
                 }
                 output = args[++i];
+            } else if (args[i].equals("--emit")) {
+                if (i + 1 >= args.length) {
+                    err.println("error: '--emit' needs one of ir, ssa or asm after it");
+                    return EXIT_USAGE;
+                }
+                stage = stage(args[++i]);
+                if (stage == null) {
+                    err.println("error: unknown --emit '" + args[i] + "'; expected ir, ssa or asm");
+                    return EXIT_USAGE;
+                }
             } else if (input == null) {
                 input = args[i];
             } else {
@@ -96,8 +87,8 @@ public final class Main {
                 return EXIT_USAGE;
             }
         }
-        if (input == null || output == null) {
-            err.println("error: expected an input file and '-o OUTPUT'");
+        if (input == null) {
+            err.println("error: expected an input file");
             printUsage(err);
             return EXIT_USAGE;
         }
@@ -108,11 +99,29 @@ public final class Main {
         }
 
         try {
-            String assembly = Compiler.compile(input, source);
-            return write(output, assembly, err) ? EXIT_OK : EXIT_FAILED;
+            String text = Compiler.compile(input, source, stage);
+            if (output == null) {
+                out.print(text);
+                return EXIT_OK;
+            }
+            return write(output, text, err) ? EXIT_OK : EXIT_FAILED;
         } catch (CompileError refused) {
             err.println(refused.format());
             return EXIT_FAILED;
+        }
+    }
+
+    /** The stage a word names, or null when it names none. */
+    private static Compiler.Stage stage(String word) {
+        switch (word) {
+            case "ir":
+                return Compiler.Stage.IR;
+            case "ssa":
+                return Compiler.Stage.SSA;
+            case "asm":
+                return Compiler.Stage.ASM;
+            default:
+                return null;
         }
     }
 
@@ -142,7 +151,8 @@ public final class Main {
     }
 
     private static void printUsage(PrintStream out) {
-        out.println("usage: 8086-ir optimize INPUT.ir -o OUTPUT.asm");
-        out.println("       8086-ir ssa INPUT.ir              ; the SSA form, on standard output");
+        out.println("usage: 8086-ir optimize INPUT.ir [-o OUTPUT] [--emit ir|ssa|asm]");
+        out.println("       without -o the result goes to standard output");
+        out.println("       8086-ir assemble INPUT.asm -o OUTPUT.bin   ; not implemented yet");
     }
 }

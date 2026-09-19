@@ -3,23 +3,26 @@ package i8086.regalloc;
 import i8086.CompileError;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.ir.Item;
 import i8086.isel.Selection;
 import i8086.target.Target;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Gives every value a register, and refuses when there is none left.
  *
  * <p>The method is linear scan over a straight run of instructions, and it rests
  * on one idea: **a value's register may be reused once the value is last seen**.
- * So the instructions are walked twice — once to find where each value is last
- * seen, once to hand out registers, giving one back as soon as its value has
- * been left behind. Over code with no branches that interval is exact, and the
- * code this runs on has no branches yet, so this is not an approximation.
+ * So the instructions are walked twice — once to find where each value is first
+ * and last seen, once to hand out registers, giving one back as soon as its value
+ * has been left behind. Over code with no branches that interval is exact; over
+ * code with branches it is widened (below).
  *
  * <p>The first idea was one register per value for its whole life, never reused.
  * It was thrown away before it was written, because it fails almost immediately:
@@ -28,9 +31,20 @@ import java.util.Map;
  * it runs out. Last-seen expiry costs a walk of the instructions and makes
  * ordinary code work.
  *
+ * <p>Two things widen an interval beyond where a value is written and read, and
+ * both are there because the machine can destroy something the linear view does
+ * not see:
+ *
+ * <ul>
+ *   <li>a value that lives across a label, because execution does not run
+ *       forwards alone but the intervals do;
+ *   <li>a value that lives across an inline assembly block, in the registers that
+ *       block declares it destroys.
+ * </ul>
+ *
  * <p>What it still does not do is spill. A function that needs more registers
- * than the machine has is a **hard error**, which is the meaning {@code
- * docs/ir.md} §8.2 gives "no spill": no frame, no silent use of the stack.
+ * than the machine has is a **hard error**, which is the meaning
+ * {@code docs/ir.md} §8.2 gives "no spill": no frame, no silent use of the stack.
  */
 public final class RegisterAllocator {
 
@@ -39,8 +53,12 @@ public final class RegisterAllocator {
     /** Which register each value ended up in. */
     private final Map<String, String> assigned = new LinkedHashMap<String, String>();
 
-    /** The last instruction each value appears in. */
+    /** The first and last instruction each value appears in. */
+    private final Map<String, Integer> firstSeen = new LinkedHashMap<String, Integer>();
     private final Map<String, Integer> lastSeen = new LinkedHashMap<String, Integer>();
+
+    /** The registers each value may not be given, because something destroys them. */
+    private final Map<String, Set<String>> keepOut = new LinkedHashMap<String, Set<String>>();
 
     /** The instruction from which each register is free again. */
     private final Map<String, Integer> freeFrom = new LinkedHashMap<String, Integer>();
@@ -55,10 +73,11 @@ public final class RegisterAllocator {
     }
 
     private Selection run(Selection selection) {
-        lastSeen.putAll(lastSeen(selection));
+        findSpans(selection);
         if (selection.controlFlow()) {
             keepValuesThatCrossABlockAlive(selection);
         }
+        keepClobbersOffLiveValues(selection);
 
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
         int index = 0;
@@ -73,6 +92,25 @@ public final class RegisterAllocator {
         return new Selection(pieces, selection.controlFlow());
     }
 
+    /** Where each value is first and last mentioned, over the whole run. */
+    private void findSpans(Selection selection) {
+        int index = 0;
+        for (Selection.Piece piece : selection.pieces()) {
+            for (Instruction instruction : piece.instructions()) {
+                for (Operand operand : instruction.operands()) {
+                    if (operand instanceof Operand.Virtual) {
+                        String name = ((Operand.Virtual) operand).name();
+                        if (!firstSeen.containsKey(name)) {
+                            firstSeen.put(name, Integer.valueOf(index));
+                        }
+                        lastSeen.put(name, Integer.valueOf(index));
+                    }
+                }
+                index++;
+            }
+        }
+    }
+
     /**
      * Stops reusing the register of anything that lives across a block boundary.
      *
@@ -85,28 +123,16 @@ public final class RegisterAllocator {
      */
     private void keepValuesThatCrossABlockAlive(Selection selection) {
         int total = selection.instructions().size();
-        Map<String, Integer> first = new LinkedHashMap<String, Integer>();
         List<Integer> boundaries = new ArrayList<Integer>();
-
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
-            if (piece.item() instanceof i8086.ir.Item.Label) {
+            if (piece.item() instanceof Item.Label) {
                 boundaries.add(Integer.valueOf(index));
             }
-            for (Instruction instruction : piece.instructions()) {
-                for (Operand operand : instruction.operands()) {
-                    if (operand instanceof Operand.Virtual) {
-                        String name = ((Operand.Virtual) operand).name();
-                        if (!first.containsKey(name)) {
-                            first.put(name, Integer.valueOf(index));
-                        }
-                    }
-                }
-                index++;
-            }
+            index += piece.instructions().size();
         }
 
-        for (Map.Entry<String, Integer> entry : first.entrySet()) {
+        for (Map.Entry<String, Integer> entry : firstSeen.entrySet()) {
             int from = entry.getValue().intValue();
             int to = lastSeen.get(entry.getKey()).intValue();
             for (Integer boundary : boundaries) {
@@ -118,21 +144,49 @@ public final class RegisterAllocator {
         }
     }
 
-    /** Where each value appears for the last time, over the whole run. */
-    private static Map<String, Integer> lastSeen(Selection selection) {
-        Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
+    /**
+     * Keeps a value out of the registers an inline block destroys while it lives.
+     *
+     * <p>A clobber list is a promise that those registers are the ones the block
+     * destroys and no others. Keeping it means a value that is still to be read
+     * after the block may not be living in one of them, so every register named by
+     * any block the value lives across is struck off its list of candidates
+     * ({@code docs/ir.md} §9).
+     *
+     * <p>A value written after the block is not affected, and neither is one whose
+     * last read is before it: a block cannot destroy what is not there. What this
+     * cannot see is a value the block <em>reads</em>, because a block does not
+     * declare its inputs yet, and that is why the conservative reading in
+     * {@code docs/ir.md} §2.3 exists.
+     */
+    private void keepClobbersOffLiveValues(Selection selection) {
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
-            for (Instruction instruction : piece.instructions()) {
-                for (Operand operand : instruction.operands()) {
-                    if (operand instanceof Operand.Virtual) {
-                        seen.put(((Operand.Virtual) operand).name(), Integer.valueOf(index));
+            int at = index;
+            index += piece.instructions().size();
+            if (!(piece.item() instanceof Item.InlineAsm) || piece.instructions().isEmpty()) {
+                continue;
+            }
+            for (String destroyed : ((Item.InlineAsm) piece.item()).clobbers()) {
+                if (!target.isRegister(destroyed)) {
+                    // 'flags' is destroyed by the block too, and is not a value
+                    // register, so there is no candidate to strike off.
+                    continue;
+                }
+                for (Map.Entry<String, Integer> entry : firstSeen.entrySet()) {
+                    String name = entry.getKey();
+                    if (entry.getValue().intValue() <= at
+                            && at <= lastSeen.get(name).intValue()) {
+                        Set<String> forbidden = keepOut.get(name);
+                        if (forbidden == null) {
+                            forbidden = new LinkedHashSet<String>();
+                            keepOut.put(name, forbidden);
+                        }
+                        forbidden.add(destroyed);
                     }
                 }
-                index++;
             }
         }
-        return seen;
     }
 
     private Instruction resolve(Instruction instruction, int index) {
@@ -162,9 +216,13 @@ public final class RegisterAllocator {
 
         Integer death = lastSeen.get(name);
         int diesAt = death == null ? index : death.intValue();
+        Set<String> forbidden = keepOut.get(name);
 
         String taken = null;
         for (String candidate : target.valueRegisters()) {
+            if (forbidden != null && forbidden.contains(candidate)) {
+                continue;
+            }
             Integer free = freeFrom.get(candidate);
             // Free *from* this instruction, so usable at it: the value that was
             // here died strictly earlier, or two operands of one instruction
@@ -176,10 +234,12 @@ public final class RegisterAllocator {
         }
         if (taken == null) {
             throw new CompileError(operand.position(),
-                    "there is no register left for '" + name + "': this allocation does not "
-                            + "spill, because a program that needs more registers than the "
-                            + "machine has is refused rather than given a frame "
-                            + "(docs/ir.md §8.2)");
+                    "there is no register left for '" + name + "'"
+                            + (forbidden == null ? "" : ", because an inline assembly block it "
+                            + "lives across destroys " + forbidden)
+                            + ": this allocation does not spill, because a program that needs "
+                            + "more registers than the machine has is refused rather than given "
+                            + "a frame (docs/ir.md §8.2)");
         }
         assigned.put(name, taken);
         freeFrom.put(taken, Integer.valueOf(diesAt == Integer.MAX_VALUE ? diesAt : diesAt + 1));

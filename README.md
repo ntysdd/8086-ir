@@ -193,11 +193,18 @@ Java 8 runtime. A single batch script drives the build, including the
 dependency-free test suite:
 
 ```
-build.bat                                   # compile everything, run all tests
+build.bat                                          # compile everything, run all tests
 build.bat run optimize examples/hello.ir -o hello.asm
-build.bat run ssa examples/hello.ir         # the SSA form, on standard output
+build.bat run optimize --emit ir  examples/hello.ir   # stop after the IR
+build.bat run optimize --emit ssa examples/hello.ir   # stop after the SSA form
 build.bat run assemble hello.asm -o hello.bin
 ```
+
+`optimize` runs the pipeline and stops where `--emit` says — `ir`, `ssa` or `asm`
+— and without `-o` it prints what it has instead of writing it. The two dumps are
+the only way to see the middle of the pipeline, and a stage is only reached by way
+of the verifications before it, so what comes out is something the compiler
+accepted.
 
 ### Testing strategy
 
@@ -233,15 +240,16 @@ Working today:
   placement, and the renaming walk. Every variable is renamed — the flags
   included — and every use names the definition that reaches it. The form is
   built and verified on every compile, so every program the tests compile is
-  evidence for both; `8086-ir ssa FILE.ir` prints it. No pass reads it yet.
+  evidence for both; `optimize --emit ssa` prints it. No pass reads it yet.
 * The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it.
 * Instruction selection and register allocation, enough to compile arithmetic on
   variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, and the operators the 8086 has forms for. A register
-  allocator that does not spill, and says so; when there is control flow, a value
-  that lives across a label keeps one register rather than reusing it, which is
-  right rather than clever.
+  allocator that does not spill, and says so; it honours an inline block's clobber
+  list, keeping a value that is still to be read out of the registers the block
+  destroys; when there is control flow, a value that lives across a label keeps one
+  register rather than reusing it, which is right rather than clever.
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
