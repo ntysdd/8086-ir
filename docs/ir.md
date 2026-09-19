@@ -633,6 +633,85 @@ falling out of the loop is the path that needs no instruction at all. The inner
 branch of a `while` is therefore the condition **as written**, where an `if`
 branches on its opposite.
 
+### 7.3 Instruction-shaped statements — [proposed]
+
+An operation may be written the way the machine writes it, with the destination
+spelled out instead of implied by the `=`:
+
+```
+add s, 1            ; exactly  s = eval(s + 1)
+sub s, t            ; exactly  s = eval(s - t)
+and s, 0xff         ; exactly  s = eval(s & 0xff)
+adc s, 1            ; exactly  s = eval(s adc 1)
+shl s, 1            ; exactly  s = eval(s shl 1)
+mov s, [p]          ; exactly  s = [p]
+```
+
+The left operand is the destination, and the statement means the operation whose
+result is written there — which is what the surface already means by
+`s = eval(s + 1)`, down to the flags (§5.1). It is a **spelling, not a new
+operation**, so it changes nothing a reader of the form has to know, and nothing
+that reaches the optimiser: a statement written this way is the same IR as the
+`eval` form, and printing it produces the `eval` form, exactly as §7.2's sugar
+prints as labels and branches.
+
+It exists for one reason: a program written for an assembler can be brought over
+as it stands, one operation per line, without being rewritten into `eval` shape
+first. That is also the whole of what it promises, and it is why it is
+**one operation with two operands and no nesting**: `add s, 1 + 1` is a tree and
+belongs in `expr` (§5.4).
+
+**A word is accepted only when it names an operation the surface already has.**
+That is where the line is, and it is not a matter of taste: a word that would
+introduce an operation the surface does not have would be a second meaning for a
+familiar spelling, and the meaning would then be a guess. So:
+
+* **Accepted**, because each names one of §5.5's operators and means exactly what
+  that operator's `eval` spelling means: `mov` (the bare assignment of §5.3),
+  `add`, `sub`, `and`, `or`, `xor`, `not` (`~`), and the operators already spelled
+  as words — `adc`, `sbb`, `shl`, `shr`, `sar`, `rol`, `ror`, `rcl`, `rcr`,
+  `mul`, `imul`, `div`, `idiv`.
+* **Refused, with the reason**, because the machine's instruction and the surface
+  operation it looks like are **not the same operation**:
+  * `inc d` / `dec d` — the carry is the difference, and it is exactly the kind a
+    reader would not see: `d = eval(d + 1)` defines `CF`, `inc` leaves it as it
+    was. Writing the `eval` form instead is *not* a substitute, because a later
+    carry consumer would read a different `CF`. The target description says the
+    same thing in its own vocabulary, which is why `inc` is a form of its own
+    marked as not keeping the flags (`Form.keepsFlags()`).
+  * `neg d` — the surface has no operation that means it. `d = eval(0 - d)` has
+    the same value and the same flags, but it is different code: `NEG` is one
+    byte on this machine, and that spelling would materialise a zero to subtract
+    from.
+  * `mul r` / `imul r` / `div r` / `idiv r` / `cwd` / `cbw` — one operand or
+    none, with `ax` and `dx` read and written behind the writer's back. The
+    two-operand `mul d, s` is fine, because that one *is* the surface's
+    operation; the one-operand machine form is not.
+  * `xchg`, `lea`, `push`, `pop`, the `in`/`out` and interrupt group, and the
+    string operations — several effects at once, or an addressing form, or a
+    target operation of §11 with no surface spelling yet.
+
+The distinction in that list is **not** "the machine's flags match the surface's
+exactly" — for `~`, `rol` and `ror` they do not, and §4.2's per-flag effects are
+what would fix that. It is that one spelling must mean what the other spelling of
+it means: `not d` and `d = eval(~d)` are one statement written twice, while
+`inc d` and `d = eval(d + 1)` are two different programs. Only the first kind may
+share a name.
+
+**A register name is not an operand here.** `mov ax, 1` would otherwise name a
+*variable* called `ax` — legal, since a variable is a virtual register whose name
+its author chose (§3.1) — and quietly mean something other than what the writer
+wrote. A register is reached through inline assembly (§9), or through the pinning
+of §12 item 12 once it exists. The refusal is inside the new construct, so a
+program that already has a variable named `ax` is unaffected.
+
+**[proposed]** the whole construct, and in particular: whether `mov` is worth
+having when `=` already spells the assignment, and whether the word may be
+followed by more than the two operands an 8086 form takes.
+
+**[open]** whether any of this should reach the assembler-facing side too — an
+`asm` block, or a `.8086`-style directive — or stay a statement form only.
+
 ## 8. Storage state and the stack
 
 ### 8.1 Segment registers — [decided]
