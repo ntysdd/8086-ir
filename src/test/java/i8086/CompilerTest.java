@@ -26,13 +26,13 @@ public final class CompilerTest {
     private static final String EXPECTED_ASM =
             "org 0x100\n"
                     + "\n"
-                    + "main:\n"
+                    + "$main:\n"
                     + "    mov ah, 9\n"
-                    + "    mov dx, msg\n"
+                    + "    mov dx, $msg\n"
                     + "    int 0x21\n"
                     + "    ret\n"
                     + "\n"
-                    + "msg: db \"Hello, world!$\"\n";
+                    + "$msg: db \"Hello, world!$\"\n";
 
     private CompilerTest() {
     }
@@ -113,16 +113,16 @@ public final class CompilerTest {
      * or, one day, with a way to pin one.
      */
     private static void foldsWhatNothingReads() {
-        String source = "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                + "    var x: i16\n    var y: i16\n"
+        String source = "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $x: i16\n    var $y: i16\n"
                 + "    x = 1\n"
                 + "    x = eval(x + 1)\n"
                 + "    y = expr(x + x * 4)\n"
                 + "    ret\n";
-        Assert.assertEquals("org 0x100\n\nmain:\n    ret\n",
+        Assert.assertEquals("org 0x100\n\n$main:\n    ret\n",
                 Compiler.compile("t.ir", source));
-        Assert.assertEquals("target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: i16\n    var y: i16\n    ret\n",
+        Assert.assertEquals("target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: i16\n    var $y: i16\n    ret\n",
                 Compiler.compile("t.ir", source, Compiler.Stage.IR));
     }
 
@@ -147,7 +147,7 @@ public final class CompilerTest {
      * not only the optimiser but selection and allocation see one program.
      */
     private static void instructionSpellingIsTheEvalForm() {
-        String head = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String head = "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n";
         String tail = "    word [0x40] = s\n    ret\n";
         Assert.assertEquals(
@@ -164,13 +164,13 @@ public final class CompilerTest {
     private static void negatesInOneInstruction() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    mov bx, 0x1000\n"
                 + "    mov ax, [bx]\n"
                 + "    neg ax\n"
                 + "    mov word [0x40], ax\n"
                 + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n"
                         + "    s = eval(-s)\n    word [0x40] = s\n    ret\n"));
     }
@@ -185,7 +185,7 @@ public final class CompilerTest {
      * is the one that gets the instruction ({@code docs/ir.md} §7.3).
      */
     private static void buildsTheZeroForSubtractionFromZero() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n"
                 + "    s = eval(0 - s)\n    word [0x40] = s\n    ret\n");
         Assert.assertFalse(assembly.contains("neg"), assembly);
@@ -204,7 +204,7 @@ public final class CompilerTest {
     private static void compilesArithmetic() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    mov ax, cx\n"
                 + "    inc ax\n"
                 + "    mov cx, ax\n"
@@ -214,17 +214,17 @@ public final class CompilerTest {
                 + "    add dx, cx\n"
                 + "    mov ax, dx\n"
                 + "    add ax, 1\n"
-                + "    jc l0\n"
+                + "    jc $l0\n"
                 + "\n"
-                + "l0:\n"
+                + "$l0:\n"
                 + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: i16\n    var y: i16\n    var z: i16\n    var u: i16\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: i16\n    var $y: i16\n    var z: i16\n    var u: i16\n"
                         + "    x = eval(u + 1)\n"
                         + "    y = expr(x + x * 4)\n"
                         + "    z = eval(y + 1)\n"
-                        + "    jc l0\n"
-                        + "l0:\n"
+                        + "    jc $l0\n"
+                        + "$l0:\n"
                         + "    ret\n"));
     }
 
@@ -247,31 +247,31 @@ public final class CompilerTest {
     private static void keepsAndSpendsFlags() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    inc ax\n"
                 + "    mov cx, ax\n"
                 + "    add cx, 1\n"
-                + "    jc l0\n"
+                + "    jc $l0\n"
                 + "\n"
-                + "l0:\n"
+                + "$l0:\n"
                 + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: i16\n    var y: i16\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: i16\n    var $y: i16\n"
                         + "    x = eval(x + 1)\n"
                         + "    y = eval(x + 1)\n"
-                        + "    jc l0\n"
-                        + "l0:\n"
+                        + "    jc $l0\n"
+                        + "$l0:\n"
                         + "    ret\n"));
     }
 
     /** The 8086 has no multiply by a constant, so the target hands over a shift trick. */
     private static void expandsMultiply() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                + "    var x: i16\n    var y: i16\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $x: i16\n    var $y: i16\n"
                 + "    x = expr(x * 4)\n"
                 + "    y = eval(x + 1)\n"
-                + "    jc l0\n"
-                + "l0:\n"
+                + "    jc $l0\n"
+                + "$l0:\n"
                 + "    ret\n");
         Assert.assertTrue(assembly.contains("    shl ax, 1\n    shl ax, 1\n"),
                 "four times x is two shifts in place: " + assembly);
@@ -287,11 +287,11 @@ public final class CompilerTest {
      */
     private static void refusesFlagLosingForm() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: i16\n"
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: i16\n"
                         + "    x = eval(x * 4)\n"
-                        + "    jc l0\n"
-                        + "l0:\n"
+                        + "    jc $l0\n"
+                        + "$l0:\n"
                         + "    ret\n"));
         Assert.assertTrue(refused.getMessage().contains("different flags"),
                 refused.getMessage());
@@ -310,23 +310,23 @@ public final class CompilerTest {
     private static void reusesRegisters() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    mov ax, cx\n"
                 + "    add ax, 1\n"
-                + "    jc l0\n"
+                + "    jc $l0\n"
                 + "    mov ax, cx\n"
                 + "    add ax, 2\n"
-                + "    jc l0\n"
+                + "    jc $l0\n"
                 + "\n"
-                + "l0:\n"
+                + "$l0:\n"
                 + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var a: u16\n    var b: u16\n    var u: u16\n"
                         + "    a = eval(u + 1)\n"
-                        + "    jc l0\n"
+                        + "    jc $l0\n"
                         + "    b = eval(u + 2)\n"
-                        + "    jc l0\n"
-                        + "l0:\n"
+                        + "    jc $l0\n"
+                        + "$l0:\n"
                         + "    ret\n"));
     }
 
@@ -342,14 +342,14 @@ public final class CompilerTest {
     private static void keepsValuesOffClobbers() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov cx, ax\n"
                         + "    add cx, 1\n"
                         + "    int 0x21\n"
                         + "    mov ax, cx\n"
                         + "    add ax, 1\n"
                         + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var y: u16\n    var u: u16\n"
                         + "    x = eval(u + 1)\n"
                         + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
@@ -366,14 +366,14 @@ public final class CompilerTest {
     private static void ignoresClobbersOfDeadValues() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov ax, cx\n"
                         + "    add ax, 1\n"
                         + "    mov cx, ax\n"
                         + "    add cx, 1\n"
                         + "    int 0x21\n"
                         + "    ret\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var y: u16\n    var u: u16\n"
                         + "    x = eval(u + 1)\n"
                         + "    y = eval(x + 1)\n"
@@ -391,7 +391,7 @@ public final class CompilerTest {
      * every value in its scope count as read ({@code docs/ir.md} §2.3, §9).
      */
     private static void refusesToSpill() {
-        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry main\n\nmain:\n"
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var y: u16\n    var u: u16\n");
         for (char name = 'a'; name <= 'g'; name++) {
             source.append("    var ").append(name).append(": u16\n");
@@ -423,21 +423,21 @@ public final class CompilerTest {
     private static void loadsAndStores() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
-                        + "    mov bx, msg\n"
+                        + "$main:\n"
+                        + "    mov bx, $msg\n"
                         + "    mov ax, [bx]\n"
-                        + "    mov [msg], ax\n"
+                        + "    mov [$msg], ax\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: dw 0x1234\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "$msg: dw 0x1234\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var p: u16\n"
                         + "    p = msg\n"
                         + "    x = [p]\n"
                         + "    [msg] = x\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: dw 0x1234\n"));
+                        + "$msg: dw 0x1234\n"));
     }
 
     /**
@@ -446,17 +446,17 @@ public final class CompilerTest {
      * places to live rather than six.
      */
     private static void addressesLiveInAddressRegisters() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var x: u16\n    var p: u16\n"
                 + "    p = msg\n"
                 + "    x = [p]\n"
                 + "    [msg] = x\n"
                 + "    ret\n"
                 + "\n"
-                + "msg: dw 0x1234\n");
-        Assert.assertTrue(assembly.contains("    mov bx, msg\n"),
+                + "$msg: dw 0x1234\n");
+        Assert.assertTrue(assembly.contains("    mov bx, $msg\n"),
                 "the address went into an address register: " + assembly);
-        Assert.assertFalse(assembly.contains("mov ax, msg"),
+        Assert.assertFalse(assembly.contains("mov ax, $msg"),
                 "and not into one it cannot live in: " + assembly);
     }
 
@@ -469,20 +469,20 @@ public final class CompilerTest {
     private static void keepsVolatileReads() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov ax, [0x40]\n"
                         + "    mov word [bx], 5\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: dw 0x1234\n",
-                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "$msg: dw 0x1234\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var y: u16\n    var p: u16\n"
                         + "    x = [msg]\n"
                         + "    y = volatile [0x40]\n"
                         + "    word [p] = 5\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: dw 0x1234\n"));
+                        + "$msg: dw 0x1234\n"));
     }
 
     /**
@@ -490,7 +490,7 @@ public final class CompilerTest {
      * the count, and three single shifts cost six.
      */
     private static void countsLargeShifts() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var v: u16\n    var w: u16\n"
                 + "    w = eval(v shl 8)\n"
                 + "    volatile [0x40] = w\n"
@@ -501,7 +501,7 @@ public final class CompilerTest {
 
     /** And two shifts stay two shifts: the count register would cost more than it saves. */
     private static void repeatsSmallShifts() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var v: u16\n    var w: u16\n"
                 + "    w = expr(v shl 2)\n"
                 + "    volatile [0x40] = w\n"
@@ -523,7 +523,7 @@ public final class CompilerTest {
      * that it went somewhere the instruction does not touch.
      */
     private static void keepsValuesOffShiftCounts() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var a: u16\n    var b: u16\n    var u: u16\n    var s: u16\n"
                 + "    a = eval(u + 1)\n"
                 + "    b = eval(u shl 8)\n"
@@ -541,7 +541,7 @@ public final class CompilerTest {
      * machine's own registers can be read off the answer.
      */
     private static String twoValues(String operation) {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        return "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var a: u16\n    var b: u16\n    var q: u16\n    var e: u16\n"
                 + "    a = eval(e + 1)\n"
                 + "    b = eval(e + 2)\n"
@@ -563,7 +563,7 @@ public final class CompilerTest {
     private static void multiplies() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov cx, ax\n"
                         + "    inc cx\n"
                         + "    mov bx, ax\n"
@@ -578,7 +578,7 @@ public final class CompilerTest {
     private static void divides() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov cx, ax\n"
                         + "    inc cx\n"
                         + "    mov bx, ax\n"
@@ -595,7 +595,7 @@ public final class CompilerTest {
     private static void remainders() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
-                        + "main:\n"
+                        + "$main:\n"
                         + "    mov cx, ax\n"
                         + "    inc cx\n"
                         + "    mov bx, ax\n"
@@ -625,7 +625,7 @@ public final class CompilerTest {
 
     /** The signed twin of {@link #twoValues}, with the same shape. */
     private static String signedValues() {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        return "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var a: i16\n    var b: i16\n    var q: i16\n    var e: i16\n"
                 + "    a = eval(e + 1)\n"
                 + "    b = eval(e + 2)\n"
@@ -641,7 +641,7 @@ public final class CompilerTest {
      * about any other register the selector wrote by hand.
      */
     private static void literalDivisor() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var a: u16\n    var q: u16\n"
                 + "    a = eval(a + 1)\n"
                 + "    q = eval(a / 10)\n"
@@ -661,11 +661,11 @@ public final class CompilerTest {
      */
     private static void refusesDivisionWithLiveFlags() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var a: u16\n    var b: u16\n    var q: u16\n"
                         + "    q = eval(a / b)\n"
-                        + "    jc l0\n"
-                        + "l0:\n"
+                        + "    jc $l0\n"
+                        + "$l0:\n"
                         + "    ret\n"));
         Assert.assertTrue(refused.getMessage().contains("expr(...)"),
                 "and says what to write instead: " + refused.getMessage());
@@ -673,13 +673,13 @@ public final class CompilerTest {
 
     /** A multiply does leave the flags the multiplication leaves, so a branch may read them. */
     private static void allowsMultiplyWithLiveFlags() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var a: u16\n    var b: u16\n    var q: u16\n"
                 + "    a = eval(a + 1)\n"
                 + "    b = eval(b + 1)\n"
                 + "    q = eval(a * b)\n"
-                + "    jc l0\n"
-                + "l0:\n"
+                + "    jc $l0\n"
+                + "$l0:\n"
                 + "    ret\n");
         Assert.assertTrue(assembly.contains("    mul "),
                 "a multiply whose flags are read is ordinary: " + assembly);
@@ -692,19 +692,19 @@ public final class CompilerTest {
      */
     private static void refusesNarrowAccess() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var b: u8\n"
                         + "    b = volatile byte [msg]\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: dw 0x1234\n"));
+                        + "$msg: dw 0x1234\n"));
         Assert.assertTrue(refused.getMessage().contains("half of one"),
                 "the refusal says what is missing: " + refused.getMessage());
     }
 
     private static void refusesComputedStore() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var y: u16\n    var p: u16\n"
                         + "    y = eval(y + 1)\n"
                         + "    [p] = eval(y + 1)\n"
@@ -725,7 +725,7 @@ public final class CompilerTest {
      * identity ({@code docs/ssa.md} §8).
      */
     private static void compilesSugar() {
-        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var i: u16\n    var n: u16\n"
                 + "    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
@@ -751,7 +751,7 @@ public final class CompilerTest {
     }
 
     private static String comparisonProgram(String type) {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        return "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var x: " + type + "\n    var z: u16\n"
                 + "    x = 0\n"
                 + "    .if x < 0\n        z = 1\n    .endif\n"
@@ -791,7 +791,7 @@ public final class CompilerTest {
     private static void emitsIr() {
         Run run = run("optimize", "--emit", "ir", "examples/hello.ir");
         Assert.assertEquals(0L, run.status);
-        Assert.assertTrue(run.out.startsWith("target 8086\norg 0x100\nentry main\n"), run.out);
+        Assert.assertTrue(run.out.startsWith("target 8086\norg 0x100\nentry $main\n"), run.out);
         Assert.assertTrue(run.out.contains("asm clobbers(ax, dx, flags) {"), run.out);
     }
 

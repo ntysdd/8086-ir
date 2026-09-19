@@ -1,5 +1,6 @@
 package i8086.ir;
 
+import i8086.asm.Dialect;
 import i8086.asm.Instruction;
 import i8086.asm.InstructionPrinter;
 import i8086.asm.Numbers;
@@ -63,19 +64,20 @@ public final class IrPrinter {
     }
 
     /**
-     * A name, marked when the surface would otherwise read it as one of its own
-     * words ({@code docs/ir.md} §3.1).
+     * A name as canonical IR text writes it: every name the author chose carries the
+     * {@code $} that says so ({@code docs/ir.md} §3.1.1), so that a reader never has
+     * to work out whether a word in front of them is a name or one of the surface's
+     * own — the same split as the thirty spellings of a condition (§4.4), with input
+     * liberal and output canonical.
      *
-     * <p>Input is liberal and output is canonical, the same split as the thirty
-     * spellings of a condition in §4.4: a program may write {@code eval} as a
-     * variable name, and what comes back says {@code $eval}, so a reader never has
-     * to work out which of the two it is looking at.
+     * <p>A null target means the text is a dump of a derived form rather than the
+     * surface: the names in it are the compiler's own and are written plainly.
      */
     private static String name(String name, Target target) {
-        if (target == null || Vocabulary.generated(name)) {
+        if (target == null) {
             return name;
         }
-        return Vocabulary.markedWhenPrinted(name, target) ? "$" + name : name;
+        return Vocabulary.markedWhenPrinted(name) ? "$" + name : name;
     }
 
     private static void printItem(StringBuilder text, Item item, Target target) {
@@ -124,7 +126,7 @@ public final class IrPrinter {
             text.append(INDENT).append(branch.condition()).append(' ')
                     .append(name(branch.target(), target)).append('\n');
         } else {
-            printInlineAsm(text, (Item.InlineAsm) item);
+            printInlineAsm(text, (Item.InlineAsm) item, target);
         }
     }
 
@@ -302,7 +304,7 @@ public final class IrPrinter {
         text.append('\n');
     }
 
-    private static void printInlineAsm(StringBuilder text, Item.InlineAsm block) {
+    private static void printInlineAsm(StringBuilder text, Item.InlineAsm block, Target target) {
         text.append(INDENT).append("asm clobbers(");
         for (int i = 0; i < block.clobbers().size(); i++) {
             if (i > 0) {
@@ -313,7 +315,8 @@ public final class IrPrinter {
         text.append(") {\n");
         for (Instruction instruction : block.body()) {
             text.append(INDENT).append(INDENT)
-                    .append(InstructionPrinter.print(instruction)).append('\n');
+                    .append(InstructionPrinter.print(instruction, Dialect.CANONICAL, target))
+                    .append('\n');
         }
         text.append(INDENT).append("}\n");
     }

@@ -39,7 +39,7 @@ public final class CfgTest {
     }
 
     static Module parse(String body) {
-        return IrParser.parse("test.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n" + body);
+        return IrParser.parse("test.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n" + body);
     }
 
     /**

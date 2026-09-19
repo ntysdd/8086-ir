@@ -33,7 +33,8 @@ public final class Vocabulary {
 
     /**
      * The words that shape the text rather than asking for something: they begin a
-     * statement or a directive, and a plain name may not be one.
+     * statement or a directive. Nothing is reserved, so a word here can also be a
+     * name, and {@link #words} walks them to check that.
      */
     private static final Set<String> STRUCTURE = new LinkedHashSet<String>(Arrays.asList(
             "var", "ret", "asm", "jmp", "cmp", "test",
@@ -44,8 +45,9 @@ public final class Vocabulary {
      * The words that are only ever meaningful where a name is not written: after
      * {@code =} nothing makes {@code eval} an operation, and {@code to} means
      * something only inside {@code pad}. A plain name may be one of these — that is
-     * the liberal input side — and the printer marks it anyway, because a reader has
-     * no way to know that {@code eval} here is the author's.
+     * the liberal input side — and {@link #words} walks them for the same reason it
+     * walks {@link #STRUCTURE}: a word the surface knows is exactly what a name may
+     * be.
      */
     private static final Set<String> ELSEWHERE = new LinkedHashSet<String>(Arrays.asList(
             "eval", "expr", "volatile", "clobbers", "pad", "to"));
@@ -54,30 +56,43 @@ public final class Vocabulary {
     }
 
     /**
-     * Whether the printer writes {@code $} in front of this name: everything the
-     * surface knows that could be a spelling a name has. A symbol like {@code -} is
-     * left out, because a name cannot be one, so there is nothing to mark.
+     * Whether canonical IR text marks this name.
+     *
+     * <p>Always, unless the compiler made the name up itself
+     * ({@code ..@}, {@code docs/ir.md} §3.1.1). Every position the IR printer writes a
+     * name in belongs to the author: a register is a word of the machine, and the
+     * three places the machine's words appear — a segment, a clobber list, and the
+     * body of an inline block — print themselves and never come through here. So the
+     * surface's own example holds: {@code var ax: i16} is a variable, and it is
+     * written {@code $ax} like any other name.
+     */
+    public static boolean markedWhenPrinted(String name) {
+        return !generated(name);
+    }
+
+    /**
+     * Whether assembly text marks this name.
+     *
+     * <p>Unless it is spelled like one of the target's registers, because in that
+     * language a register name <em>is</em> the register: {@code mov ax, 1} is the
+     * machine's {@code ax}, and a symbol of that name has to say so (§3.1.1 gives
+     * {@code $ax}). The IR printer does not have that exception because its positions
+     * do, and that is the whole of the difference between the two rules.
+     *
+     * <p>What neither rule asks about is the vocabulary. Marking only the names that
+     * could be read as a word of the surface made the canonical form of a program
+     * depend on the compiler's word list, so that adding a word silently rewrote the
+     * text of every program which had used it as a name — which is what happened the
+     * day {@code in} became a word. A total rule has no such moment, and it is also
+     * what a reader wants: there is never a name to be told apart from a word.
      */
     public static boolean markedWhenPrinted(String name, Target target) {
-        if (!isWordShape(name)) {
-            return false;
-        }
-        return Size.named(name) != null
-                || Size.fromDirective(name) != null
-                || Operator.named(name) != null
-                || Conversion.named(name) != null
-                || Type.named(name) != null
-                || target.condition(name) != null
-                || target.statementOperator(name) != null
-                || target.isRegister(name)
-                || target.isSegmentRegister(name)
-                || STRUCTURE.contains(name)
-                || ELSEWHERE.contains(name);
+        return !generated(name) && !target.isRegister(name);
     }
 
     /**
      * Whether a spelling could be a name at all: a symbol like {@code -} is an
-     * operator and never a name, so it is neither reserved nor marked.
+     * operator and never a name, so there is nothing for the audit to try it as.
      */
     private static boolean isWordShape(String name) {
         if (name.isEmpty()) {

@@ -276,8 +276,10 @@ Working today:
   together with the sugar, normalised away as it is read: the control flow of §7.2,
   the instruction-shaped statements of §7.3 (`add s, 1` is `s = eval(s + 1)` written
   the machine's way), and the unary minus of §5.5. **Nothing is reserved**: any word
-  can be a variable, and the printer writes `$` in front of a name that looks like a
-  word of the surface, so the canonical form is never ambiguous (§3.1, §3.1.1).
+  can be a variable, and the printer writes `$` in front of every name the author
+  chose — not only the ones that look like a word of the surface — so the canonical
+  form is never ambiguous and never depends on the compiler's word list (§3.1,
+  §3.1.1).
 * **SSA construction and verification**, described in
   [`docs/ssa.md`](docs/ssa.md): the control flow graph, dominators and the dominance
   frontier, liveness, φ placement, and the renaming walk. Every variable is renamed
@@ -322,8 +324,10 @@ Working today:
   it — in the dialect NASM reads, so that `nasm -f bin` turns it into the image. The
   four differences from our own dialect, which is what an inline block is written
   in, are the whole of the translation: `pad to 510` comes out as
-  `times 510-($-$$) db 0`. An assembler of our own is still planned and still not
-  written, but nothing waits on it.
+  `times 510-($-$$) db 0`. Every name the author chose carries the `$` that says it
+  is a symbol, because in that language a bare name spelled like a register is the
+  register. An assembler of our own is still planned and still not written, but
+  nothing waits on it.
 
 Not built yet, and refused with a reason rather than guessed at: conversions and
 byte accesses (there are no sub-registers, so half a register has no name), `setcc`,

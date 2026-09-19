@@ -16,7 +16,7 @@ import i8086.target.Targets;
  */
 public final class PadTest {
 
-    private static final String HEAD = "target 8086\norg 0x7c00\nentry main\n\nmain:\n";
+    private static final String HEAD = "target 8086\norg 0x7c00\nentry $main\n\n$main:\n";
 
     private PadTest() {
     }
@@ -43,7 +43,7 @@ public final class PadTest {
 
     private static String became(String body) {
         String text = printed(body);
-        return text.substring(text.indexOf("\nmain:\n") + "\nmain:\n".length());
+        return text.substring(text.indexOf("\n$main:\n") + "\n$main:\n".length());
     }
 
     private static void writesACount() {
@@ -66,18 +66,18 @@ public final class PadTest {
                         + "    dw 0xAA55\n"));
         // And with a fill, and with a label on it, which gets a blank line the way any
         // named item does.
-        Assert.assertEquals("\nbuf: pad to 0x1fe, 0x90\n",
+        Assert.assertEquals("\n$buf: pad to 0x1fe, 0x90\n",
                 became("buf: pad to 510, 0x90\n"));
     }
 
     private static void isANamedPlace() {
         // A label on a pad names an address, like a label on data: the padding is part
         // of the image, so what follows it is somewhere.
-        Assert.assertEquals("    var p: i16\n"
-                        + "    p = buf\n"
-                        + "    word [buf + 2] = 1\n"
+        Assert.assertEquals("    var $p: i16\n"
+                        + "    $p = $buf\n"
+                        + "    word [$buf + 2] = 1\n"
                         + "\n"
-                        + "buf: pad 0x20\n",
+                        + "$buf: pad 0x20\n",
                 became("    var p: i16\n"
                         + "    p = buf\n"
                         + "    word [buf + 2] = 1\n"

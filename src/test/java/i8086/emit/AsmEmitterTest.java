@@ -22,9 +22,9 @@ public final class AsmEmitterTest {
     private static final String HELLO =
             "target 8086\n"
                     + "org 0x100\n"
-                    + "entry main\n"
+                    + "entry $main\n"
                     + "\n"
-                    + "main:\n"
+                    + "$main:\n"
                     + "    asm clobbers(ax, dx, flags) {\n"
                     + "        mov ah, 9\n"
                     + "        mov dx, msg\n"
@@ -37,13 +37,13 @@ public final class AsmEmitterTest {
     private static final String HELLO_ASM =
             "org 0x100\n"
                     + "\n"
-                    + "main:\n"
+                    + "$main:\n"
                     + "    mov ah, 9\n"
-                    + "    mov dx, msg\n"
+                    + "    mov dx, $msg\n"
                     + "    int 0x21\n"
                     + "    ret\n"
                     + "\n"
-                    + "msg: db \"Hello, world!$\"\n";
+                    + "$msg: db \"Hello, world!$\"\n";
 
     private AsmEmitterTest() {
     }
@@ -99,8 +99,8 @@ public final class AsmEmitterTest {
                 + "    ret\n"
                 + "one: db 1\n"
                 + "two: db 2\n");
-        int first = assembly.indexOf("one:");
-        int second = assembly.indexOf("two:");
+        int first = assembly.indexOf("$one:");
+        int second = assembly.indexOf("$two:");
         Assert.assertTrue(first >= 0 && second > first, "data keeps the order it was written in");
     }
 
@@ -128,16 +128,16 @@ public final class AsmEmitterTest {
      */
     private static void writesNasmDialect() {
         // A label used as an address: NASM has no 'offset'.
-        String addressing = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String addressing = emit("target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var p: u16\n"
                 + "    asm clobbers(ax, bx) {\n        mov bx, offset msg\n"
                 + "        mov ax, [bx]\n    }\n"
                 + "    p = ax\n    word [0x40] = p\n    ret\n\nmsg: dw 1\n");
-        Assert.assertTrue(addressing.contains("    mov bx, msg\n"), addressing);
+        Assert.assertTrue(addressing.contains("    mov bx, $msg\n"), addressing);
         Assert.assertFalse(addressing.contains("offset "), addressing);
 
         // A segment override goes inside the brackets, and 'pad' is 'times'.
-        String boot = emit("target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+        String boot = emit("target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
                 + "    asm clobbers(ax, bx, es) {\n        mov ax, 0xB800\n        mov es, ax\n"
                 + "        mov byte es:[bx], 0x41\n    }\n"
                 + "    pad 32, 0x90\n    pad to 510\n    dw 0xAA55\n    ret\n");
@@ -153,12 +153,12 @@ public final class AsmEmitterTest {
      * so an IR module round-trips in the language its author used.
      */
     private static void keepsOurDialect() {
-        String source = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String source = "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    asm clobbers(ax, bx) {\n        mov bx, offset msg\n    }\n"
                 + "    pad 32\n    ret\n\nmsg: dw 1\n";
         Module module = IrParser.parse("test.ir", source);
         String printed = i8086.ir.IrPrinter.print(module);
-        Assert.assertTrue(printed.contains("        mov bx, offset msg\n"), printed);
+        Assert.assertTrue(printed.contains("        mov bx, offset $msg\n"), printed);
         Assert.assertTrue(printed.contains("pad 0x20\n"), printed);
     }
 
@@ -167,18 +167,18 @@ public final class AsmEmitterTest {
      * and a colon, in both dialects, so there is nothing to translate.
      */
     private static void writesAFarJump() {
-        String source = "target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+        String source = "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
                 + "    asm clobbers(ax, dx, si, flags) {\n        mov si, offset text\n"
                 + "        mov ah, 0x0E\n        lodsb\n        int 0x10\n"
                 + "        jmp 0x0000:0x7E00\n    }\n"
                 + "    ret\ntext: db \"K\"\n";
         String assembly = emit(source);
         Assert.assertTrue(assembly.contains("    jmp 0:0x7e00\n"), assembly);
-        Assert.assertTrue(assembly.contains("    mov si, text\n"), assembly);
+        Assert.assertTrue(assembly.contains("    mov si, $text\n"), assembly);
         // And the IR printer writes the same operand, so the block round-trips.
         String printed = i8086.ir.IrPrinter.print(IrParser.parse("test.ir", source));
         Assert.assertTrue(printed.contains("        jmp 0:0x7e00\n"), printed);
-        Assert.assertTrue(printed.contains("        mov si, offset text\n"), printed);
+        Assert.assertTrue(printed.contains("        mov si, offset $text\n"), printed);
     }
 
     /**
@@ -187,14 +187,14 @@ public final class AsmEmitterTest {
      * to the module ({@code docs/ir.md} §9).
      */
     private static void writesALabelInABlock() {
-        String source = "target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+        String source = "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
                 + "    asm clobbers(ax, flags) {\n        mov ax, 0x0201\n    retry:\n"
                 + "        int 0x13\n        jc retry\n    }\n    ret\n";
         String assembly = emit(source);
-        Assert.assertTrue(assembly.contains("\nretry:\n    int 0x13\n    jc retry\n"), assembly);
+        Assert.assertTrue(assembly.contains("\n$retry:\n    int 0x13\n    jc $retry\n"), assembly);
         // The label stands at the margin and the instructions do not: the text is read
         // by people, and a label is a place in the file rather than something done.
-        Assert.assertFalse(assembly.contains("    retry:"), assembly);
+        Assert.assertFalse(assembly.contains("    $retry:"), assembly);
     }
 
     /**
@@ -206,7 +206,7 @@ public final class AsmEmitterTest {
      * multiply needs in {@code cx}.
      */
     private static void writesArithmetic() {
-        String assembly = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = emit("target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var x: i16\n"
                 + "    var y: i16\n"
                 + "    var t: i16\n"
@@ -217,7 +217,7 @@ public final class AsmEmitterTest {
                 + "    ret\n");
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    mov ax, 1\n"
                 + "    add ax, 1\n"
                 + "    mov cx, ax\n"
@@ -234,7 +234,7 @@ public final class AsmEmitterTest {
      * register each and keep it.
      */
     private static void writesALoop() {
-        String assembly = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String assembly = emit("target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    var i: u16\n"
                 + "    var n: u16\n"
                 + "    i = 0\n"
@@ -245,7 +245,7 @@ public final class AsmEmitterTest {
                 + "    ret\n");
         Assert.assertEquals("org 0x100\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    mov ax, 0\n"
                 + "    mov cx, 3\n"
                 + "    jmp ..@lbl1\n"

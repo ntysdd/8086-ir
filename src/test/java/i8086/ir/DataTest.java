@@ -17,7 +17,7 @@ import i8086.target.Targets;
  */
 public final class DataTest {
 
-    private static final String HEAD = "target 8086\norg 0x100\nentry main\n\nmain:\n";
+    private static final String HEAD = "target 8086\norg 0x100\nentry $main\n\n$main:\n";
 
     private DataTest() {
     }
@@ -51,11 +51,11 @@ public final class DataTest {
 
     private static String became(String body) {
         String text = printed(body);
-        return text.substring(text.indexOf("\nmain:\n") + "\nmain:\n".length());
+        return text.substring(text.indexOf("\n$main:\n") + "\n$main:\n".length());
     }
 
     private static void namesLabels() {
-        Assert.assertEquals("\ntbl: dw h1, 0x1234, h2\n\nh1:\n    ret\n\nh2:\n    ret\n",
+        Assert.assertEquals("\n$tbl: dw $h1, 0x1234, $h2\n\n$h1:\n    ret\n\n$h2:\n    ret\n",
                 became("tbl: dw h1, 0x1234, h2\n"
                         + "h1:\n    ret\nh2:\n    ret\n"));
         // Numbers and labels mix freely, and the round trip holds with both.
@@ -67,7 +67,7 @@ public final class DataTest {
     private static void mayBeDefinedLater() {
         // The other way round on purpose: the data comes first, so the name cannot be
         // resolved while reading the line.
-        Assert.assertEquals("\ntbl: dw h1\n\nh1:\n    ret\n",
+        Assert.assertEquals("\n$tbl: dw $h1\n\n$h1:\n    ret\n",
                 became("tbl: dw h1\nh1:\n    ret\n"));
     }
 
@@ -83,8 +83,8 @@ public final class DataTest {
                 + "    asm clobbers(ax, bx) {\n        mov bx, tbl\n        mov ax, [bx]\n"
                 + "        jmp ax\n    }\n"
                 + "    ret\n\nh1:\n    ret\nh2:\n    ret\ntbl: dw h1, h2, 0x1234\n");
-        Assert.assertTrue(assembly.contains("tbl: dw h1, h2, 0x1234\n"), assembly);
-        Assert.assertTrue(assembly.contains("    mov bx, tbl\n"), assembly);
+        Assert.assertTrue(assembly.contains("$tbl: dw $h1, $h2, 0x1234\n"), assembly);
+        Assert.assertTrue(assembly.contains("    mov bx, $tbl\n"), assembly);
     }
 
     private static void refusesNarrow() {

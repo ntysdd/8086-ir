@@ -51,7 +51,7 @@ public final class ConstantPropagationTest {
     }
 
     static SsaForm build(String body) {
-        Module module = IrParser.parse("test.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        Module module = IrParser.parse("test.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + body);
         return SsaBuilder.build(module);
     }

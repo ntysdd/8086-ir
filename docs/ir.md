@@ -130,10 +130,11 @@ neither an assignment nor a label; and `in` gives a variable a home only after t
 type of its declaration (§3.1.2).
 
 The price is paid on the way out rather than on the way in. The printer writes the
-canonical form, and the canonical form of a name that looks like a word carries a
+canonical form, and the canonical form of **every** name the author chose carries a
 `$` — so a reader of canonical text never has to ask whether the `eval` in front of
-them is a variable or the surface's word (§3.1.1). Input is liberal, output is
-canonical, which is the same split as the thirty spellings of a condition (§4.4).
+them is a variable or the surface's word, and never has to ask it about any other
+name either (§3.1.1). Input is liberal, output is canonical, which is the same split
+as the thirty spellings of a condition (§4.4).
 
 ### 3.1.1 `$name` is the author's, `..@name` is the compiler's — [decided]
 
@@ -160,27 +161,28 @@ glance.
 
 The two prefixes are worth stating plainly, and the list that goes with them:
 
-* **What the printer marks** is every word the surface knows that could be a
-  spelling a name has: the operators, both the ones spelled as words and the ones
-  spelled as symbols; the size words and directives; the conversions; the
-  conditions, every spelling of them; the type names; the words that shape a
-  statement — `var`, `in`, `ret`, `asm`, `jmp`, `cmp`, `test`, `target`, `org`,
-  `entry`;
-  the words of the forms — `eval`, `expr`, `volatile`, `clobbers`, `pad`, `to`; the
-  sugar's `.if`, `.elseif`, `.else`, `.endif`, `.while`, `.endw`; and the target's
-  register names. A symbol like `-` is left out, because a name cannot be one, so
-  there is nothing to mark.
+* **What the printer marks** is every name the author chose, and nothing else. A name
+  the compiler made up (`..@`) is not marked, and neither are the surface's own words:
+  a segment, a clobber list and the body of an inline block are written by the
+  printers that own them and never come through the name printer at all.
+* **The rule is total, and it is deliberately not a question about the vocabulary.**
+  Marking only the names that could be read as a word of the surface made the
+  canonical form of a program depend on the compiler's word list, so that adding a
+  word silently rewrote the text of every program that had used it as a name — which
+  is exactly what happened the day `in` became a word. A total rule has no such
+  moment. The vocabulary is still a list with a job: the audit below walks it.
+* **The assembly text has one exception, because that language has registers.** There
+  a bare name spelled like a register *is* the register (`mov ax, 1`), so a symbol of
+  that name has to say so and is written `$ax` (`docs/asm.md` §3). The IR surface has
+  no such exception, because it has no registers: `var ax: u16` is a variable, and it
+  is written `$ax` like every other name.
 * **What cannot be a name** is only what is not a word at all: a name the compiler
   generated, and a spelling no name can have.
 
 So a program never fails to compile because of a name it chose, and a reader of
-canonical text never has to work out which of two things a word is.
-
-**[open]** whether the marking list should be narrower, now that the surface has
-been shown to need no reservations at all: a name like `ax` or `eval` is marked for
-a reader who may have arrived from an assembler, and there is no rule that says it
-must be. The audit that establishes the first half is a test — every word the
-surface knows, used as a name in every position a name can stand in.
+canonical text never has to work out which of two things a word is. The audit that
+establishes the first half is a test — every word the surface knows, used as a name
+in every position a name can stand in.
 
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 
@@ -314,16 +316,15 @@ allocator chose. That reason is about the allocator's choice and so it does not
 reach a home, which makes whether a home's address may be written as a value
 **[open]** — §12 item 16.
 
-The word `in` is a word of the surface from now on, so the printer marks it
-(§3.1.1): a variable or a label called `in` is written `$in`, as with every other
-word the surface knows. **It is marked and not reserved**, which is the rule for
-every word here (§3.1): `var in: u16` is still a variable called `in`, and a
+The word `in` is a word of the surface from now on, and **it is a word rather than a
+reservation** (§3.1): `var in: u16` is still a variable called `in`, and a
 declaration whose home is a data item called `in` is written `var x: u16 in in` —
-which the printer writes back as `var x: u16 in $in`, because the second `in` is
-where a name stands and the first is where the surface's word does. `in` at the
-start of a statement is still the port instruction and is still refused with its
-reason (§11); the three never stand in the same place, which is the argument the
-whole surface rests on (§3.1).
+which the printer writes back as `var $x: u16 in $in`, because the second `in` is
+where a name stands, the first is where the surface's word does, and every name
+carries the `$` that says it is one (§3.1.1). `in` at the start of a statement is
+still the port instruction and is still refused with its reason (§11); the three
+never stand in the same place, which is the argument the whole surface rests on
+(§3.1).
 
 ### 3.2 Widths and signedness — [decided]
 
@@ -1386,6 +1387,14 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     item 8 already stands. Answering it means deciding whether a home *is* a label
     that a variable happens to have, or a second kind of thing that has an address of
     its own.
+17. Whether an instruction's operand should say whether it is a register or a name.
+    It cannot say today, and the assembly text needs to know: there a bare name
+    spelled like a register *is* the register, so a symbol of that name is written
+    `$ax` and the printer decides by asking the target what a register is called
+    (`docs/asm.md` §3, §3.1.1 above). That is right for everything the compiler writes
+    and wrong for a label the author named `ax` and branched to — a program the
+    surface allows, because nothing is reserved (§3.1). Reading a program back needs
+    the spelling to be enough on its own, and here it is not.
 
 ## 13. Non-goals for v1
 

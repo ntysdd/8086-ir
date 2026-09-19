@@ -20,17 +20,17 @@ public final class IrParserTest {
     private static final String HELLO =
             "target 8086\n"
                     + "org 0x100\n"
-                    + "entry main\n"
+                    + "entry $main\n"
                     + "\n"
-                    + "main:\n"
+                    + "$main:\n"
                     + "    asm clobbers(ax, dx, flags) {\n"
                     + "        mov ah, 9\n"
-                    + "        mov dx, offset msg\n"
+                    + "        mov dx, offset $msg\n"
                     + "        int 0x21\n"
                     + "    }\n"
                     + "    ret\n"
                     + "\n"
-                    + "msg: db \"Hello, world!$\"\n";
+                    + "$msg: db \"Hello, world!$\"\n";
 
     private IrParserTest() {
     }
@@ -128,7 +128,7 @@ public final class IrParserTest {
      * ({@code docs/ir.md} §9). The colon is what says so, so nothing else has to.
      */
     private static void readsBlockLabel() {
-        String block = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+        String block = "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                 + "    asm clobbers(ax, flags) {\n        mov ax, 1\n    retry:\n"
                 + "        dec ax\n        jnz retry\n    }\n    ret\n";
         Item.InlineAsm parsed = (Item.InlineAsm) parse(block).items().get(1);
@@ -137,14 +137,14 @@ public final class IrParserTest {
         Assert.assertEquals("retry", parsed.body().get(1).mnemonic());
         Assert.assertEquals("jnz", parsed.body().get(3).mnemonic());
         // And it prints back at the block's own margin, colon and all.
-        Assert.assertEquals("target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    asm clobbers(ax, flags) {\n        mov ax, 1\n        retry:\n"
-                        + "        dec ax\n        jnz retry\n    }\n    ret\n",
+        Assert.assertEquals("target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    asm clobbers(ax, flags) {\n        mov ax, 1\n        $retry:\n"
+                        + "        dec ax\n        jnz $retry\n    }\n    ret\n",
                 IrPrinter.print(parse(block)));
         // A register cannot be one: 'ax:' at the start of a line would be read as a
         // label, and a register is not a place.
         CompileError refused = Assert.assertThrows(CompileError.class, () -> parse(
-                "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    asm clobbers(ax, flags) {\n    ax:\n        dec ax\n    }\n    ret\n"));
         Assert.assertTrue(refused.getMessage().contains("register"), refused.getMessage());
     }
@@ -203,8 +203,8 @@ public final class IrParserTest {
     }
 
     private static void readsVariablesAndAssignments() {
-        Module module = parse("target 8086\norg 0\nentry main\n"
-                + "main:\n"
+        Module module = parse("target 8086\norg 0\nentry $main\n"
+                + "$main:\n"
                 + "    var count: u16\n"
                 + "    var p: u32\n"
                 + "    count = 0\n"
@@ -246,18 +246,18 @@ public final class IrParserTest {
     private static void roundTripsVariablesAndAssignments() {
         String program = "target 8086\n"
                 + "org 0x100\n"
-                + "entry main\n"
+                + "entry $main\n"
                 + "\n"
-                + "main:\n"
-                + "    var count: u16\n"
-                + "    var p: u16\n"
-                + "    p = msg\n"
-                + "    count = word [p]\n"
-                + "    word [p + 2] = count\n"
-                + "    byte [p] = 1\n"
+                + "$main:\n"
+                + "    var $count: u16\n"
+                + "    var $p: u16\n"
+                + "    $p = $msg\n"
+                + "    $count = word [$p]\n"
+                + "    word [$p + 2] = $count\n"
+                + "    byte [$p] = 1\n"
                 + "    ret\n"
                 + "\n"
-                + "msg: dw 0x1234\n";
+                + "$msg: dw 0x1234\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
     }
 
@@ -277,7 +277,7 @@ public final class IrParserTest {
                 + "            n = 2\n"
                 + "        .endif\n"
                 + "    .endw\n";
-        String header = "target 8086\norg 0x100\nentry main\n\nmain:\n";
+        String header = "target 8086\norg 0x100\nentry $main\n\n$main:\n";
         String once = IrPrinter.print(parse(header + withSugar));
         Assert.assertTrue(once.contains("..@lbl"), once);
         Assert.assertEquals(once, IrPrinter.print(parse(once)));
@@ -382,7 +382,7 @@ public final class IrParserTest {
     private static void refusesKeywordAsName() {
         // A size word is a word, not a reservation: 'byte' says how wide a bracket is
         // and is a name everywhere else (docs/ir.md §3.1).
-        Assert.assertEquals("target 8086\norg 0\nentry a\n    var $byte: u16\n",
+        Assert.assertEquals("target 8086\norg 0\nentry $a\n    var $byte: u16\n",
                         IrPrinter.print(parse("target 8086\norg 0\nentry a\n    var byte: u16\n")));
     }
 
@@ -400,7 +400,7 @@ public final class IrParserTest {
         // A condition is a word, not a reservation: 'jc' is a branch word at the start
         // of a statement and a name everywhere else (docs/ir.md §3.1), so a variable
         // called 'jc' is accepted and printed back marked.
-        Assert.assertEquals("target 8086\norg 0\nentry a\n    var $jc: u16\n    $jc = 1\n",
+        Assert.assertEquals("target 8086\norg 0\nentry $a\n    var $jc: u16\n    $jc = 1\n",
                 IrPrinter.print(parse("target 8086\norg 0\nentry a\n    var jc: u16\n"
                         + "    jc = 1\n")));
     }
@@ -444,8 +444,8 @@ public final class IrParserTest {
     }
 
     private static void readsMnemonicOperatorsAndConversions() {
-        Module module = parse("target 8086\norg 0\nentry main\n"
-                + "main:\n"
+        Module module = parse("target 8086\norg 0\nentry $main\n"
+                + "$main:\n"
                 + "    var a: u16\n"
                 + "    a = eval(a shl 2)\n"
                 + "    a = eval(a adc a)\n"
@@ -476,24 +476,24 @@ public final class IrParserTest {
     private static void roundTripsExpressions() {
         String program = "target 8086\n"
                 + "org 0x100\n"
-                + "entry main\n"
+                + "entry $main\n"
                 + "\n"
-                + "main:\n"
-                + "    var a: u16\n"
-                + "    var b: u16\n"
-                + "    var small: u8\n"
-                + "    a = eval(a + b)\n"
-                + "    a = eval(~a)\n"
-                + "    a = eval(a adc b)\n"
-                + "    a = eval(a idiv b)\n"
-                + "    a = eval(a + [a])\n"
-                + "    eval(a * b)\n"
-                + "    a = expr(a + b * a)\n"
-                + "    a = expr((a + b) * a)\n"
-                + "    a = expr(a - (b - a))\n"
-                + "    a = expr(~a + a & a ^ a | a)\n"
-                + "    a = movzx byte [a]\n"
-                + "    small = byte a\n";
+                + "$main:\n"
+                + "    var $a: u16\n"
+                + "    var $b: u16\n"
+                + "    var $small: u8\n"
+                + "    $a = eval($a + $b)\n"
+                + "    $a = eval(~$a)\n"
+                + "    $a = eval($a adc $b)\n"
+                + "    $a = eval($a idiv $b)\n"
+                + "    $a = eval($a + [$a])\n"
+                + "    eval($a * $b)\n"
+                + "    $a = expr($a + $b * $a)\n"
+                + "    $a = expr(($a + $b) * $a)\n"
+                + "    $a = expr($a - ($b - $a))\n"
+                + "    $a = expr(~$a + $a & $a ^ $a | $a)\n"
+                + "    $a = movzx byte [$a]\n"
+                + "    $small = byte $a\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
     }
 
@@ -503,9 +503,9 @@ public final class IrParserTest {
         // ones that keep the tree the same shape (docs/ir.md §5.5).
         String program = "target 8086\n"
                 + "org 0x100\n"
-                + "entry main\n"
+                + "entry $main\n"
                 + "\n"
-                + "main:\n"
+                + "$main:\n"
                 + "    var a: i16\n"
                 + "    var b: i16\n"
                 + "    a = eval(-a)\n"
@@ -519,7 +519,7 @@ public final class IrParserTest {
 
     private static void refusesTwoOperationsInEval() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n"
                         + "    var b: u16\n    a = eval(a + b + a)\n"));
         Assert.assertEquals("test.ir:7:20", refused.position().toString());
         Assert.assertTrue(refused.getMessage().contains("exactly one operation"),
@@ -528,25 +528,25 @@ public final class IrParserTest {
 
     private static void refusesTreeInEval() {
         Assert.assertRefused("test.ir:7:20",
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n"
                         + "    var b: u16\n    a = eval(a + b * a)\n"));
     }
 
     private static void refusesEvalWithNoOperation() {
         Assert.assertRefused("test.ir:6:15",
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n"
                         + "    a = eval(a)\n"));
     }
 
     private static void refusesNestedForms() {
         Assert.assertRefused("test.ir:6:14",
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n"
                         + "    a = eval(expr(a) + 1)\n"));
     }
 
     private static void refusesArithmeticWithoutAForm() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n    a = a + 1\n"));
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n    a = a + 1\n"));
         Assert.assertEquals("test.ir:6:11", refused.position().toString());
         Assert.assertTrue(refused.getMessage().contains("eval(...) or expr(...)"),
                 "the message says where arithmetic goes: " + refused.getMessage());
@@ -554,20 +554,20 @@ public final class IrParserTest {
 
     private static void refusesNegatedLiteral() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n    a = -1\n"));
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n    a = -1\n"));
         Assert.assertEquals("test.ir:6:9", refused.position().toString());
         Assert.assertTrue(refused.getMessage().contains("0xFFFF"), refused.getMessage());
     }
 
     private static void refusesConversionOfAForm() {
         Assert.assertRefused("test.ir:6:15",
-                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                () -> parse("target 8086\norg 0\nentry $main\n$main:\n    var a: u16\n"
                         + "    a = movzx eval(a + a)\n"));
     }
 
     private static String program() {
-        return "target 8086\norg 0x100\nentry main\n"
-                + "main:\n"
+        return "target 8086\norg 0x100\nentry $main\n"
+                + "$main:\n"
                 + "    var a: u16\n"
                 + "    var b: u16\n"
                 + "    var c: u16\n"
@@ -575,8 +575,8 @@ public final class IrParserTest {
     }
 
     private static void readsComparisonsAndBranches() {
-        Module module = parse("target 8086\norg 0\nentry main\n"
-                + "main:\n"
+        Module module = parse("target 8086\norg 0\nentry $main\n"
+                + "$main:\n"
                 + "    var x: u16\n"
                 + "    cmp x, 0\n"
                 + "    test x, 1\n"
@@ -595,8 +595,8 @@ public final class IrParserTest {
     }
 
     private static void normalisesConditionAliases() {
-        Module module = parse("target 8086\norg 0\nentry main\n"
-                + "main:\n"
+        Module module = parse("target 8086\norg 0\nentry $main\n"
+                + "$main:\n"
                 + "    jb main\n"
                 + "    jnae main\n"
                 + "    jnc main\n"
@@ -610,15 +610,15 @@ public final class IrParserTest {
     private static void roundTripsComparisonsAndBranches() {
         String program = "target 8086\n"
                 + "org 0x100\n"
-                + "entry main\n"
+                + "entry $main\n"
                 + "\n"
-                + "main:\n"
-                + "    var x: u16\n"
-                + "    cmp x, 0\n"
-                + "    jz done\n"
-                + "    jmp main\n"
+                + "$main:\n"
+                + "    var $x: u16\n"
+                + "    cmp $x, 0\n"
+                + "    jz $done\n"
+                + "    jmp $main\n"
                 + "\n"
-                + "done:\n"
+                + "$done:\n"
                 + "    ret\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
     }

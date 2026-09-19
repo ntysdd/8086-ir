@@ -18,7 +18,7 @@ import i8086.target.Targets;
  */
 public final class MachineTest {
 
-    private static final String HEAD = "target 8086\norg 0x100\nentry main\n\nmain:\n";
+    private static final String HEAD = "target 8086\norg 0x100\nentry $main\n\n$main:\n";
 
     private MachineTest() {
     }
@@ -50,7 +50,7 @@ public final class MachineTest {
 
     private static String became(String body) {
         String text = printed(body);
-        return text.substring(text.indexOf("\nmain:\n") + "\nmain:\n".length());
+        return text.substring(text.indexOf("\n$main:\n") + "\n$main:\n".length());
     }
 
     private static String assembly(String body) {
@@ -113,7 +113,7 @@ public final class MachineTest {
                 + "    jc there\n"
                 + "there:\n"
                 + "    ret\n";
-        Assert.assertTrue(assembly(body).contains("    jc there\n"), assembly(body));
+        Assert.assertTrue(assembly(body).contains("    jc $there\n"), assembly(body));
     }
 
     private static void flagsDieAtAnInterrupt() {

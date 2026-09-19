@@ -121,6 +121,18 @@ block is a straight sequence of instructions.
   without the `@` is refused rather than read as an ordinary name, because in an
   assembler that reads this text `..lbl0` is a local label and means something
   else again.
+* **The emitter marks every name that is the author's**, and the marker is what makes
+  the output unambiguous rather than decoration: this text has registers, so a bare
+  name spelled like one *is* the register (`mov ax, 1`), and a label of that name is
+  written `$ax`. A name the compiler generated (`..@`) is not marked, because it is
+  not the author's, and neither is a register.
+  **One position still cannot say which it is**: an instruction's operand. A name
+  there is a register or a label and nothing in the operand says which, so a label
+  whose name is spelled like a register is written bare and will be read as the
+  register. Nothing is reserved (`docs/ir.md` §3.1), so a program may write that
+  name, and this is a real hole rather than a theoretical one; the fix is for the
+  operand to carry the distinction instead of the printer guessing at it
+  (`docs/ir.md` §12 item 17).
 * **Numbers** are decimal (`26`) or hexadecimal with a `0x` prefix (`0x1A`,
   `0x1a`). A leading `-` is a unary minus applied by the operand parser, not part
   of the literal, so literals themselves are non-negative.

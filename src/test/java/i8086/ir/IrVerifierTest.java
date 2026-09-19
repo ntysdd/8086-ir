@@ -134,7 +134,7 @@ public final class IrVerifierTest {
     }
 
     private static String program(String body) {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n" + body;
+        return "target 8086\norg 0x100\nentry $main\n\n$main:\n" + body;
     }
 
     private static void refuses(String position, String body) {
@@ -215,7 +215,7 @@ public final class IrVerifierTest {
 
     private static void refusesMissingEntry() {
         Module module = IrParser.parse("test.ir",
-                "target 8086\norg 0x100\nentry nowhere\n\nmain:\n    ret\n");
+                "target 8086\norg 0x100\nentry nowhere\n\n$main:\n    ret\n");
         Assert.assertRefused("test.ir:3:1",
                 () -> IrVerifier.verify(module, Targets.byName("8086")));
     }

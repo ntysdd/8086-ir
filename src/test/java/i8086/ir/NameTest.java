@@ -50,7 +50,7 @@ public final class NameTest {
     }
 
     private static String header() {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n";
+        return "target 8086\norg 0x100\nentry $main\n\n$main:\n";
     }
 
     private static String printed(String body) {
@@ -59,7 +59,7 @@ public final class NameTest {
 
     private static String became(String body) {
         String text = printed(body);
-        return text.substring(text.indexOf("\nmain:\n") + "\nmain:\n".length());
+        return text.substring(text.indexOf("\n$main:\n") + "\n$main:\n".length());
     }
 
     /**
@@ -156,6 +156,16 @@ public final class NameTest {
                     + "    word [0x40] = $" + word + "\n";
             Assert.assertEquals(expected, became(body));
         }
+        // And a name that is no word of the surface at all, because the rule is not a
+        // question about the vocabulary: every name in a position the author owns is
+        // marked, and that is what makes adding a word to the surface unable to change
+        // the text of a program that used it as a name.
+        Assert.assertEquals("    var $ordinary: i16\n"
+                        + "    $ordinary = 1\n"
+                        + "    word [0x40] = $ordinary\n",
+                became("    var ordinary: i16\n"
+                        + "    ordinary = 1\n"
+                        + "    word [0x40] = ordinary\n"));
     }
 
     /**
@@ -165,10 +175,10 @@ public final class NameTest {
     private static void wordsStillMeanThemselves() {
         // 'add' is an instruction-shaped statement and also a variable, in one module.
         Assert.assertEquals("    var $add: i16\n"
-                        + "    var s: i16\n"
+                        + "    var $s: i16\n"
                         + "    $add = 1\n"
-                        + "    s = 2\n"
-                        + "    s = eval(s + 1)\n"
+                        + "    $s = 2\n"
+                        + "    $s = eval($s + 1)\n"
                         + "    $add = eval($add + 1)\n",
                 became("    var add: i16\n"
                         + "    var s: i16\n"
@@ -179,11 +189,11 @@ public final class NameTest {
         // A size word in front of a bracket is the machine's; the same word as a name
         // is the author's.
         Assert.assertEquals("    var $word: i16\n"
-                        + "    var p: i16\n"
-                        + "    p = 0x1000\n"
-                        + "    word [p] = 1\n"
-                        + "    $word = [p]\n"
-                        + "    p = $word\n",
+                        + "    var $p: i16\n"
+                        + "    $p = 0x1000\n"
+                        + "    word [$p] = 1\n"
+                        + "    $word = [$p]\n"
+                        + "    $p = $word\n",
                 became("    var word: i16\n"
                         + "    var p: i16\n"
                         + "    p = 0x1000\n"
@@ -225,14 +235,14 @@ public final class NameTest {
     }
 
     private static void sugarStillWorks() {
-        Assert.assertEquals("    var n: u16\n"
+        Assert.assertEquals("    var $n: u16\n"
                         + "    jmp ..@lbl1\n"
                         + "\n"
                         + "..@lbl0:\n"
-                        + "    n = eval(n - 1)\n"
+                        + "    $n = eval($n - 1)\n"
                         + "\n"
                         + "..@lbl1:\n"
-                        + "    cmp n, 0\n"
+                        + "    cmp $n, 0\n"
                         + "    ja ..@lbl0\n",
                 became("    var n: u16\n"
                         + "    .while n > 0\n"
@@ -248,16 +258,16 @@ public final class NameTest {
                         + "    $.if = 1\n",
                 became("    var .if: i16\n"
                         + "    .if = 1\n"));
-        Assert.assertEquals("    var n: u16\n"
+        Assert.assertEquals("    var $n: u16\n"
                         + "    var $.endif: i16\n"
                         + "    jmp ..@lbl1\n"
                         + "\n"
                         + "..@lbl0:\n"
                         + "    $.endif = 1\n"
-                        + "    n = eval(n - 1)\n"
+                        + "    $n = eval($n - 1)\n"
                         + "\n"
                         + "..@lbl1:\n"
-                        + "    cmp n, 0\n"
+                        + "    cmp $n, 0\n"
                         + "    ja ..@lbl0\n",
                 became("    var n: u16\n"
                         + "    var .endif: i16\n"

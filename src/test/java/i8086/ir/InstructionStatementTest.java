@@ -18,7 +18,7 @@ import i8086.testing.Suite;
  */
 public final class InstructionStatementTest {
 
-    private static final String HEAD = "target 8086\norg 0x100\nentry main\n\nmain:\n";
+    private static final String HEAD = "target 8086\norg 0x100\nentry $main\n\n$main:\n";
 
     private InstructionStatementTest() {
     }
@@ -60,7 +60,7 @@ public final class InstructionStatementTest {
     /** What the written statement became, which is what everything else sees. */
     private static String became(String body) {
         String text = printed(body);
-        return text.substring(text.indexOf("\nmain:\n") + "\nmain:\n".length());
+        return text.substring(text.indexOf("\n$main:\n") + "\n$main:\n".length());
     }
 
     private static String refusal(String body) {
@@ -68,16 +68,16 @@ public final class InstructionStatementTest {
     }
 
     private static void spellsTheOperation() {
-        Assert.assertEquals("    var s: i16\n"
-                        + "    var t: i16\n"
-                        + "    s = eval(s + 1)\n"
-                        + "    s = eval(s - 2)\n"
-                        + "    s = eval(s & 3)\n"
-                        + "    s = eval(s adc 4)\n"
-                        + "    s = eval(s shl 5)\n"
-                        + "    s = eval(s mul t)\n"
-                        + "    s = eval(-s)\n"
-                        + "    s = eval(~s)\n",
+        Assert.assertEquals("    var $s: i16\n"
+                        + "    var $t: i16\n"
+                        + "    $s = eval($s + 1)\n"
+                        + "    $s = eval($s - 2)\n"
+                        + "    $s = eval($s & 3)\n"
+                        + "    $s = eval($s adc 4)\n"
+                        + "    $s = eval($s shl 5)\n"
+                        + "    $s = eval($s mul $t)\n"
+                        + "    $s = eval(-$s)\n"
+                        + "    $s = eval(~$s)\n",
                 became("    var s: i16\n"
                         + "    var t: i16\n"
                         + "    add s, 1\n"
@@ -93,9 +93,9 @@ public final class InstructionStatementTest {
     private static void namesItsDestination() {
         // The first operand is where the result goes, so this is s + t and not t + s:
         // the spelling is shorter than the eval form, not looser.
-        Assert.assertEquals("    var s: i16\n"
-                        + "    var t: i16\n"
-                        + "    s = eval(s + t)\n",
+        Assert.assertEquals("    var $s: i16\n"
+                        + "    var $t: i16\n"
+                        + "    $s = eval($s + $t)\n",
                 became("    var s: i16\n"
                         + "    var t: i16\n"
                         + "    add s, t\n"));
@@ -104,17 +104,17 @@ public final class InstructionStatementTest {
     private static void writesMemory() {
         Assert.assertEquals("    word [0x40] = eval(word [0x40] + 1)\n",
                 became("    add word [0x40], 1\n"));
-        Assert.assertEquals("    var s: i16\n"
-                        + "    s = eval(s + [0x1000])\n",
+        Assert.assertEquals("    var $s: i16\n"
+                        + "    $s = eval($s + [0x1000])\n",
                 became("    var s: i16\n"
                         + "    add s, [0x1000]\n"));
     }
 
     private static void movesAreAssignments() {
-        Assert.assertEquals("    var s: i16\n"
-                        + "    s = 1\n"
-                        + "    s = [0x1000]\n"
-                        + "    word [0x40] = s\n",
+        Assert.assertEquals("    var $s: i16\n"
+                        + "    $s = 1\n"
+                        + "    $s = [0x1000]\n"
+                        + "    word [0x40] = $s\n",
                 became("    var s: i16\n"
                         + "    mov s, 1\n"
                         + "    mov s, [0x1000]\n"
@@ -124,12 +124,11 @@ public final class InstructionStatementTest {
     private static void wordsStayNames() {
         // The words are statements' words, not the surface's: a variable may be called
         // add, and it stays one wherever a name is expected (docs/ir.md §3.1, §7.3).
-        // What comes back says '$add', because that is the canonical spelling of a name
-        // that looks like a word.
+        // What comes back says '$add', like every other name the author chose.
         Assert.assertEquals("    var $add: i16\n"
-                        + "    var s: i16\n"
+                        + "    var $s: i16\n"
                         + "    $add = 5\n"
-                        + "    s = eval(s + $add)\n",
+                        + "    $s = eval($s + $add)\n",
                 became("    var add: i16\n"
                         + "    var s: i16\n"
                         + "    add = 5\n"
@@ -159,10 +158,10 @@ public final class InstructionStatementTest {
     private static void refusesRegisters() {
         // A register name is not a register here: the surface has no registers, so 'ax'
         // is a variable like any other name, and the printer says so (docs/ir.md §3.1).
-        Assert.assertEquals("    var s: i16\n"
+        Assert.assertEquals("    var $s: i16\n"
                         + "    var $ax: i16\n"
                         + "    $ax = 1\n"
-                        + "    s = eval(s + $ax)\n",
+                        + "    $s = eval($s + $ax)\n",
                 became("    var s: i16\n"
                         + "    var ax: i16\n"
                         + "    mov ax, 1\n"

@@ -36,7 +36,7 @@ public final class OutOfSsaTest {
 
     private static Module module(String body) {
         Module parsed = IrParser.parse("test.ir",
-                "target 8086\norg 0x100\nentry main\n\nmain:\n" + body);
+                "target 8086\norg 0x100\nentry $main\n\n$main:\n" + body);
         SsaForm form = SsaBuilder.build(parsed);
         return OutOfSsa.module(form);
     }
@@ -44,12 +44,12 @@ public final class OutOfSsaTest {
     private static void renamesBack() {
         Assert.assertEquals("target 8086\n"
                         + "org 0x100\n"
-                        + "entry main\n"
+                        + "entry $main\n"
                         + "\n"
-                        + "main:\n"
-                        + "    var x: u16\n"
-                        + "    x = 1\n"
-                        + "    x = eval(x + 1)\n"
+                        + "$main:\n"
+                        + "    var $x: u16\n"
+                        + "    $x = 1\n"
+                        + "    $x = eval($x + 1)\n"
                         + "    ret\n",
                 IrPrinter.print(module("    var x: u16\n    x = 1\n    x = eval(x + 1)\n"
                         + "    ret\n")));
@@ -58,12 +58,12 @@ public final class OutOfSsaTest {
     private static void renamesTheUndefinedValue() {
         Assert.assertEquals("target 8086\n"
                         + "org 0x100\n"
-                        + "entry main\n"
+                        + "entry $main\n"
                         + "\n"
-                        + "main:\n"
-                        + "    var x: u16\n"
-                        + "    var y: u16\n"
-                        + "    y = eval(x + 1)\n"
+                        + "$main:\n"
+                        + "    var $x: u16\n"
+                        + "    var $y: u16\n"
+                        + "    $y = eval($x + 1)\n"
                         + "    ret\n",
                 IrPrinter.print(module("    var x: u16\n    var y: u16\n"
                         + "    y = eval(x + 1)\n    ret\n")));
@@ -76,7 +76,7 @@ public final class OutOfSsaTest {
         String body = "    var i: u16\n    var n: u16\n    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n    ret\n";
         Module parsed = IrParser.parse("test.ir",
-                "target 8086\norg 0x100\nentry main\n\nmain:\n" + body);
+                "target 8086\norg 0x100\nentry $main\n\n$main:\n" + body);
         SsaForm form = SsaBuilder.build(parsed);
         Assert.assertEquals(1L, form.phis(form.cfg().blocks().get(2)).size());
         Assert.assertEquals(IrPrinter.print(parsed), IrPrinter.print(OutOfSsa.module(form)));
@@ -85,15 +85,15 @@ public final class OutOfSsaTest {
     private static void leavesLabelsAlone() {
         Assert.assertEquals("target 8086\n"
                         + "org 0x100\n"
-                        + "entry main\n"
+                        + "entry $main\n"
                         + "\n"
-                        + "main:\n"
-                        + "    var p: u16\n"
-                        + "    p = msg\n"
-                        + "    p = [msg]\n"
+                        + "$main:\n"
+                        + "    var $p: u16\n"
+                        + "    $p = $msg\n"
+                        + "    $p = [$msg]\n"
                         + "    ret\n"
                         + "\n"
-                        + "msg: db \"hi\"\n",
+                        + "$msg: db \"hi\"\n",
                 IrPrinter.print(module("    var p: u16\n    p = msg\n    p = [msg]\n"
                         + "    ret\n\nmsg: db \"hi\"\n")));
     }
