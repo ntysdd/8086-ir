@@ -46,6 +46,10 @@ public final class IrParserTest {
         suite.add("Ir printer round-trips variables and assignments",
                 IrParserTest::roundTripsVariablesAndAssignments);
         suite.add("Ir parser reads a home and prints it back", IrParserTest::roundTripsHomes);
+        suite.add("Ir parser reads a segment move and prints it back",
+                IrParserTest::roundTripsSegmentMoves);
+        suite.add("Ir parser refuses a name movseg cannot write",
+                IrParserTest::refusesStateMovsegCannotWrite);
         suite.add("Ir parser refuses a mode with no home to apply to",
                 IrParserTest::refusesWritethroughAlone);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
@@ -317,6 +321,69 @@ public final class IrParserTest {
                 () -> parse("target 8086\norg 0\nentry a\nvar x: u16 writethrough\n"));
         Assert.assertTrue(refused.getMessage().contains("in place writethrough"),
                 "the message says how to write it: " + refused.getMessage());
+    }
+
+    /**
+     * {@code movseg} and the four names a module may set, including the two ways a source can look:
+     * a value, and another segment register ({@code docs/ir.md} §8.1).
+     *
+     * <p>The name written is the machine's, so it is printed bare — which is what makes the round
+     * trip work for the module in the second half of this test, where the program also has a
+     * variable called {@code ds} and has to write {@code $ds} to say so.
+     */
+    private static void roundTripsSegmentMoves() {
+        String program = "target 8086\n"
+                + "org 0x7c00\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    movseg ds, 0\n"
+                + "    movseg es, 0xb800\n"
+                + "    movseg ss, 0\n"
+                + "    movseg sp, 0x7c00\n"
+                + "    movseg ds, cs\n"
+                + "    ret\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+
+        Module module = parse(program);
+        Item.MovSeg immediate = (Item.MovSeg) module.items().get(1);
+        Assert.assertEquals("ds", immediate.name());
+        Assert.assertEquals(0L, ((Value.Number) immediate.value()).value());
+        Item.MovSeg copied = (Item.MovSeg) module.items().get(5);
+        Assert.assertEquals("ds", copied.name());
+        Assert.assertEquals("cs", copied.segment());
+        Assert.assertNull(copied.value(), "a copied segment is not a value");
+
+        // The author's name wins where it is written as theirs, and the machine's where it is a bare
+        // name a segment register could be: the `$` is what says which, exactly as it does in the
+        // assembly text (docs/ir.md §3.1.1).
+        String shadowed = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $ds: u16\n"
+                + "    $ds = 1\n"
+                + "    movseg ds, $ds\n"
+                + "    ret\n";
+        Assert.assertEquals(shadowed, IrPrinter.print(parse(shadowed)));
+        Item.MovSeg fromVariable = (Item.MovSeg) parse(shadowed).items().get(3);
+        Assert.assertEquals("ds", ((Value.Name) fromVariable.value()).name());
+        Assert.assertNull(fromVariable.segment(), "a variable is a value and not a segment");
+    }
+
+    /** A name that is not state this machine has, refused where it is written. */
+    private static void refusesStateMovsegCannotWrite() {
+        CompileError cs = Assert.assertRefused("test.ir:4:8",
+                () -> parse("target 8086\norg 0\nentry a\nmovseg cs, 0\n"));
+        Assert.assertTrue(cs.getMessage().contains("is not state a module can set"),
+                cs.getMessage());
+        Assert.assertTrue(cs.getMessage().contains("ds, es, ss, sp"),
+                "and says which names it can write: " + cs.getMessage());
+        CompileError register = Assert.assertRefused("test.ir:4:8",
+                () -> parse("target 8086\norg 0\nentry a\nmovseg ax, 0\n"));
+        Assert.assertTrue(register.getMessage().contains("is not state a module can set"),
+                register.getMessage());
     }
 
     private static void reproducesCanonical() {

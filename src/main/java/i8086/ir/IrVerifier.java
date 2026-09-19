@@ -55,6 +55,9 @@ public final class IrVerifier {
     /** The width of a label used as a value: a near pointer, so two bytes (§3.3). */
     private static final int POINTER_BYTES = 2;
 
+    /** The width of the machine's segmentation state: one word (§8.1). */
+    private static final int SEGMENT_BYTES = 2;
+
     private final Module module;
     private final Target target;
     private final Names names;
@@ -173,6 +176,10 @@ public final class IrVerifier {
         }
         if (item instanceof Item.Pad) {
             checkPad(item);
+            return flagsDefined;
+        }
+        if (item instanceof Item.MovSeg) {
+            checkMovSeg((Item.MovSeg) item);
             return flagsDefined;
         }
         if (item instanceof Item.FarJump) {
@@ -487,6 +494,35 @@ public final class IrVerifier {
                                 + "as if those bytes were never written (docs/ir.md §3.1.2)");
             }
         }
+    }
+
+    /**
+     * {@code movseg ds, 0}: the state written, and what is put into it ({@code docs/ir.md} §8.1).
+     *
+     * <p>Two kinds of source, and they are checked differently. A segment register is a name the
+     * machine has and the parser has already decided means that, so the check here is that the
+     * target really has it — a hand-built module could say anything. A value is a value, and it has
+     * to be the width of the register it goes into: this machine's segmentation state is sixteen
+     * bits, so a byte or a double word does not fit.
+     */
+    private void checkMovSeg(Item.MovSeg movseg) {
+        if (movseg.segment() != null) {
+            // Which names may be written, and which may be copied from, is a fixed fact about the
+            // target and is refused where the statement is read; what is left here is the part that
+            // depends on the whole module.
+            return;
+        }
+        Value value = movseg.value();
+        if (value instanceof Value.Name && !names.isVariable(((Value.Name) value).name())) {
+            String name = ((Value.Name) value).name();
+            require(!names.isLabel(name), value.position(),
+                    "'" + name + "' is a label, which is an address; only a value or a segment "
+                            + "register can go into segmentation state (docs/ir.md §8.1)");
+        }
+        Integer bytes = widthOf(value, Integer.valueOf(SEGMENT_BYTES));
+        require(bytes == null || bytes.intValue() == SEGMENT_BYTES, value.position(),
+                "a " + bytes + "-byte value does not fit in '" + movseg.name() + "', which is one "
+                        + "word wide (docs/ir.md §8.1)");
     }
 
     private void checkCompare(Item.Compare compare) {

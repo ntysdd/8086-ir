@@ -37,7 +37,7 @@ public final class Vocabulary {
      * name, and {@link #words} walks them to check that.
      */
     private static final Set<String> STRUCTURE = new LinkedHashSet<String>(Arrays.asList(
-            "var", "ret", "asm", "jmp", "cmp", "test",
+            "var", "ret", "asm", "jmp", "cmp", "test", "movseg",
             "target", "org", "entry",
             ".if", ".elseif", ".else", ".endif", ".while", ".endw"));
 

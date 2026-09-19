@@ -73,6 +73,12 @@ public final class CompilerTest {
                 CompilerTest::refusesWhenNoRegisterIsFreeToMoveAValue);
         suite.add("Compiler moves another value to its home to free a register",
                 CompilerTest::movesAnotherValueToItsHome);
+        suite.add("Compiler sets the machine's segmentation state up",
+                CompilerTest::setsSegmentsUp);
+        suite.add("Compiler keeps a value out of the register a segment move uses",
+                CompilerTest::keepsValuesOutOfTheSegmentScratch);
+        suite.add("Compiler keeps a segment set up that nothing reads",
+                CompilerTest::keepsSegmentationState);
         suite.add("Compiler refuses a byte value a whole register cannot hold",
                 CompilerTest::refusesAByteValueItsHomeCannotHold);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
@@ -648,6 +654,62 @@ public final class CompilerTest {
         int at = assembly.indexOf("$main:");
         Assert.assertTrue(at >= 0, "the entry point is in the assembly: " + assembly);
         return assembly.substring(at);
+    }
+
+    // --- the machine's segmentation state (docs/ir.md §8.1) -----------------
+
+    /**
+     * The first lines of every boot loader: the segmentation state, in the sequences the target
+     * declared. {@code sp} takes the value directly, and a segment register does not — a segment
+     * register takes no immediate, so the value goes through {@code ax}.
+     */
+    private static void setsSegmentsUp() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n"
+                + "$main:\n"
+                + "    movseg ds, 0\n"
+                + "    movseg sp, 0x7c00\n"
+                + "    movseg es, 0xb800\n"
+                + "    movseg ds, cs\n"
+                + "    ret\n");
+        Assert.assertEquals("org 0x7c00\n\n$main:\n"
+                + "    mov ax, 0\n"
+                + "    mov ds, ax\n"
+                + "    mov sp, 0x7c00\n"
+                + "    mov ax, 0xb800\n"
+                + "    mov es, ax\n"
+                + "    mov ax, cs\n"
+                + "    mov ds, ax\n"
+                + "    ret\n", assembly);
+    }
+
+    /**
+     * The sequence a segment move needs writes {@code ax}, and the allocator is told: a value alive
+     * across the move is kept out of that register, because the register is written by the sequence
+     * and not by anything the program wrote.
+     */
+    private static void keepsValuesOutOfTheSegmentScratch() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                + "$main:\n"
+                + "    var x: u16\n"
+                + "    x = word [0x40]\n"
+                + "    movseg ds, 0\n"
+                + "    word [0x42] = x\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("mov ax, 0\n    mov ds, ax\n"), assembly);
+        Assert.assertFalse(assembly.contains("mov word [0x42], ax"),
+                "the value did not wait in the register the sequence uses: " + assembly);
+    }
+
+    /**
+     * Setting the machine's state is not something a pass may remove. There is no value to be dead
+     * and nothing after it has to read it for the program to need it — the segment is what every
+     * later access goes through ({@code docs/ir.md} §2.3, §8.1).
+     */
+    private static void keepsSegmentationState() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    mov ax, 0x1234\n    mov ds, ax\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    movseg ds, 0x1234\n"
+                        + "    ret\n"));
     }
 
     /**

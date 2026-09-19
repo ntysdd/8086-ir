@@ -448,6 +448,19 @@ public final class I8086 implements Target {
             Arrays.asList("ax", "cx", "dx", "bx", "si", "di"));
 
     /**
+     * The state a module sets up before anything else runs: the segment registers this machine can
+     * write, and the stack pointer they are set up with ({@code docs/ir.md} §8.1).
+     *
+     * <p>These four and not {@code cs}, which is a segment register too and is not on the list: it
+     * says where the program is running, so changing it is a jump rather than a move.
+     */
+    private static final List<String> SEGMENTATION_STATE = Collections.unmodifiableList(
+            Arrays.asList("ds", "es", "ss", "sp"));
+
+    /** The register a segment register is loaded through, since it takes no immediate. */
+    private static final String SEGMENT_SCRATCH = "ax";
+
+    /**
      * The registers that can be inside the brackets.
      *
      * <p>These three and no others: {@code [ax]}, {@code [cx]} and {@code [dx]} are
@@ -771,6 +784,33 @@ public final class I8086 implements Target {
         // flags after the last shift are not the flags after a single shift by
         // that count.
         return repeatedShift(where, mnemonic, destination, source, (int) count, count == 1);
+    }
+
+    @Override
+    public List<String> segmentationState() {
+        return SEGMENTATION_STATE;
+    }
+
+    /**
+     * Setting a segment register, or the stack pointer, from an operand.
+     *
+     * <p>{@code sp} takes the operand directly — {@code mov sp, x} is one instruction — and a
+     * segment register does not: this machine has no {@code mov ds, immediate} and no
+     * {@code mov ds, memory}, so the value goes through {@code ax} first. The copy is stated even
+     * when it turns out to be unnecessary, which is how the rest of this class writes a sequence:
+     * the allocator is the one that finds out, and drops a copy of a register into itself.
+     */
+    @Override
+    public Expansion segmentMove(SourcePos where, String name, Operand value) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        if (name.equals("sp")) {
+            instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
+            return new Expansion(instructions, true);
+        }
+        Operand scratch = new Operand.Name(where, SEGMENT_SCRATCH);
+        instructions.add(instruction(where, "mov", scratch, value));
+        instructions.add(instruction(where, "mov", new Operand.Name(where, name), scratch));
+        return new Expansion(instructions, true);
     }
 
     /**

@@ -243,6 +243,10 @@ public final class InstructionSelector {
             out.add(new Instruction(item.position(), machine.mnemonic(), given));
             return;
         }
+        if (item instanceof Item.MovSeg) {
+            emitMovSeg((Item.MovSeg) item);
+            return;
+        }
         if (item instanceof Item.FarJump) {
             // One instruction, and the operand shape is what makes it far: the machine
             // has the immediate far pointer for exactly this (docs/ir.md §7.1).
@@ -345,6 +349,29 @@ public final class InstructionSelector {
                             + "compiler can emit yet: a value lives in a whole register, and "
                             + "nothing here can name half of one (docs/ir.md §3.4)");
         }
+    }
+
+    /**
+     * {@code movseg ds, 0}: the machine's segmentation state, which the target turns into a
+     * sequence ({@code docs/ir.md} §8.1).
+     *
+     * <p>A copied segment register reaches the target as a register the selector wrote by hand —
+     * the same way a sequence names {@code ax} or {@code cl} — because that is all it is: a
+     * register, inside a sequence the target declared.
+     */
+    private void emitMovSeg(Item.MovSeg movseg) {
+        // The verifier has already said that the name is one this target has and that the source is
+        // a value or a segment register; what is left is the target's own answer about how (or
+        // whether) it can set it.
+        Operand value = movseg.segment() != null
+                ? new Operand.Name(movseg.position(), movseg.segment())
+                : operandOf(movseg.value());
+        Expansion sequence = target.segmentMove(movseg.position(), movseg.name(), value);
+        if (sequence == null) {
+            throw new CompileError(movseg.position(),
+                    "this target has no way to set '" + movseg.name() + "' (docs/ir.md §8.1)");
+        }
+        out.addAll(sequence.instructions());
     }
 
     /** {@code p = msg}: the address of a label, as an immediate. */

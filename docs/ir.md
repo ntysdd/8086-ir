@@ -1098,15 +1098,44 @@ like every other encoding choice.
 
 ### 8.1 Segment registers — [decided]
 
-`ds`, `es`, `ss` and `sp` are writable names. They are segmentation state rather
-than general registers, so `ds = 0` and `sp = 0x7C00` are the natural spellings
-for what an assembly programmer writes as `mov ds, ax`.
+A module sets its own segmentation state up, and the surface spells that as a statement of
+its own:
 
-**Not built**, and it is worth being exact about what that means: the surface
-today refuses `ds = 0` and `sp = 0x7C00`, and what it says is that no variable or
-label has that name. Until these are places, a module that has to set a segment up
-says so inside an inline block — `mov ax, 0xB800` then `mov es, ax` — which is the
-same thing the spelling above will compile to.
+```
+movseg ds, 0
+movseg ss, 0
+movseg sp, 0x7C00
+movseg es, 0xB800
+movseg ds, cs
+```
+
+`movseg` takes one of the four names a module may set — `ds`, `es`, `ss`, `sp` — and what
+to put there: a literal, a variable, or another segment register. On this machine most of
+those are a sequence rather than one instruction, because a segment register takes no
+immediate, so `movseg ds, 0` is `mov ax, 0` and then `mov ds, ax`. The target description
+is what says so, like every other choice of instruction.
+
+**The word is there because the name cannot say it.** `ds` is the machine's segmentation
+state, and `ds` may also be a variable of the program's, so a statement that begins with
+that name cannot tell the reader which one it is: a place, an `=`, and a name that could
+be either (§3.1). `mov ds, 0` does not settle it either, because `mov d, s` is
+already how this surface spells an assignment (§7.3) — the same two readings, in assembly
+clothing. A word of its own does settle it, and what that buys is that **nothing is
+reserved**: `var ds: u16` declares a variable like any other name, `ds = 0` assigns it,
+and only `movseg` reaches the register. `flags` stays the one predeclared name (§4.1).
+
+A name in the second position is read the way the assembly text reads one (§3.1.1): a bare
+name this machine has a segment register for **is** that register, and a name the author
+wants is written `$cs`. Canonical text therefore has no name that could be two things,
+because the printer writes the `$` on everything the author chose. So `movseg ds, cs`
+copies the code segment — which is how a loader that was loaded somewhere else picks up the
+segment it is actually running in — and a program that has a variable called `cs` writes
+`movseg ds, $cs` to put that variable there.
+
+The four names are the state a module sets up before anything else runs: three segment
+registers, and the stack pointer they are set up with. Writing one is an effect like a
+store and not a definition of a value, so SSA renames nothing about it (§2.3), and
+it leaves the flags alone.
 
 ### 8.2 No-spill functions — [decided]
 

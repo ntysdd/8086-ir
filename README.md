@@ -315,6 +315,13 @@ Working today:
   opaque and these are not: an interrupt with a declared clobber list leaves the
   rest of the module optimisable, and a value may live across it
   (`docs/ir.md` §11).
+* **The machine's segmentation state**: `movseg ds, 0`, `movseg ss, 0`,
+  `movseg sp, 0x7C00`, `movseg ds, cs` — the state a module sets up before anything else
+  runs, in the sequence the machine needs for each (a segment register takes no immediate,
+  so it goes through `ax`). It is a statement of its own rather than an assignment,
+  because a name in the position an assignment writes cannot say whether it means the
+  machine's register or a variable of that name — which is what keeps `ds` an ordinary
+  name (`docs/ir.md` §8.1).
 * **A far jump**, `jmp 0x0000:0x7E00`, which is how a boot loader hands control to a
   kernel — and it is a statement because the compiler then knows nothing after it
   runs (`docs/ir.md` §7.1).

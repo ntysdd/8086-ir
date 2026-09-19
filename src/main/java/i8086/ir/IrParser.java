@@ -485,6 +485,9 @@ public final class IrParser {
         if (isWord(first, "var")) {
             return parseVar();
         }
+        if (isWord(first, "movseg")) {
+            return parseMovSeg();
+        }
         if (isWord(first, "ret")) {
             next();
             endOfLine();
@@ -789,6 +792,47 @@ public final class IrParser {
         }
         endOfLine();
         return new Item.Var(keyword.position(), name.name(), type, home, writethrough);
+    }
+
+    /**
+     * {@code movseg ds, 0}: putting a value into the machine's segmentation state, or copying one
+     * segment register into another ({@code docs/ir.md} §8.1).
+     *
+     * <p>The word is what makes the first operand the machine's rather than a variable's, and it
+     * is why nothing has to be reserved: {@code ds = 0} still assigns a variable called
+     * {@code ds}. Which names may be written is the target's answer, because which registers this
+     * machine has and which of them can be set is a fact about the machine.
+     */
+    private Item parseMovSeg() {
+        Token keyword = next();
+        Token name = expect(TokenKind.IDENT, "a segment register or the stack pointer");
+        List<String> settable = target.segmentationState();
+        require(!name.forced() && settable.contains(name.name()), name.position(),
+                "'" + name.text() + "' is not state a module can set; 'movseg' writes "
+                        + settable + " (docs/ir.md §8.1)");
+        expectPunct(",");
+        Item item = movSegFrom(keyword, name);
+        endOfLine();
+        return item;
+    }
+
+    /**
+     * What a {@code movseg} puts into the state: another segment register, or a value.
+     *
+     * <p>A name the target calls a segment register is the machine's here, and a name the author
+     * wants is written {@code $cs} — the rule the assembly text has, and for the same reason
+     * ({@code docs/ir.md} §3.1.1): in this one position a bare name spelled like a register would
+     * otherwise be two things. Everything else is a value like any other, and the verifier is what
+     * says whether it names a variable.
+     */
+    private Item movSegFrom(Token keyword, Token name) {
+        Token source = peek();
+        if (source.is(TokenKind.IDENT) && !source.forced()
+                && target.isSegmentRegister(source.name())) {
+            next();
+            return Item.MovSeg.fromSegment(keyword.position(), name.name(), source.name());
+        }
+        return Item.MovSeg.fromValue(keyword.position(), name.name(), parseValue());
     }
 
     /**

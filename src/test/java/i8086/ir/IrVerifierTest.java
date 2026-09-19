@@ -114,6 +114,10 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesSharedWritethroughHome);
         suite.add("Ir verifier refuses a writethrough home until it is honoured",
                 IrVerifierTest::refusesWritethroughUntilBuilt);
+        suite.add("Ir verifier refuses a label as segmentation state",
+                IrVerifierTest::refusesALabelAsSegmentationState);
+        suite.add("Ir verifier refuses a value too wide for segmentation state",
+                IrVerifierTest::refusesAWideSegmentationValue);
         suite.add("Ir verifier warns about a store into a shared cell",
                 IrVerifierTest::warnsAboutSavesIntoSharedCells);
         suite.add("Ir verifier keeps quiet where a save is promised to stay",
@@ -191,6 +195,28 @@ public final class IrVerifierTest {
         Assert.assertRefused("test.ir:7:5",
                 () -> verify("    var b: u16 in cell writethrough\n"
                         + "    var a: u16 in cell\ncell: pad 2\n"));
+    }
+
+    /**
+     * A label is an address, so it is not something a segment register can be set to: the two are
+     * different kinds of thing, and the refusal says so rather than letting the assembler find out.
+     */
+    private static void refusesALabelAsSegmentationState() {
+        CompileError refused = Assert.assertRefused("test.ir:6:16",
+                () -> verify("    movseg ds, msg\nmsg: db 1\n"));
+        Assert.assertTrue(refused.getMessage().contains("is a label, which is an address"),
+                refused.getMessage());
+    }
+
+    /**
+     * Segmentation state is one word wide, so a value of another width does not fit — the same
+     * question the two sides of an assignment are asked, asked of a place that is the machine's.
+     */
+    private static void refusesAWideSegmentationValue() {
+        CompileError refused = Assert.assertRefused("test.ir:8:16",
+                () -> verify("    var wide: u32\n    var x: u16\n    movseg ds, wide\n"));
+        Assert.assertTrue(refused.getMessage().contains("4-byte value does not fit"),
+                refused.getMessage());
     }
 
     /**
