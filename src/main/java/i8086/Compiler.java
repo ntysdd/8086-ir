@@ -88,10 +88,30 @@ public final class Compiler {
      * stage was asked for. That matters most for the two dumps: they are the only
      * way to see the middle of the pipeline, and a dump of a form that would not
      * have been compiled would be worse than no dump.
+     *
+     * <p>Anything worth saying about the program that is not a reason to refuse it is
+     * lost here. A caller that has somewhere to put it uses
+     * {@link #compile(String, String, Stage, Warnings)}.
      */
     public static String compile(String file, String source, Stage stage) {
+        return compile(file, source, stage, new Warnings());
+    }
+
+    /**
+     * Compiles one module and records what is worth saying about it.
+     *
+     * <p>The warnings are collected while the module is verified, so they are all in
+     * {@code warnings} by the time this returns. An error still throws and leaves them
+     * unread, which is the useful way round: until the program compiles there is nothing
+     * worth telling its author about what it would have done.
+     *
+     * @param warnings where warnings are recorded; never null, and never printed here,
+     *                 because where a diagnostic goes is the caller's business
+     * @throws CompileError if the input is not something this compiler accepts
+     */
+    public static String compile(String file, String source, Stage stage, Warnings warnings) {
         Module module = IrParser.parse(file, source);
-        SsaForm optimized = Pipeline.run(verify(module));
+        SsaForm optimized = Pipeline.run(verify(module, warnings));
         if (stage == Stage.SSA) {
             return SsaPrinter.print(optimized);
         }
@@ -113,6 +133,10 @@ public final class Compiler {
      * because the back end no longer needs it: selection reads the form, and what the
      * allocator has to be told is which names a φ puts in one register
      * ({@link Selection#registerGroups}).
+     *
+     * <p>Nobody is listening to what that check finds, and nothing is lost by it: the
+     * form is the same program put back into one name per variable, so anything worth
+     * saying about it has already been said about the module it came from.
      */
     private static Module lowered(SsaForm optimized, Module module) {
         Module lowered = OutOfSsa.module(optimized);
@@ -124,10 +148,12 @@ public final class Compiler {
      * The SSA form of a module, for a dump or for a pass that will read one.
      *
      * <p>It is the same module the compiler would compile, and it has survived the
-     * same verifications in the same order before this returns anything.
+     * same verifications in the same order before this returns anything. What it does not
+     * give a caller is the warnings, for which there is
+     * {@link #compile(String, String, Stage, Warnings)}.
      */
     public static SsaForm ssa(String file, String source) {
-        return verify(IrParser.parse(file, source));
+        return verify(IrParser.parse(file, source), new Warnings());
     }
 
     /** The SSA form, printed. This is what {@code --emit ssa} writes. */
@@ -144,9 +170,9 @@ public final class Compiler {
      * property of what renaming that produced. The form is handed back rather than
      * dropped, so that a caller wanting one does not build it twice.
      */
-    private static SsaForm verify(Module module) {
+    private static SsaForm verify(Module module, Warnings warnings) {
         Target target = targetOf(module);
-        IrVerifier.verify(module, target);
+        IrVerifier.verify(module, target, warnings);
         return SsaBuilder.build(module);
     }
 

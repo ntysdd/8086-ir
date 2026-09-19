@@ -2,13 +2,16 @@ package i8086.ir;
 
 import i8086.CompileError;
 import i8086.SourcePos;
+import i8086.Warnings;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.target.Target;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -62,9 +65,13 @@ public final class IrVerifier {
     /** The item each label names, so that a home can be asked what bytes it holds. */
     private final Map<String, Item> labelled;
 
-    private IrVerifier(Module module, Target target) {
+    /** Where anything this module is worth saying but is not refused for is recorded. */
+    private final Warnings warnings;
+
+    private IrVerifier(Module module, Target target, Warnings warnings) {
         this.module = module;
         this.target = target;
+        this.warnings = warnings;
         this.names = Names.of(module);
         this.labelled = labelledItems(module);
     }
@@ -86,8 +93,24 @@ public final class IrVerifier {
         return labelled;
     }
 
+    /**
+     * Checks a module with nobody listening, for a caller that is not compiling it for an
+     * author: a test, or the verification of a form that was already reported on.
+     */
     public static void verify(Module module, Target target) {
-        new IrVerifier(module, target).run();
+        verify(module, target, new Warnings());
+    }
+
+    /**
+     * Checks a module, recording whatever is worth saying about it but not worth refusing
+     * it for ({@code docs/ir.md} §3.1.2).
+     *
+     * <p>Errors throw, so a module that is refused leaves the warnings it had found
+     * unread. That is the right way round: until the program compiles there is nothing
+     * useful to say about what it would have done.
+     */
+    public static void verify(Module module, Target target, Warnings warnings) {
+        new IrVerifier(module, target, warnings).run();
     }
 
     private void run() {
@@ -298,7 +321,7 @@ public final class IrVerifier {
      * for the mode that tells a reader what the bytes hold.
      */
     private void checkHomes() {
-        Map<String, Item.Var> cells = new LinkedHashMap<String, Item.Var>();
+        Map<String, List<Item.Var>> cells = new LinkedHashMap<String, List<Item.Var>>();
         for (Item item : module.items()) {
             if (!(item instanceof Item.Var)) {
                 continue;
@@ -309,6 +332,7 @@ public final class IrVerifier {
                 requireExclusiveHome(cells, variable);
             }
         }
+        warnAboutSavesIntoSharedCells(cells);
         requireWritethroughIsBuilt();
     }
 
@@ -375,17 +399,88 @@ public final class IrVerifier {
      * that the two lines can be read together. Refusing the second one either way is what
      * keeps the rule independent of the order the declarations are written in.
      */
-    private void requireExclusiveHome(Map<String, Item.Var> cells, Item.Var variable) {
-        Item.Var first = cells.get(variable.home());
-        if (first == null) {
-            cells.put(variable.home(), variable);
-            return;
+    private void requireExclusiveHome(Map<String, List<Item.Var>> cells, Item.Var variable) {
+        List<Item.Var> declared = cells.get(variable.home());
+        if (declared == null) {
+            declared = new ArrayList<Item.Var>();
+            cells.put(variable.home(), declared);
+        } else {
+            for (Item.Var other : declared) {
+                require(!other.writethrough() && !variable.writethrough(), variable.position(),
+                        "the bytes '" + variable.home() + "' are the home of '" + other.name()
+                                + "' as well, and one of the two is kept current: a 'writethrough' "
+                                + "home belongs to the variable that asked for it, because a reader "
+                                + "of those bytes has to know whose value it is looking at "
+                                + "(docs/ir.md §3.1.2)");
+            }
         }
-        require(!first.writethrough() && !variable.writethrough(), variable.position(),
-                "the bytes '" + variable.home() + "' are the home of '" + first.name() + "' as "
-                        + "well, and one of the two is kept current: a 'writethrough' home "
-                        + "belongs to the variable that asked for it, because a reader of those "
-                        + "bytes has to know whose value it is looking at (docs/ir.md §3.1.2)");
+        declared.add(variable);
+    }
+
+    /**
+     * The warning §3.1.2 asks for: a store into bytes that more than one variable calls its
+     * home is not promised to stay there.
+     *
+     * <p>The store itself happens — nothing removes it, duplicates it or moves anything
+     * across it — so this is not a refusal. What is missing is the promise that the bytes
+     * still hold what the program wrote afterwards, because the allocator may put one of
+     * those variables' values into the same cell. That is the case an author cannot see
+     * coming: the other declaration is somewhere else in the file, and one more
+     * simultaneously live value is the kind of change that puts its value there instead.
+     *
+     * <p>It is said at every store into such a cell, and not once per cell, because the
+     * warning points at the line that has to be read.
+     */
+    private void warnAboutSavesIntoSharedCells(Map<String, List<Item.Var>> cells) {
+        for (Item item : module.items()) {
+            if (!(item instanceof Item.Assign)) {
+                continue;
+            }
+            Place place = ((Item.Assign) item).place();
+            if (!(place instanceof Place.Memory)) {
+                continue;
+            }
+            String cell = cellWritten(((Place.Memory) place).operand());
+            List<Item.Var> declared = cell == null ? null : cells.get(cell);
+            if (declared != null && declared.size() > 1) {
+                warnings.add(item.position(),
+                        "'" + cell + "' is the home of " + spelled(declared) + ", so what this "
+                                + "store leaves there is not promised to stay: the allocator may "
+                                + "put the value of one of them there instead. Save into a cell no "
+                                + "variable declares, or let the variable that wants those bytes "
+                                + "keep them with 'writethrough' (docs/ir.md §3.1.2)");
+            }
+        }
+    }
+
+    /**
+     * The cell a store writes, or null when the store is not written as one.
+     *
+     * <p>Only a store written as {@code [cell]} counts, and the reason is that nothing
+     * here knows what a segment register holds: {@code [cell]} is the image's own bytes by
+     * the reading the whole surface takes of a label in an address, while {@code es:[cell]}
+     * is a place in whichever segment {@code es} points at, which is a different cell as
+     * far as this check can tell. An offset — {@code [cell + 2]} — is inside the cell
+     * rather than the cell, and nothing here reasons about overlap
+     * ({@code docs/ir.md} §3.1.2, §3.4).
+     */
+    private static String cellWritten(MemoryOperand operand) {
+        if (operand.segment() != null || operand.base() == null || operand.displacement() != 0) {
+            return null;
+        }
+        return operand.base();
+    }
+
+    /** The variables that declared a cell, in declaration order, as the warning names them. */
+    private static String spelled(List<Item.Var> variables) {
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < variables.size(); i++) {
+            if (i > 0) {
+                names.append(i == variables.size() - 1 ? " and " : ", ");
+            }
+            names.append('\'').append(variables.get(i).name()).append('\'');
+        }
+        return names.toString();
     }
 
     /**

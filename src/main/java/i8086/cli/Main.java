@@ -2,6 +2,8 @@ package i8086.cli;
 
 import i8086.CompileError;
 import i8086.Compiler;
+import i8086.Warning;
+import i8086.Warnings;
 
 import java.io.File;
 import java.io.IOException;
@@ -100,7 +102,9 @@ public final class Main {
         }
 
         try {
-            String text = Compiler.compile(input, source, stage);
+            Warnings warnings = new Warnings();
+            String text = Compiler.compile(input, source, stage, warnings);
+            report(warnings, err);
             if (output == null) {
                 out.print(text);
                 return EXIT_OK;
@@ -109,6 +113,22 @@ public final class Main {
         } catch (CompileError refused) {
             err.println(refused.format());
             return EXIT_FAILED;
+        }
+    }
+
+    /**
+     * What the compiler had to say about the program without refusing it, on standard
+     * error.
+     *
+     * <p>Standard error and not standard output, because the two streams carry two
+     * different things: {@code optimize ... > x.asm} is how a program is written to a
+     * file, and a warning in the middle of it would be an assembler error. A warning is
+     * also not a failure — the program compiled — so nothing about the exit status
+     * changes.
+     */
+    private static void report(Warnings warnings, PrintStream err) {
+        for (Warning warning : warnings.all()) {
+            err.println(warning.format());
         }
     }
 

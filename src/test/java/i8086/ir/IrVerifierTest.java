@@ -1,6 +1,8 @@
 package i8086.ir;
 
 import i8086.CompileError;
+import i8086.Warning;
+import i8086.Warnings;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
 import i8086.target.Targets;
@@ -112,6 +114,10 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesSharedWritethroughHome);
         suite.add("Ir verifier refuses a writethrough home until it is honoured",
                 IrVerifierTest::refusesWritethroughUntilBuilt);
+        suite.add("Ir verifier warns about a store into a shared cell",
+                IrVerifierTest::warnsAboutSavesIntoSharedCells);
+        suite.add("Ir verifier keeps quiet where a save is promised to stay",
+                IrVerifierTest::isQuietAboutSavesThatArePromised);
     }
 
     // --- homes (§3.1.2) ----------------------------------------------------
@@ -202,6 +208,49 @@ public final class IrVerifierTest {
     }
 
     /**
+     * A store into bytes that more than one variable calls its home is not promised to
+     * stay there, and that is the warning ({@code docs/ir.md} §3.1.2). It is said at every
+     * store, because what the author has to read is the line the store is on, and it names
+     * the variables that declared the cell so that they can be found.
+     */
+    private static void warnsAboutSavesIntoSharedCells() {
+        Warnings said = warnings("    var kept: u16 in cell\n"
+                + "    var other: u16 in cell\n"
+                + "    kept = word [0x40]\n"
+                + "    word [cell] = kept\n"
+                + "    word [cell] = 1\n"
+                + "cell: pad 2\n");
+        Assert.assertEquals(2L, said.all().size());
+        Warning first = said.all().get(0);
+        Assert.assertEquals("test.ir:9:5", first.position().toString());
+        Assert.assertTrue(first.message().contains("'cell' is the home of 'kept' and 'other'"),
+                first.message());
+        Assert.assertEquals("test.ir:10:5", said.all().get(1).position().toString());
+        Assert.assertTrue(first.format().startsWith("test.ir:9:5: warning: "), first.format());
+    }
+
+    /**
+     * The other half of the warning: where the bytes are promised to stay, there is
+     * nothing to say. A cell one variable holds is that variable's by the rule above; a
+     * cell no variable declares belongs to the program; and a store that is not written as
+     * the cell — past its start, or through another segment — is not a store into it.
+     */
+    private static void isQuietAboutSavesThatArePromised() {
+        Assert.assertEquals(0L, warnings("    var kept: u16 in cell\n"
+                + "    word [cell] = kept\n"
+                + "cell: pad 2\n").all().size());
+        Assert.assertEquals(0L, warnings("    var kept: u16 in cell\n"
+                + "    word [free] = kept\n"
+                + "cell: pad 2\nfree: pad 2\n").all().size());
+        Assert.assertEquals(0L, warnings("    var a: u16 in cell\n"
+                + "    var b: u16 in cell\n"
+                + "    word [cell + 2] = a\n"
+                + "    es:[cell] = a\n"
+                + "    word [0x40] = a\n"
+                + "cell: pad 2\n").all().size());
+    }
+
+    /**
      * A label inside a block is local in what can read it and not in what it is
      * called: the emitted text is one flat assembly file, so two of anything cannot
      * share a name ({@code docs/ir.md} §9, {@code docs/asm.md} §3).
@@ -230,6 +279,13 @@ public final class IrVerifierTest {
 
     private static void verify(String body) {
         IrVerifier.verify(parse(body), Targets.byName("8086"));
+    }
+
+    /** Verifies a body and hands back what the verifier had to say about it. */
+    private static Warnings warnings(String body) {
+        Warnings warnings = new Warnings();
+        IrVerifier.verify(parse(body), Targets.byName("8086"), warnings);
+        return warnings;
     }
 
     private static Module parse(String body) {

@@ -102,6 +102,10 @@ public final class CompilerTest {
         suite.add("Command line refuses a stage it does not know",
                 CompilerTest::refusesUnknownStage);
         suite.add("Command line reports an unreadable input", CompilerTest::reportsUnreadableInput);
+        suite.add("Command line warns on standard error, not in the program",
+                CompilerTest::warnsOnStandardError);
+        suite.add("Compiler collects the warnings of a program it compiles",
+                CompilerTest::collectsWarnings);
         suite.add("Command line refuses an unknown command", CompilerTest::refusesUnknownCommand);
         suite.add("Command line says that assembling does not exist yet",
                 CompilerTest::saysAssembleIsMissing);
@@ -904,6 +908,76 @@ public final class CompilerTest {
         Run run = run("optimize", "no/such/file.ir", "-o", "out.asm");
         Assert.assertEquals(1L, run.status);
         Assert.assertTrue(run.err.contains("cannot read no/such/file.ir"), run.err);
+    }
+
+    /**
+     * A warning goes to standard error and never into the program on standard output:
+     * {@code optimize ... > x.asm} is how a file is made, and a warning in the middle of
+     * the assembly would be an assembler error. A warning is also not a failure, so the
+     * status says nothing about it.
+     */
+    private static void warnsOnStandardError() {
+        File input = writeTemporary("warned.ir", SHARED_CELL);
+        Run run = run("optimize", input.getPath());
+        Assert.assertEquals(0L, run.status);
+        Assert.assertTrue(run.err.startsWith(input.getPath() + ":11:5: warning: "), run.err);
+        Assert.assertTrue(run.err.contains("'cell' is the home of 'kept' and 'other'"), run.err);
+        Assert.assertFalse(run.out.contains("warning"),
+                "the program stays a program: " + run.out);
+        Assert.assertTrue(run.out.contains("mov word [$cell], ax"),
+                "and the store into the cell is there: " + run.out);
+    }
+
+    /**
+     * The same thing one level down, where a caller has somewhere to put the warnings: the
+     * collector is filled by the time the call returns, so a caller never has to ask twice
+     * or reach into the compiler for them.
+     */
+    private static void collectsWarnings() {
+        Warnings warnings = new Warnings();
+        String assembly = Compiler.compile("warned.ir", SHARED_CELL, Compiler.Stage.NASM,
+                warnings);
+        Assert.assertEquals(1L, warnings.all().size());
+        Assert.assertEquals("warned.ir:11:5", warnings.all().get(0).position().toString());
+        Assert.assertTrue(assembly.contains("mov word [$cell], ax"), assembly);
+        // And a program with nothing to say leaves the collector empty.
+        Warnings quiet = new Warnings();
+        Compiler.compile("hello.ir", readExample(), Compiler.Stage.NASM, quiet);
+        Assert.assertEquals(0L, quiet.all().size());
+    }
+
+    /**
+     * A program that saves into bytes two variables call their home, with the store reading
+     * a value nobody can fold so that the assembly shows the store rather than a literal.
+     */
+    private static final String SHARED_CELL =
+            "target 8086\n"
+                    + "org 0x100\n"
+                    + "entry $main\n"
+                    + "\n"
+                    + "$cell: pad 2\n"
+                    + "\n"
+                    + "$main:\n"
+                    + "    var $kept: u16 in $cell\n"
+                    + "    var $other: u16 in $cell\n"
+                    + "    $kept = word [0x40]\n"
+                    + "    word [$cell] = $kept\n"
+                    + "    ret\n";
+
+    /**
+     * Writes a program under {@code build/}, which is where a test may put a file: the
+     * command line has to be given a real path, and this keeps the repository's own
+     * directories out of it.
+     */
+    private static File writeTemporary(String name, String source) {
+        File file = new File("build", name);
+        try {
+            Files.write(file.toPath(), source.getBytes(UTF_8));
+            return file;
+        } catch (IOException failure) {
+            Assert.fail("cannot write " + file + ": " + failure.getMessage());
+            return null; // unreachable: fail always throws
+        }
     }
 
     private static void refusesUnknownCommand() {

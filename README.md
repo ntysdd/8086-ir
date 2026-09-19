@@ -356,6 +356,12 @@ containing an inline assembly block, because a block cannot say what it reads ye
 (§9), and no load is reusable, because nothing yet says when two accesses are the
 same memory (§3.4).
 
+One thing the compiler says without refusing anything: a **warning**. It goes to
+standard error and never into the program, so `optimize ... > x.asm` writes nothing but
+assembly, and the exit status does not change. There is one so far — a store into bytes
+that more than one variable calls its home, which is written but not promised to stay
+([`docs/ir.md`](docs/ir.md) §3.1.2).
+
 Planned milestones:
 
 1. IR definition, parser, printer, verifier, and the target description the

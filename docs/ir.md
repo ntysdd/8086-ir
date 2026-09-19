@@ -294,12 +294,13 @@ handler, the next stage, or a program that patches the image. It costs a store p
 definition, which is what asking for it means.
 
 **A program may also write a home itself, and that is a save — and whether it is kept
-depends on the cell.** `tries = left` stores `left`'s value into those bytes wherever
-the value happens to be living, and the store happens: it is a half-volatile write like
-any other, so nothing removes it, duplicates it, or moves anything across it. What the
-store does not buy is the bytes *staying* that way, because a home is a cell the
-allocator may write too, and which of the two has the last word is what the cell was
-declared to be:
+depends on the cell.** The store is written as an address, `[tries] = left`, because a
+label is an address and §10.2 refuses to assign to one. That store writes `left`'s value
+into those bytes wherever the value happens to be living, and it happens: it is a
+half-volatile write like any other, so nothing removes it, duplicates it, or moves
+anything across it. What the store does not buy is the bytes *staying* that way,
+because a home is a cell the allocator may write too, and which of the two has the last
+word is what the cell was declared to be:
 
 * **A cell no variable declares as a home is the program's alone.** The compiler has no
   reason to write it and no permission to, so what the program puts there stays until
@@ -313,13 +314,16 @@ declared to be:
   it, so a later read of those bytes may find the allocator's value rather than the saved
   one. That is not a promise the compiler breaks; it is one it never made.
 
-  **When the cell is declared by more than one variable, the compiler warns at the
+  **When the cell is declared by more than one variable, the compiler warns at each
   write.** That is the case the author cannot see coming: the bytes may end up holding
   the value of a variable whose declaration is somewhere else in the file, and a small
   change somewhere else, one more simultaneously live value, can be the change that puts
-  it there. The warning names the other variables, and the two ways out are to save into
-  a cell no variable declares, or to let the variable that wants those bytes keep them
-  with `writethrough`.
+  it there. The warning names the variables that declared the cell — which is what the
+  author needs, since one of them is somewhere else in the file — and the two ways out
+  are to save into a cell no variable declares, or to let the variable that wants those
+  bytes keep them with `writethrough`. It is said for a store written as `[cell]`: one
+  through a segment override is a place in another segment as far as anything here can
+  tell, and a store to `[cell + 2]` is inside the cell rather than the cell.
 
   When the cell is declared by exactly one variable there is no warning, and there is no
   guarantee either. The only thing that can replace the saved bytes is that variable's own
@@ -347,7 +351,7 @@ warning: a warning is for what the program may rely on and will not get, and a r
 a refusal is for the value the compiler would otherwise lose.
 
 **A write to a home is half of a volatile write.** That covers the stores
-`writethrough` demands and the ones a program writes itself, `tries = left` among them.
+`writethrough` demands and the ones a program writes itself, `[tries] = left` among them.
 Such a write is never removed, never duplicated, and never moved across another access
 to memory, all of which a volatile write is too (§3.4), with one difference: the
 compiler **may** leave it out when it can prove the home already holds that value, and
@@ -455,15 +459,16 @@ roles never stand in the same place, which is the argument the whole surface res
 (§3.1).
 
 **How much of this is built.** The declaration is read and the static rules above are
-checked: a home names bytes that are wide enough, and a cell one variable keeps
-current is that variable's alone. What is not built is *using* a home, and the two
-modes are not in the same position about it. `in place` is accepted while the
-allocator ignores it, because the promise was conditional — the allocator decides —
-and never touching the bytes costs the program nothing it was promised: a value that
-does not fit in a register is refused exactly as it was before homes existed.
-`writethrough` is **refused** until every definition writes the cell, because
-compiling it as if the bytes were never written is a wrong answer the program is not
-told about, and a hard error is what this compiler gives instead.
+checked: a home names bytes that are wide enough, a cell one variable keeps current is
+that variable's alone, and a store into a cell more than one variable declares is warned
+about. What is not built is *using* a home, and the two modes are not in the same
+position about it. `in place` is accepted while the allocator ignores it, because the
+promise was conditional — the allocator decides — and never touching the bytes costs the
+program nothing it was promised: a value that does not fit in a register is refused
+exactly as it was before homes existed. `writethrough` is **refused** until every
+definition writes the cell, because compiling it as if the bytes were never written is a
+wrong answer the program is not told about, and a hard error is what this compiler gives
+instead.
 
 ### 3.2 Widths and signedness — [decided]
 
