@@ -64,6 +64,9 @@ public final class Block {
         if (first instanceof Item.Data) {
             return ((Item.Data) first).label();
         }
+        if (first instanceof Item.Pad) {
+            return ((Item.Pad) first).label();
+        }
         return null;
     }
 

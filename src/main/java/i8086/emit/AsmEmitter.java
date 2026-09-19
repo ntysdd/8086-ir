@@ -47,8 +47,7 @@ public final class AsmEmitter {
     }
 
     private static boolean namesSomething(Item item) {
-        return item instanceof Item.Label
-                || (item instanceof Item.Data && ((Item.Data) item).label() != null);
+        return Item.labelOf(item) != null;
     }
 
     private static void emitPiece(StringBuilder text, Selection.Piece piece) {
@@ -61,9 +60,36 @@ public final class AsmEmitter {
             emitData(text, (Item.Data) item);
             return;
         }
+        if (item instanceof Item.Pad) {
+            emitPad(text, (Item.Pad) item);
+            return;
+        }
         for (Instruction instruction : piece.instructions()) {
             text.append(INDENT).append(InstructionPrinter.print(instruction)).append('\n');
         }
+    }
+
+    /**
+     * {@code pad 32} and {@code pad to 510}, written out as the same words.
+     *
+     * <p>Not expanded into zero bytes: the assembly text has the word too
+     * ({@code docs/asm.md}), so a four-hundred byte run stays one line, and
+     * {@code pad to} is not something this emitter could expand anyway — it is the
+     * assembler that knows how long the code before it is.
+     */
+    private static void emitPad(StringBuilder text, Item.Pad pad) {
+        if (pad.label() != null) {
+            text.append(pad.label()).append(": ");
+        }
+        text.append("pad ");
+        if (pad.to()) {
+            text.append("to ");
+        }
+        text.append(Numbers.spelling(pad.amount()));
+        if (pad.fill() != 0) {
+            text.append(", ").append(Numbers.spelling(pad.fill()));
+        }
+        text.append('\n');
     }
 
     private static void emitData(StringBuilder text, Item.Data data) {

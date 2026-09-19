@@ -43,8 +43,7 @@ public final class IrPrinter {
 
     /** True for an item that leads with a name, which is what gets a blank line before it. */
     private static boolean namesSomething(Item item) {
-        return item instanceof Item.Label
-                || (item instanceof Item.Data && ((Item.Data) item).label() != null);
+        return Item.labelOf(item) != null;
     }
 
     /**
@@ -86,6 +85,8 @@ public final class IrPrinter {
             text.append(INDENT).append("ret\n");
         } else if (item instanceof Item.Data) {
             printData(text, (Item.Data) item, target);
+        } else if (item instanceof Item.Pad) {
+            printPad(text, (Item.Pad) item, target);
         } else if (item instanceof Item.Var) {
             printVar(text, (Item.Var) item, target);
         } else if (item instanceof Item.Assign) {
@@ -254,6 +255,26 @@ public final class IrPrinter {
             } else {
                 text.append(Numbers.spelling(atom.number()));
             }
+        }
+        text.append('\n');
+    }
+
+    /**
+     * {@code pad 32}, {@code pad 400, 0x90}, {@code pad to 510}, and a label in
+     * front of any of them. The spelling is the same one the assembly text uses
+     * ({@code docs/asm.md}), so there is one word for the idea in both surfaces.
+     */
+    private static void printPad(StringBuilder text, Item.Pad pad, Target target) {
+        if (pad.label() != null) {
+            text.append(name(pad.label(), target)).append(": ");
+        }
+        text.append("pad ");
+        if (pad.to()) {
+            text.append("to ");
+        }
+        text.append(Numbers.spelling(pad.amount()));
+        if (pad.fill() != 0) {
+            text.append(", ").append(Numbers.spelling(pad.fill()));
         }
         text.append('\n');
     }

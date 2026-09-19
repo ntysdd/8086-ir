@@ -116,6 +116,10 @@ public final class IrVerifier {
             checkInlineAsm(block);
             return block.clobbers().contains(Names.FLAGS) ? false : flagsDefined;
         }
+        if (item instanceof Item.Pad) {
+            checkPad(item);
+            return flagsDefined;
+        }
         if (item instanceof Item.Jump) {
             checkLabelTarget(((Item.Jump) item).target(), item.position());
             return flagsDefined;
@@ -177,10 +181,21 @@ public final class IrVerifier {
         return expressionReadsFlagsOf(((Expression.Leaf) expression).value());
     }
 
+    private Item checkPad(Item item) {
+        Item.Pad pad = (Item.Pad) item;
+        require(pad.amount() >= 0, pad.position(),
+                "a piece of padding cannot be a negative number of bytes");
+        require(pad.amount() <= 0xFFFF, pad.position(),
+                "the image is one segment, so nothing in it reaches past 0xFFFF");
+        require(pad.fill() >= 0 && pad.fill() <= 0xFF, pad.position(),
+                "the fill of a piece of padding is one byte: '" + pad.fill() + "' does not fit"
+                        + " (docs/ir.md §10.2)");
+        return item;
+    }
+
     /** Whether an item leads with a name, and so can be branched to. */
     private static boolean namesSomething(Item item) {
-        return item instanceof Item.Label
-                || (item instanceof Item.Data && ((Item.Data) item).label() != null);
+        return Item.labelOf(item) != null;
     }
 
     private void checkCompare(Item.Compare compare) {

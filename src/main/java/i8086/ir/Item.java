@@ -51,6 +51,95 @@ public abstract class Item {
      * is no separate "uninitialised" form: space is a repeat of a value, and
      * the value is zero unless written ({@code docs/ir.md} §10).
      */
+    /**
+     * The name this item is reached by, or null when nothing can reach it.
+     *
+     * <p>Three kinds of item put bytes in the image and can be named, and every place
+     * that asks "does this item start a block" or "does it get a blank line before
+     * it" asks this rather than listing them ({@code docs/ir.md} §10.2).
+     */
+    public static String labelOf(Item item) {
+        if (item instanceof Label) {
+            return ((Label) item).name();
+        }
+        if (item instanceof Data) {
+            return ((Data) item).label();
+        }
+        if (item instanceof Pad) {
+            return ((Pad) item).label();
+        }
+        return null;
+    }
+
+    /**
+     * Bytes that exist in the image and mean nothing: {@code pad 32}, and
+     * {@code pad to 510} to reach a fixed layout ({@code docs/ir.md} §10.2).
+     *
+     * <p>Two forms, one idea: {@link #count()} says how many bytes when the text says
+     * so, and {@link #to()} says the image is that many bytes long when only the
+     * layout can say so. The second is why this cannot be a byte list: nothing in the
+     * front end knows how long the code before it is, and the pass that renames a
+     * value or selects a smaller instruction can change that length.
+     *
+     * <p>The count is relative to the start of the image, not to an address: an image
+     * says how it is laid out, and {@code org} says where it lands, so a boot sector
+     * written with {@code pad to 510} is still a boot sector at a different load
+     * address.
+     */
+    public static final class Pad extends Item {
+
+        private final String label;
+        private final boolean to;
+        private final long amount;
+        private final long fill;
+
+        /** {@code pad count [, fill]}: this many bytes, here. */
+        public static Pad ofCount(SourcePos position, String label, long count, long fill) {
+            return new Pad(position, label, false, count, fill);
+        }
+
+        /** {@code pad to offset [, fill]}: bytes until the image is that long. */
+        public static Pad ofOffset(SourcePos position, String label, long offset, long fill) {
+            return new Pad(position, label, true, offset, fill);
+        }
+
+        private Pad(SourcePos position, String label, boolean to, long amount, long fill) {
+            super(position);
+            this.label = label;
+            this.to = to;
+            this.amount = amount;
+            this.fill = fill;
+        }
+
+        /** The label this padding is named by, or null when it has none. */
+        public String label() {
+            return label;
+        }
+
+        /** Whether this is {@code pad to}, which only the assembler can resolve. */
+        public boolean to() {
+            return to;
+        }
+
+        /** How many bytes, or how long the image is, as {@link #to()} says. */
+        public long amount() {
+            return amount;
+        }
+
+        /** What the bytes are filled with. */
+        public long fill() {
+            return fill;
+        }
+
+        /**
+         * Whether the assembler can work this out at all, or whether it is a length
+         * only the layout decides. The IR checks what it can and leaves the rest.
+         */
+        public boolean isResolvable() {
+            return !to;
+        }
+    }
+
     public static final class Data extends Item {
 
         /** One element: a number, or a string of bytes for {@code db}. */

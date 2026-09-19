@@ -52,11 +52,10 @@ public final class Names {
         for (Item item : module.items()) {
             if (item instanceof Item.Label) {
                 declareLabel(labels, variables, ((Item.Label) item).name(), item.position());
-            } else if (item instanceof Item.Data) {
-                String label = ((Item.Data) item).label();
-                if (label != null) {
-                    declareLabel(labels, variables, label, item.position());
-                }
+            } else if (Item.labelOf(item) != null) {
+                // A data definition and a piece of padding are both a named place:
+                // the name is an address either way (docs/ir.md §3.1, §10.2).
+                declareLabel(labels, variables, Item.labelOf(item), item.position());
             } else if (item instanceof Item.Var) {
                 declareVariable(labels, variables, (Item.Var) item);
             }

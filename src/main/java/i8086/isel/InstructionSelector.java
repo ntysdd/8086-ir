@@ -91,7 +91,8 @@ public final class InstructionSelector {
     // --- items -------------------------------------------------------------
 
     private void select(Item item) {
-        if (item instanceof Item.Var || item instanceof Item.Label || item instanceof Item.Data) {
+        if (item instanceof Item.Var || item instanceof Item.Label || item instanceof Item.Data
+                || item instanceof Item.Pad) {
             return; // a declaration is not code, and a label is the emitter's to write
         }
         if (item instanceof Item.Return) {

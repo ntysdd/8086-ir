@@ -185,9 +185,15 @@ dd   0x00012345             double words
 db   "Hello, world!$"       a string, one byte per character
 ```
 
-`[open]` the repeat form for zero-filled space — `db 32 dup(0)` or
-`times 32 db 0` — which `docs/ir.md` §10 requires and leaves open, and whether
-`align` is needed.
+`[decided]` the repeat form for space in the image is `pad`, spelled the same as
+the IR's (`docs/ir.md` §10.2, §10.3): `pad 32`, `pad 400, 0x90`, and `pad to 510`
+to reach a fixed length. This is the layer that finally knows how many bytes each
+instruction took, so `pad to` is resolved here and nowhere else — which is also
+why `pad to 510` and not something a person works out. Handed to another
+assembler, the two forms are `times 32 db 0` and `times 510-($-$$) db 0`.
+
+`[open]` `align`, which reaches a multiple rather than a length, and is a different
+construct from either form above.
 
 ## 7. Not in this syntax — [decided]
 
@@ -199,4 +205,4 @@ floating point; any control-flow sugar. Everything here is out of scope for v1
 
 1. Whether a string may contain an escaped quote (§3).
 2. Whether a displacement may be an arithmetic expression (§4).
-3. The repeat form for zero-filled space, and `align` (§6).
+3. Whether a displacement may be an arithmetic expression (§4).

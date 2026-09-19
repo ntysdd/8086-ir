@@ -910,17 +910,17 @@ main:
 
 msg: db "Hello, world!$"
 tbl: dw 0x1234, 0x5678
-buf: <32 zero bytes — repeat spelling open, see below>
+buf: pad 32
 ```
 
 **[decided]** There is no separate "uninitialised" storage class, and there is
 nothing beyond the image. Reserved space is **zero bytes emitted into the
-image**, so it is a repeat form with a default fill of zero rather than a
-storage-class directive:
+image**, and it is written with `pad`, which is bytes that exist in the image and
+mean nothing:
 
 ```
-buf: db 32 dup(0)        ; or whichever repeat spelling is chosen
-pad: db 6 dup(0xFF)
+buf:  pad 32             ; 32 zero bytes, named
+sled: pad 400, 0x90      ; 400 bytes of 0x90: a NOP sled
 ```
 
 The reasoning, in the order that matters:
@@ -935,15 +935,51 @@ The reasoning, in the order that matters:
   boot sector over 512 bytes, a `.COM` over 64K−0x100 — that is a **hard
 error**, not a truncation.
 
-Because the concept has become "repeat a value N times", naming it
-`resb`/`resw`/`resd` would be actively misleading: in NASM those do *not* grow
-the file, which is the opposite of what happens here.
+Because the concept is "bytes in the image", naming it `resb`/`resw`/`resd` would
+be actively misleading: in NASM those do *not* grow the file, which is the
+opposite of what happens here.
 
-**[open]** the repeat spelling (`db 32 dup(0)`, MASM-style, or `times 32 db 0`,
-NASM-style), and whether anything beyond the image — absolute placement, a `.COM`
-"BSS" past the end of the file — is ever offered. It is not in v1 and it is not
-promised. Nor is any repeat form implemented: `db`/`dw`/`dd` take a list of atoms
-and nothing else, and a file that needs a zero-filled buffer has to write one out.
+A label may name a piece of padding, and then it is an address like any other:
+`buf: pad 32` makes `buf` the address of the padding, usable as `p = buf` or
+`[buf + 2]`.
+
+### 10.3 `pad to` — laying out an image that has a fixed shape — [decided]
+
+The second form says how long the image is, rather than how many bytes to add:
+
+```
+org  0x7c00
+
+start:
+    ...
+
+pad  to 510
+ dw   0xAA55            ; the last two bytes of a 512-byte sector
+```
+
+* **The number is relative to the start of the image, not an address.** An image
+  says how it is laid out, and `org` says where it lands; those are two different
+  facts, and mixing them makes the layout depend on the load address. The three
+  lines above are a boot sector at `0x7C00`, a ROM at `0xF000`, and a test image
+  at `0x100`.
+* **Only the assembler can resolve it.** The front end writes text, not bytes, and
+  how long the code before it is depends on encodings it never chose — the size of
+  a displacement, whether a branch had to grow. A pass that selects a shorter
+  instruction changes the answer too, which is why this cannot be a byte list or a
+  number a person works out.
+* **It is where a limit is enforced.** A boot sector that has grown past 510 bytes
+  cannot be padded back, so `pad to 510` is a hard error at that point, with both
+  numbers in the message. Nothing else needs to know that a boot sector is 512
+  bytes.
+
+**[open]** how to say "the image is a multiple of N bytes" — a payload that has to
+be whole sectors — and the alignment spelling that goes with it. `pad to` reaches a
+length, not a multiple, so it is a different construct and it is not in v1.
+
+**[open]** whether anything beyond the image — absolute placement, a `.COM` "BSS"
+past the end of the file — is ever offered. It is not in v1 and it is not promised.
+`pad to` is image-relative on purpose: an absolute form would make a binary's
+layout depend on where it is loaded.
 
 **[open]** sections, modules, `extern`/`global` and a link step — deliberately
 out of v1.
@@ -973,8 +1009,10 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 3. The no-spill marker's spelling (§8.2).
 4. Inline assembly operand binding for variables, and inputs/outputs (§9).
 5. Whether string operations and `jcxz` get a surface (§11).
-6. The repeat spelling for zero-filled space, and whether anything beyond the
-   image is ever offered (§10); plus which other details of §10 survive review.
+6. Whether anything beyond the image is ever offered (§10), and the alignment form
+   that reaches a multiple rather than a length (`align`), which `pad to` is not;
+   plus whether a data item may hold a label's address, so that a pointer table or
+   a vector table can be written.
 7. What a conversion does to the flags (§3.5), which the target's flag effects
    will answer.
 8. Whether `expr` may take a label, which is a constant and not a load, but is

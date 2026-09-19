@@ -81,8 +81,7 @@ public final class Cfg {
 
     /** Whether a block can be entered at this item, because it is named. */
     private static boolean namesSomething(Item item) {
-        return item instanceof Item.Label
-                || (item instanceof Item.Data && ((Item.Data) item).label() != null);
+        return Item.labelOf(item) != null;
     }
 
     /** Whether the block this item ends cannot go on to the next item. */

@@ -93,7 +93,7 @@ public final class DeadValueElimination implements Pass {
     private static boolean needed(SsaStatement statement, Uses uses) {
         Item item = statement.item();
         if (item instanceof Item.Label || item instanceof Item.Var
-                || item instanceof Item.Data) {
+                || item instanceof Item.Data || item instanceof Item.Pad) {
             return true;
         }
         if (Effects.hasEffect(item)) {

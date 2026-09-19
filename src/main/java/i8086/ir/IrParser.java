@@ -243,15 +243,19 @@ public final class IrParser {
     private List<Item> parseItem() {
         Token first = peek();
 
-        // A dot word is a name wherever a name is being read: '.if = 1' is an
-        // assignment to a variable called '.if', and '.if:' labels one. Only where
-        // neither is written is the word being read as the sugar (docs/ir.md §7.2).
+        // 'pad' begins a piece of padding, and is a name everywhere else: 'pad = 1' is
+        // an assignment and 'pad:' labels something (docs/ir.md §3.1, §10.2).
         boolean named = tokenAt(1).is("=") || tokenAt(1).is(":");
         if (first.isName(".if") && !first.forced() && !named) {
             return parseIf(next());
         }
         if (first.isName(".while") && !first.forced() && !named) {
             return parseWhile(next());
+        }
+        if (isWord(first, "pad") && !named) {
+            List<Item> padding = new ArrayList<Item>();
+            padding.add(parsePad(next(), null));
+            return padding;
         }
         if (first.is(TokenKind.IDENT) && !first.forced() && !named
                 && first.name().startsWith(".")) {
@@ -262,6 +266,31 @@ public final class IrParser {
         List<Item> one = new ArrayList<Item>();
         one.add(parseStatement());
         return one;
+    }
+
+    /**
+     * {@code pad count [, fill]} and {@code pad to offset [, fill]}, which is bytes
+     * that exist in the image and mean nothing ({@code docs/ir.md} §10.2).
+     *
+     * <p>{@code to} is a word only here and only in this position, which is how the
+     * surface stays free of reserved words: a variable called {@code to} is written
+     * {@code to = 1} and read as a value anywhere a value is read (§3.1).
+     */
+    private Item parsePad(Token keyword, String label) {
+        boolean to = isWord(peek(), "to");
+        if (to) {
+            next();
+        }
+        Token amount = expect(TokenKind.NUMBER, "a number of bytes");
+        long fill = 0;
+        if (peek().is(",")) {
+            next();
+            fill = expect(TokenKind.NUMBER, "the byte to fill with").value();
+        }
+        endOfLine();
+        return to
+                ? Item.Pad.ofOffset(keyword.position(), label, amount.value(), fill)
+                : Item.Pad.ofCount(keyword.position(), label, amount.value(), fill);
     }
 
     /**
@@ -1094,6 +1123,9 @@ public final class IrParser {
         if (peek().is(TokenKind.IDENT) && !peek().forced()
                 && Size.fromDirective(peek().name()) != null) {
             return parseData(next(), label.name());
+        }
+        if (isWord(peek(), "pad")) {
+            return parsePad(next(), label.name());
         }
         throw new CompileError(peek().position(),
                 "a label stands on its own line, except before a data definition; found "

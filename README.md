@@ -287,6 +287,11 @@ Working today:
   output verified in turn, and leaving SSA is a transformation whose output the
   surface's own verifier checks before anything selects from it.
   `optimize --emit ir` prints what the passes left.
+* **Data, and padding that reaches a layout**: `db`/`dw`/`dd` inline where they sit,
+  and `pad N [, fill]` / `pad to N [, fill]` for bytes that exist in the image and
+  mean nothing — a reserved buffer, a NOP sled, and the 510 bytes before a boot
+  sector's `dw 0xAA55` (`docs/ir.md` §10.2, §10.3). `pad to` is resolved by the
+  assembler, which is the only thing that knows how long the code before it is.
 * **Instruction selection and register allocation**, enough to compile arithmetic
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, 16-bit loads and stores, and `*`, `/` and `%` signed and
