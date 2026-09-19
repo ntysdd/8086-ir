@@ -63,7 +63,7 @@ public final class IrParserTest {
         suite.add("Ir parser refuses a declaration without a colon", IrParserTest::refusesBareVar);
         suite.add("Ir parser refuses two names in an address", IrParserTest::refusesTwoNamesInAddress);
         suite.add("Ir parser refuses a value that is not a value", IrParserTest::refusesBadValue);
-        suite.add("Ir parser refuses a word of the syntax as a name",
+        suite.add("Ir parser takes a word of the syntax as a name",
                 IrParserTest::refusesKeywordAsName);
         suite.add("Ir parser refuses an unterminated statement", IrParserTest::refusesTrailingToken);
         suite.add("Ir parser names the constructs it does not implement yet",
@@ -92,7 +92,8 @@ public final class IrParserTest {
         suite.add("Ir parser refuses an unknown condition", IrParserTest::refusesUnknownCondition);
         suite.add("Ir parser refuses a branch without a target",
                 IrParserTest::refusesBranchWithoutTarget);
-        suite.add("Ir parser refuses a condition as a name", IrParserTest::refusesConditionAsName);
+        suite.add("Ir parser takes a condition word as a name",
+                IrParserTest::refusesConditionAsName);
     }
 
     private static Module parse(String source) {
@@ -352,8 +353,10 @@ public final class IrParserTest {
     }
 
     private static void refusesKeywordAsName() {
-        Assert.assertRefused("test.ir:4:9",
-                () -> parse("target 8086\norg 0\nentry a\n    var byte: u16\n"));
+        // A size word is a word, not a reservation: 'byte' says how wide a bracket is
+        // and is a name everywhere else (docs/ir.md §3.1).
+        Assert.assertEquals("target 8086\norg 0\nentry a\n    var $byte: u16\n",
+                        IrPrinter.print(parse("target 8086\norg 0\nentry a\n    var byte: u16\n")));
     }
 
     private static void refusesUnknownCondition() {
@@ -367,8 +370,12 @@ public final class IrParserTest {
     }
 
     private static void refusesConditionAsName() {
-        Assert.assertRefused("test.ir:4:9",
-                () -> parse("target 8086\norg 0\nentry a\n    var jc: u16\n"));
+        // A condition is a word, not a reservation: 'jc' is a branch word at the start
+        // of a statement and a name everywhere else (docs/ir.md §3.1), so a variable
+        // called 'jc' is accepted and printed back marked.
+        Assert.assertEquals("target 8086\norg 0\nentry a\n    var $jc: u16\n    $jc = 1\n",
+                IrPrinter.print(parse("target 8086\norg 0\nentry a\n    var jc: u16\n"
+                        + "    jc = 1\n")));
     }
 
     private static void refusesTrailingToken() {

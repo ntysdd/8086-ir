@@ -273,7 +273,9 @@ Working today:
   verification, so `parse(print(ir)) == ir` and every refusal carries a position —
   together with the sugar, normalised away as it is read: the control flow of §7.2,
   the instruction-shaped statements of §7.3 (`add s, 1` is `s = eval(s + 1)` written
-  the machine's way), and the unary minus of §5.5.
+  the machine's way), and the unary minus of §5.5. **Nothing is reserved**: any word
+  can be a variable, and the printer writes `$` in front of a name that looks like a
+  word of the surface, so the canonical form is never ambiguous (§3.1, §3.1.1).
 * **SSA construction and verification**, described in
   [`docs/ssa.md`](docs/ssa.md): the control flow graph, dominators and the dominance
   frontier, liveness, φ placement, and the renaming walk. Every variable is renamed

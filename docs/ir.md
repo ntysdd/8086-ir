@@ -104,10 +104,32 @@ than matters of opinion:
 memory access. Whether the allocator keeps it in a register or spills it to the
 frame is invisible at this level.
 
-A name may not be a word the surface already uses for something else — a type
-prefix such as `byte`, a data directive such as `db`, a statement word such as
-`jmp`, or a condition such as `jc`. Such a declaration is refused, because the
-meaning of the word would then depend on where you looked.
+**Nothing is reserved.** A word means what its position says it means, and every
+word the surface knows can also be an author's name:
+
+```
+var adc: i16        ; an operator's spelling, and a variable
+var pad: i16        ; and a word of a statement form
+var ax: i16         ; and a register's name: this surface has no registers
+adc = 1
+add pad, 1          ; the statement 'add', not a variable called add
+word [ax] = 1       ; the size word, and the variable inside the brackets
+```
+
+What makes that possible is a property of the surface rather than a promise about
+the parser: **values never stand next to each other**. There is no reading of
+`eval(a adc b)` in which `adc` is a name and no reading of `eval(adc + 1)` in which
+it is an operator, so a word's role is decided by what stands beside it, and one
+token of lookahead settles the few places where a word could begin two things:
+`eval` and `expr` are the operation only in front of `(`; a size word is a size
+only when a value follows it; a dot word is the sugar only where the line is
+neither an assignment nor a label.
+
+The price is paid on the way out rather than on the way in. The printer writes the
+canonical form, and the canonical form of a name that looks like a word carries a
+`$` — so a reader of canonical text never has to ask whether the `eval` in front of
+them is a variable or the surface's word (§3.1.1). Input is liberal, output is
+canonical, which is the same split as the thirty spellings of a condition (§4.4).
 
 ### 3.1.1 `$name` is the author's, `..@name` is the compiler's — [decided]
 
@@ -124,41 +146,36 @@ local label mechanism.
 
 * **`$name`** is the author's name whatever it looks like. `var $shl: i16` and
   `$shl = 1` declare and use a variable called `shl`. The `$` is a **marker and
-  not part of the name**: `$ax` and `ax` name the same thing, which is the whole
-  point — it is a way to say "mine" where the surface would otherwise have to
-  guess.
+  not part of the name**: `$ax` and `ax` name the same thing. It is not needed to
+  *write* a name like that — nothing is reserved — but it is what the printer
+  writes, so it is also what a program can always write to be understood at a
+glance.
 * **`..@name`** is the compiler's. Names it makes up begin there, and declaring
   a *variable* with one is refused. Writing a label with one is not, because the
   printer writes labels and its output has to be readable again.
 
-The two lists this leaves behind are worth stating plainly, because they are not
-the same list:
+The two prefixes are worth stating plainly, and the list that goes with them:
 
-* **What cannot be a plain name** is the narrow list: a word whose meaning the
-  surface could not tell from a name where it stands. Operators spelled as words
-  (`shl`, `adc`), and with them the operators written as symbols, since a symbol
-  is not a spelling a name can have; the size words, `byte`, `word`, `dword`, and
-  the directives `db`, `dw`, `dd`; the conversions `movzx` and `movsx`; the
-  conditions, every spelling of them; the structural words — `var`, `ret`, `asm`,
-  `jmp`, `cmp`, `test`, `target`, `org`, `entry`; and the sugar's own `.if`,
-  `.elseif`, `.else`, `.endif`, `.while`, `.endw`.
-* **What the printer marks with `$`** is the wide list: everything above, plus
-  every word that is meaningful only somewhere a name is not written — a type
-  name after `:`, a mnemonic that begins a statement, a register name inside an
-  inline block, and `eval`, `expr`, `volatile`, `clobbers`, `pad`, `to`. Input is
-  liberal and output is canonical, the same split as the thirty spellings of a
-  condition in §4.4: `var eval: i16` is accepted, and what comes back says
-  `$eval`.
+* **What the printer marks** is every word the surface knows that could be a
+  spelling a name has: the operators, both the ones spelled as words and the ones
+  spelled as symbols; the size words and directives; the conversions; the
+  conditions, every spelling of them; the type names; the words that shape a
+  statement — `var`, `ret`, `asm`, `jmp`, `cmp`, `test`, `target`, `org`, `entry`;
+  the words of the forms — `eval`, `expr`, `volatile`, `clobbers`, `pad`, `to`; the
+  sugar's `.if`, `.elseif`, `.else`, `.endif`, `.while`, `.endw`; and the target's
+  register names. A symbol like `-` is left out, because a name cannot be one, so
+  there is nothing to mark.
+* **What cannot be a name** is only what is not a word at all: a name the compiler
+  generated, and a spelling no name can have.
 
-So a program never fails to compile because of a name it chose: the escape is
-always there, and it is one character. And a reader never has to work out whether
-the `eval` in front of them is a variable — if it is, it is written with the
-marker.
+So a program never fails to compile because of a name it chose, and a reader of
+canonical text never has to work out which of two things a word is.
 
-**[open]** whether the narrow list should grow to all of the wide one, so that
-the rule is simply "every word the surface knows is the surface's". It would
-refuse programs that compile today, which is why it is not done, and the escape
-above is what makes it possible at all.
+**[open]** whether the marking list should be narrower, now that the surface has
+been shown to need no reservations at all: a name like `ax` or `eval` is marked for
+a reader who may have arrived from an assembler, and there is no rule that says it
+must be. The audit that establishes the first half is a test — every word the
+surface knows, used as a name in every position a name can stand in.
 
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 
@@ -768,13 +785,11 @@ lives as well (`Target.statementOperator`, `Target.statementProblem`): whether a
 word names the operation it looks like is a fact about the machine, and on another
 machine the answer would be different.
 
-**A register name is not an operand here.** `mov ax, 1` would otherwise name a
-*variable* called `ax` — legal, since a variable is a virtual register whose name
-its author chose (§3.1) — and quietly mean something other than what the writer
-wrote. A register is reached through inline assembly (§9), or through the pinning
-of §12 item 12 once it exists; a variable that really is called `ax` is written
-`$ax` (§3.1.1). The refusal is inside the new construct, so a program that
-already has a variable named `ax` is unaffected.
+**A register name is just a name.** `mov ax, 1` writes a variable called `ax`, because
+this surface has no registers: they are written in an inline block (§9), and the
+pinning of §12 item 12 does not exist. The printer says which was meant — that line
+comes back as `$ax = 1` — so a program brought over from an assembler is not
+mistaken about it, and nothing here is refused for its name (§3.1).
 
 **[open]** one shape is not recognised yet, and it costs bytes: `d = eval(0 - d)`
 is the same operation as `d = eval(-d)` and is still emitted as building a zero and

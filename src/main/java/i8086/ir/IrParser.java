@@ -177,7 +177,7 @@ public final class IrParser {
      */
     private List<Item> parseItems() {
         List<Item> items = new ArrayList<Item>();
-        while (!peek().isEof() && !closesABlock(peek())) {
+        while (!peek().isEof() && !closesABlockHere()) {
             items.addAll(parseItem());
             skipNewlines();
         }
@@ -205,26 +205,56 @@ public final class IrParser {
      * spelling, because {@code $} is exactly the way to have a variable called
      * {@code eval} or {@code var} ({@code docs/ir.md} §3.1).
      */
+    /**
+     * Whether the token here begins a value: a name, a literal or a bracket.
+     *
+     * <p>This is what a one-token lookahead needs to tell a word that is being used
+     * as one of its own meanings from the same word used as a name. {@code byte x}
+     * is a narrowing and {@code byte} is a variable; nothing else distinguishes them,
+     * because nothing else needs to ({@code docs/ir.md} §3.1).
+     */
+    private static boolean beginsAValue(Token token) {
+        return token.is(TokenKind.NUMBER) || token.is(TokenKind.IDENT) || token.is("[");
+    }
+
     private static boolean isWord(Token token, String word) {
         return !token.forced() && token.isName(word);
     }
 
-    private static boolean closesABlock(Token token) {
-        return token.is(TokenKind.IDENT) && !token.forced() && (token.name().equals(".elseif")
-                || token.name().equals(".else") || token.name().equals(".endif")
-                || token.name().equals(".endw"));
+    /**
+     * Whether the word here closes a sugar block, which is the one thing the sugar
+     * asks of the language's words.
+     *
+     * <p>A closing word is a name wherever a name is being read: {@code .endif = 1}
+     * is an assignment to a variable called {@code .endif} and {@code .endif:} labels
+     * one. So the token after it is what decides, exactly as it does everywhere else,
+     * and nothing is reserved ({@code docs/ir.md} §3.1, §7.2).
+     */
+    private boolean closesABlockHere() {
+        Token token = peek();
+        if (token.forced() || !token.is(TokenKind.IDENT) || tokenAt(1).is("=")
+                || tokenAt(1).is(":")) {
+            return false;
+        }
+        return token.name().equals(".elseif") || token.name().equals(".else")
+                || token.name().equals(".endif") || token.name().equals(".endw");
     }
 
     private List<Item> parseItem() {
         Token first = peek();
 
-        if (first.isName(".if") && !first.forced()) {
+        // A dot word is a name wherever a name is being read: '.if = 1' is an
+        // assignment to a variable called '.if', and '.if:' labels one. Only where
+        // neither is written is the word being read as the sugar (docs/ir.md §7.2).
+        boolean named = tokenAt(1).is("=") || tokenAt(1).is(":");
+        if (first.isName(".if") && !first.forced() && !named) {
             return parseIf(next());
         }
-        if (first.isName(".while") && !first.forced()) {
+        if (first.isName(".while") && !first.forced() && !named) {
             return parseWhile(next());
         }
-        if (first.is(TokenKind.IDENT) && !first.forced() && first.name().startsWith(".")) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && !named
+                && first.name().startsWith(".")) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' is not a directive of this surface");
         }
@@ -578,15 +608,6 @@ public final class IrParser {
      * ({@code docs/ir.md} §7.3).
      */
     private Value parseInstructionOperand(String what) {
-        Token at = peek();
-        if (at.is(TokenKind.IDENT) && !at.forced() && target.isRegister(at.name())) {
-            throw new CompileError(at.position(),
-                    "'" + at.text() + "' is a register, and a register is not an operand here: "
-                            + "this spelling is for operations on variables and memory, and a "
-                            + "value that has to be in a register of its own is written in an "
-                            + "inline block; if a variable called '" + at.text() + "' was meant, "
-                            + "write '$' in front of it (docs/ir.md §7.3, §9, §3.1)");
-        }
         return parseOperationOperand(what);
     }
 
@@ -641,9 +662,6 @@ public final class IrParser {
     private Item parseVar() {
         Token keyword = expectName("var");
         Token name = expect(TokenKind.IDENT, "a variable name");
-        require(!Vocabulary.generated(name.name()), name.position(),
-                "a name beginning with '..@' is one the compiler generated, so it cannot be "
-                        + "declared; the compiler's labels are its own (docs/ir.md §7.2)");
         requireNameable(name);
         expectPunct(":");
         Token typeWord = expect(TokenKind.IDENT, "a type after ':'");
@@ -662,15 +680,18 @@ public final class IrParser {
      * declaration using one would produce a program whose meaning depends on
      * where you look. Better to say so at the declaration.
      */
+    /**
+     * Refuses a name that is only spelled like a name, which is now exactly one
+     * thing: a name the compiler generated (§7.2).
+     *
+     * <p>Every other word can be an author's name, because where a word stands
+     * decides what it is — and a name the compiler made up is not a word at all, it
+     * is the compiler's own bookkeeping showing through.
+     */
     private void requireNameable(Token name) {
-        // A '$' in front is the author saying the name is theirs, which is the whole
-        // point of having it (docs/ir.md §3.1).
-        if (name.forced()) {
-            return;
-        }
-        require(!Vocabulary.reserved(name.name(), target), name.position(),
-                "'" + name.text() + "' is a word of the surface, so it cannot name anything; "
-                        + "write '$' in front of it to say the name is yours (docs/ir.md §3.1)");
+        require(!Vocabulary.generated(name.name()), name.position(),
+                "a name beginning with '..@' is one the compiler generated, so it cannot be "
+                        + "declared; the compiler's labels are its own (docs/ir.md §7.2)");
     }
 
     private Item parseAssignment() {
@@ -697,21 +718,23 @@ public final class IrParser {
             next();
             return new Value.Expr(first.position(), parseParenthesisedExpression());
         }
-        if (first.is(TokenKind.IDENT) && !first.forced()
+        if (first.is(TokenKind.IDENT) && !first.forced() && beginsAValue(tokenAt(1))
                 && Conversion.named(first.name()) != null) {
             Conversion conversion = Conversion.named(first.name());
             next();
             return new Value.Convert(first.position(), conversion,
                     parseConversionOperand(conversion));
         }
-        if (first.is(TokenKind.IDENT) && !first.forced() && Size.named(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && startsMemoryOperandAt(1)
+                && Size.named(first.name()) != null) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' says how wide a memory access is, so it needs a "
                             + "bracket after it; to narrow a value, 'byte' and 'word' take the low "
                             + "byte or the low word, and there is nothing wider than a 'dword' "
                             + "to narrow (docs/ir.md §3.5)");
         }
-        if (first.is(TokenKind.IDENT) && !first.forced() && isOperatorWord(first.name())) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && isOperatorWord(first.name())
+                && beginsAValue(tokenAt(1))) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' is an operator, so it needs an expression: "
                             + "write eval(...) or expr(...) around it (docs/ir.md §5)");
@@ -740,9 +763,15 @@ public final class IrParser {
      */
     private Value parseConversionOperand(Conversion conversion) {
         Token at = peek();
-        boolean anotherConversion = !at.forced() && Conversion.named(at.name()) != null
-                && !startsMemoryOperand();
-        if (isWord(at, "eval") || isWord(at, "expr") || anotherConversion) {
+        // A size word here says how wide the operand it applies to is, 'movzx byte [p]'.
+        // It is only that word when a value follows it: on its own, 'movzx byte' takes
+        // the variable called byte, which is the same rule as everywhere else
+        // (docs/ir.md §3.1, §3.5).
+        boolean sizeWord = Size.named(at.name()) != null && beginsAValue(tokenAt(1));
+        boolean anotherConversion = !at.forced() && !sizeWord && !startsMemoryOperand()
+                && Conversion.named(at.name()) != null && beginsAValue(tokenAt(1));
+        boolean nests = (isWord(at, "eval") || isWord(at, "expr")) && tokenAt(1).is("(");
+        if (nests || anotherConversion) {
             throw new CompileError(at.position(),
                     "'" + conversion.spelling() + "' takes a value with one width, not "
                             + at.describe() + "; one conversion changes one width, which is what "
@@ -827,20 +856,6 @@ public final class IrParser {
         if ((isWord(at, "eval") || isWord(at, "expr")) && tokenAt(1).is("(")) {
             throw new CompileError(at.position(),
                     "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
-        }
-        if (at.is(TokenKind.IDENT) && !at.forced() && Conversion.named(at.name()) != null) {
-            throw new CompileError(at.position(),
-                    "a conversion is not an operand of an operation: the operands of one "
-                            + "operation are one width, and a conversion is how that width changes "
-                            + "(docs/ir.md §3.2, §3.5)");
-        }
-        if (at.is(TokenKind.IDENT) && !at.forced() && Operator.named(at.name()) != null) {
-            throw new CompileError(at.position(),
-                    "'" + at.text() + "' is an operator, so it needs operands (docs/ir.md §5.5)");
-        }
-        if (at.is(TokenKind.IDENT) && !at.forced() && Vocabulary.reserved(at.name(), target)) {
-            throw new CompileError(at.position(),
-                    "'" + at.text() + "' is a word of the surface, so it is not an operand here");
         }
         if (at.is(TokenKind.IDENT)) {
             next();
@@ -947,13 +962,6 @@ public final class IrParser {
             if ((isWord(at, "eval") || isWord(at, "expr")) && tokenAt(1).is("(")) {
                 throw new CompileError(at.position(),
                         "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
-            }
-            if (!at.forced()
-                    && (Operator.named(at.name()) != null || Conversion.named(at.name()) != null)) {
-                throw new CompileError(at.position(),
-                        "'" + at.text() + "' cannot appear inside an expression here: "
-                                + "an expression has one width and one set of flags "
-                                + "(docs/ir.md §5.5, §3.5)");
             }
             next();
             return new Value.Name(at.position(), at.name());

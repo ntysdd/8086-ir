@@ -13,31 +13,21 @@ import java.util.Set;
  * The words this surface gives a meaning to, and the two questions asked about
  * them.
  *
- * <p>They are one list in one place because two questions need the same list and
- * used to answer them from two hand-written sets that drifted apart: a word the
- * surface knows sat in one and not the other, which is how {@code add} came to be
- * usable as a variable name while {@code shl} — the same kind of word, from the
- * same table — was not.
+ * <p>There is exactly one question here now, and the answer to "what may be a plain
+ * name" is "anything". A word's meaning is decided by where it stands, because
+ * values never stand next to each other in this surface: {@code eval(a adc b)} is
+ * an operation and {@code eval(adc + 1)} is a variable, and no reading of either
+ * is also a reading of the other. The two exceptions are not exceptions to that
+ * rule but to the things around it — a name the compiler generated (§7.2), and the
+ * sugar, which is read as a shape rather than as a statement (§7.2) — and both are
+ * dealt with where they arise.
  *
- * <p>The two questions are deliberately not the same question:
- *
- * <ul>
- *   <li>{@link #reserved} — may a plain name be this word? This is what the parser
- *       asks before it accepts a declaration, and it is the <em>narrow</em> list:
- *       a word is reserved when the surface would otherwise have to guess what it
- *       means. It only ever grows, never shrinks, because a program that compiles
- *       today has to compile tomorrow ({@code AGENTS.md}).
- *   <li>{@link #markedWhenPrinted} — does the printer have to write {@code $} in
- *       front of it? This is the <em>wide</em> list: any name that looks like a
- *       word of the language is written with the marker, because the printer
- *       writes the canonical form and a reader should never have to work out
- *       whether {@code eval} here is a variable or the surface's word. The same
- *       split as {@code docs/ir.md} §4.4, where thirty spellings are accepted and
- *       one is written back.
- * </ul>
- *
- * <p>Either list is escapable the same way: {@code $name} is the author's name
- * whatever it looks like ({@code docs/ir.md} §3.1).
+ * <p>What remains is {@link #markedWhenPrinted}, which is not about what may be
+ * written but about what is written back: the printer writes the canonical form,
+ * and a reader of canonical text should never have to work out whether the
+ * {@code eval} in front of them is a variable or the surface's word. The same
+ * split as {@code docs/ir.md} §4.4, where thirty spellings are accepted and one is
+ * written back.
  */
 public final class Vocabulary {
 
@@ -64,33 +54,24 @@ public final class Vocabulary {
     }
 
     /**
-     * Whether a plain name may not be this word, which is the narrow list: a word
-     * whose meaning the surface cannot tell from a name where it stands.
+     * Whether the printer writes {@code $} in front of this name: everything the
+     * surface knows that could be a spelling a name has. A symbol like {@code -} is
+     * left out, because a name cannot be one, so there is nothing to mark.
      */
-    public static boolean reserved(String name, Target target) {
-        return !isWordShape(name)
-                || Size.named(name) != null
+    public static boolean markedWhenPrinted(String name, Target target) {
+        if (!isWordShape(name)) {
+            return false;
+        }
+        return Size.named(name) != null
                 || Size.fromDirective(name) != null
                 || Operator.named(name) != null
                 || Conversion.named(name) != null
-                || target.condition(name) != null
-                || STRUCTURE.contains(name);
-    }
-
-    /**
-     * Whether the printer writes {@code $} in front of this name, which is the wide
-     * list: everything {@link #reserved} holds, plus the words that are only
-     * meaningful in a position a name is not written in — a type after {@code :}, a
-     * mnemonic that begins a statement, a register inside an inline block, and
-     * {@link #ELSEWHERE}. Marking those costs nothing and saves the reader the
-     * question.
-     */
-    public static boolean markedWhenPrinted(String name, Target target) {
-        return reserved(name, target)
                 || Type.named(name) != null
+                || target.condition(name) != null
                 || target.statementOperator(name) != null
                 || target.isRegister(name)
                 || target.isSegmentRegister(name)
+                || STRUCTURE.contains(name)
                 || ELSEWHERE.contains(name);
     }
 

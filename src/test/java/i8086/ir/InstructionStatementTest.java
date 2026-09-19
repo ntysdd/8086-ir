@@ -37,7 +37,7 @@ public final class InstructionStatementTest {
                 InstructionStatementTest::refusesIncAndDec);
         suite.add("An instruction statement refuses the implicit registers",
                 InstructionStatementTest::refusesImplicitRegisters);
-        suite.add("An instruction statement refuses a register operand",
+        suite.add("An instruction statement takes a register name as a name",
                 InstructionStatementTest::refusesRegisters);
         suite.add("An instruction statement refuses a tree",
                 InstructionStatementTest::refusesTrees);
@@ -157,12 +157,16 @@ public final class InstructionStatementTest {
     }
 
     private static void refusesRegisters() {
-        // A variable may be called ax, so accepting this would quietly mean a variable
-        // rather than the register that was written.
-        Assert.assertTrue(refusal("    var s: i16\n    mov ax, 1\n").contains("is a register"),
-                refusal("    var s: i16\n    mov ax, 1\n"));
-        Assert.assertTrue(refusal("    var s: i16\n    add s, bx\n").contains("is a register"),
-                refusal("    var s: i16\n    add s, bx\n"));
+        // A register name is not a register here: the surface has no registers, so 'ax'
+        // is a variable like any other name, and the printer says so (docs/ir.md §3.1).
+        Assert.assertEquals("    var s: i16\n"
+                        + "    var $ax: i16\n"
+                        + "    $ax = 1\n"
+                        + "    s = eval(s + $ax)\n",
+                became("    var s: i16\n"
+                        + "    var ax: i16\n"
+                        + "    mov ax, 1\n"
+                        + "    add s, ax\n"));
     }
 
     private static void refusesTrees() {
