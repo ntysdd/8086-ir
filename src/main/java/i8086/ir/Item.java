@@ -263,24 +263,24 @@ public abstract class Item {
     }
 
     /**
-     * {@code eval(...)} used as a statement: compute it, throw the value away,
-     * and leave the flags defined.
+     * {@code eval(...)} used as a statement: do one operation, throw the value
+     * away, and leave the flags defined.
      *
      * <p>It is the arithmetic counterpart of a comparison on a line of its own,
-     * which is a statement a writer of assembly already expects to have an
-     * effect ({@code docs/ir.md} §5.1).
+     * and like a comparison it is one operation, so what the flags are afterwards
+     * is not a matter of inference ({@code docs/ir.md} §5.1).
      */
     public static final class Eval extends Item {
 
-        private final Expression expression;
+        private final Operation operation;
 
-        public Eval(SourcePos position, Expression expression) {
+        public Eval(SourcePos position, Operation operation) {
             super(position);
-            this.expression = expression;
+            this.operation = operation;
         }
 
-        public Expression expression() {
-            return expression;
+        public Operation operation() {
+            return operation;
         }
     }
 

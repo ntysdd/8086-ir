@@ -73,6 +73,11 @@ public final class IrParserTest {
         suite.add("Ir parser reads mnemonic operators and conversions",
                 IrParserTest::readsMnemonicOperatorsAndConversions);
         suite.add("Ir printer round-trips expressions", IrParserTest::roundTripsExpressions);
+        suite.add("Ir parser refuses two operations in one eval",
+                IrParserTest::refusesTwoOperationsInEval);
+        suite.add("Ir parser refuses a tree in eval", IrParserTest::refusesTreeInEval);
+        suite.add("Ir parser refuses an eval with no operation",
+                IrParserTest::refusesEvalWithNoOperation);
         suite.add("Ir parser refuses nested eval and expr", IrParserTest::refusesNestedForms);
         suite.add("Ir parser refuses arithmetic without a form",
                 IrParserTest::refusesArithmeticWithoutAForm);
@@ -370,7 +375,8 @@ public final class IrParserTest {
     private static void readsExpressions() {
         Module module = parse(program());
         Item.Assign assign = (Item.Assign) module.items().get(4);
-        Expression.Apply sum = (Expression.Apply) ((Value.Eval) assign.value()).expression();
+        Expression.Apply sum =
+                (Expression.Apply) ((Value.Expr) assign.value()).expression();
         Assert.assertEquals(Operator.ADD, sum.operator());
         Assert.assertEquals("a", ((Value.Name) ((Expression.Leaf) sum.left()).value()).name());
 
@@ -383,7 +389,8 @@ public final class IrParserTest {
     private static void bracketsChangeTheTree() {
         Module module = parse(program().replace("a + b * c", "(a + b) * c"));
         Item.Assign assign = (Item.Assign) module.items().get(4);
-        Expression.Apply product = (Expression.Apply) ((Value.Eval) assign.value()).expression();
+        Expression.Apply product =
+                (Expression.Apply) ((Value.Expr) assign.value()).expression();
         Assert.assertEquals(Operator.MULTIPLY, product.operator());
         Assert.assertEquals(Operator.ADD,
                 ((Expression.Apply) product.left()).operator());
@@ -412,9 +419,10 @@ public final class IrParserTest {
 
     private static Operator operatorOf(Module module, int index) {
         Value value = ((Item.Assign) module.items().get(index)).value();
-        Expression expression = value instanceof Value.Eval
-                ? ((Value.Eval) value).expression()
-                : ((Value.Expr) value).expression();
+        if (value instanceof Value.Eval) {
+            return ((Value.Eval) value).operation().operator();
+        }
+        Expression expression = ((Value.Expr) value).expression();
         return ((Expression.Apply) expression).operator();
     }
 
@@ -427,16 +435,40 @@ public final class IrParserTest {
                 + "    var a: u16\n"
                 + "    var b: u16\n"
                 + "    var small: u8\n"
-                + "    a = eval(a + b * a)\n"
-                + "    a = eval((a + b) * a)\n"
-                + "    a = eval(a + b + a)\n"
-                + "    a = eval(a - (b - a))\n"
+                + "    a = eval(a + b)\n"
+                + "    a = eval(~a)\n"
+                + "    a = eval(a adc b)\n"
+                + "    a = eval(a idiv b)\n"
+                + "    a = eval(a + [a])\n"
+                + "    eval(a * b)\n"
+                + "    a = expr(a + b * a)\n"
+                + "    a = expr((a + b) * a)\n"
+                + "    a = expr(a - (b - a))\n"
                 + "    a = expr(~a + a & a ^ a | a)\n"
-                + "    a = eval(a shl 1 adc b)\n"
                 + "    a = movzx byte [a]\n"
-                + "    small = byte a\n"
-                + "    eval(a * b)\n";
+                + "    small = byte a\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
+    }
+
+    private static void refusesTwoOperationsInEval() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                        + "    var b: u16\n    a = eval(a + b + a)\n"));
+        Assert.assertEquals("test.ir:7:20", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("exactly one operation"),
+                refused.getMessage());
+    }
+
+    private static void refusesTreeInEval() {
+        Assert.assertRefused("test.ir:7:20",
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                        + "    var b: u16\n    a = eval(a + b * a)\n"));
+    }
+
+    private static void refusesEvalWithNoOperation() {
+        Assert.assertRefused("test.ir:6:15",
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                        + "    a = eval(a)\n"));
     }
 
     private static void refusesNestedForms() {
@@ -472,7 +504,7 @@ public final class IrParserTest {
                 + "    var a: u16\n"
                 + "    var b: u16\n"
                 + "    var c: u16\n"
-                + "    a = eval(a + b * c)\n";
+                + "    a = expr(a + b * c)\n";
     }
 
     private static void readsComparisonsAndBranches() {

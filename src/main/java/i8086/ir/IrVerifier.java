@@ -140,9 +140,9 @@ public final class IrVerifier {
             return flagsAfterValue(assign.value(), flagsDefined);
         }
         if (item instanceof Item.Eval) {
-            Expression expression = ((Item.Eval) item).expression();
-            widthOfExpression(expression, null, ExpressionForm.EVAL);
-            requireCarryIsDefined(expressionReadsFlags(expression), flagsDefined, item.position());
+            Operation operation = ((Item.Eval) item).operation();
+            widthOfOperation(operation, null);
+            requireCarryIsDefined(operation.readsFlags(), flagsDefined, item.position());
             return true;
         }
         if (item instanceof Item.Compare) {
@@ -183,8 +183,8 @@ public final class IrVerifier {
     /** Whether the flags are defined after a value has been computed. */
     private boolean flagsAfterValue(Value value, boolean flagsDefined) {
         if (value instanceof Value.Eval) {
-            Expression expression = ((Value.Eval) value).expression();
-            requireCarryIsDefined(expressionReadsFlags(expression), flagsDefined, value.position());
+            Operation operation = ((Value.Eval) value).operation();
+            requireCarryIsDefined(operation.readsFlags(), flagsDefined, value.position());
             return true;
         }
         if (value instanceof Value.Expr) {
@@ -201,7 +201,7 @@ public final class IrVerifier {
 
     private static boolean expressionReadsFlagsOf(Value value) {
         if (value instanceof Value.Eval) {
-            return expressionReadsFlags(((Value.Eval) value).expression());
+            return ((Value.Eval) value).operation().readsFlags();
         }
         return false;
     }
@@ -328,7 +328,7 @@ public final class IrVerifier {
             return widthOfExpression(((Expression.Complement) expression).operand(), implied, form);
         }
         Expression.Apply apply = (Expression.Apply) expression;
-        checkOperator(apply, form);
+        checkExpressionOperator(apply);
         Integer left = widthOfExpression(apply.left(), implied, form);
         Integer right = widthOfExpression(apply.right(), left == null ? implied : left, form);
         if (left == null) {
@@ -351,14 +351,17 @@ public final class IrVerifier {
      * mnemonic that states the signedness settles it for everything above it,
      * which is what the mnemonic forms are for (§5.5).
      */
+    private Boolean signednessOf(Value value) {
+        if (value instanceof Value.Name) {
+            Type type = variables.get(((Value.Name) value).name());
+            return type == null ? null : Boolean.valueOf(type.isSigned());
+        }
+        return null;
+    }
+
     private Boolean signednessOf(Expression expression) {
         if (expression instanceof Expression.Leaf) {
-            Value value = ((Expression.Leaf) expression).value();
-            if (value instanceof Value.Name) {
-                Type type = variables.get(((Value.Name) value).name());
-                return type == null ? null : Boolean.valueOf(type.isSigned());
-            }
-            return null;
+            return signednessOf(((Expression.Leaf) expression).value());
         }
         if (expression instanceof Expression.Complement) {
             return signednessOf(((Expression.Complement) expression).operand());
@@ -379,33 +382,44 @@ public final class IrVerifier {
         }
     }
 
-    /** What an operator may do in this form, and the signedness its operands may mix. */
-    private void checkOperator(Expression.Apply apply, ExpressionForm form) {
-        Operator operator = apply.operator();
-        if (operator.readsFlags()) {
-            require(form == ExpressionForm.EVAL, apply.position(),
-                    "'" + operator.spelling() + "' reads the carry flag, so it belongs in eval "
-                            + "and not in expr, which reads no flags at all (docs/ir.md §5.5)");
-        }
-        if (operator.divides()) {
-            Integer width = widthOfExpression(apply.left(), null, form);
-            if (width == null) {
-                width = widthOfExpression(apply.right(), null, form);
-            }
-            if (width != null) {
-                require(width.intValue() == 2, apply.position(),
-                        "division is 16 bits in v1, and this is " + width + " bytes; a wider "
-                                + "division is written out by hand (docs/ir.md §6.2)");
-            }
-        }
+    /**
+     * What an operator may do, wherever it appears: whether it reads the flags is
+     * the caller's question, because that is what tells the two forms apart.
+     */
+    private void checkOperator(Operator operator, SourcePos where,
+                               Boolean leftSigned, Boolean rightSigned) {
         if (!operator.statesSignedness()) {
-            Boolean left = signednessOf(apply.left());
-            Boolean right = signednessOf(apply.right());
-            require(left == null || right == null || left.equals(right), apply.position(),
+            require(leftSigned == null || rightSigned == null || leftSigned.equals(rightSigned),
+                    where,
                     "'" + operator.spelling() + "' has one operand signed and one unsigned, and "
                             + "written as a symbol it does not say which it means; use the "
                             + "mnemonic form, or let one value live in a variable of the other "
                             + "type, which costs nothing (docs/ir.md §5.5)");
+        }
+    }
+
+    /**
+     * What an operator may do in an expression, which is stricter: {@code expr}
+     * reads no flags at all, so an operator that does belongs in {@code eval}.
+     */
+    private void checkExpressionOperator(Expression.Apply apply) {
+        Operator operator = apply.operator();
+        if (operator.readsFlags()) {
+            require(false, apply.position(),
+                    "'" + operator.spelling() + "' reads the carry flag, so it belongs in eval, "
+                            + "which is one operation done as written, and not in expr, which "
+                            + "reads no flags at all (docs/ir.md §5.5)");
+        }
+        checkOperator(operator, apply.position(), signednessOf(apply.left()),
+                signednessOf(apply.right()));
+        if (operator.divides()) {
+            Integer width = widthOfExpression(apply.left(), null, ExpressionForm.EXPR);
+            if (width == null) {
+                width = widthOfExpression(apply.right(), null, ExpressionForm.EXPR);
+            }
+            require(width == null || width.intValue() == 2, apply.position(),
+                    "division is 16 bits in v1, and this is " + width + " bytes; a wider division "
+                            + "is written out by hand (docs/ir.md §6.2)");
         }
     }
 
@@ -489,10 +503,42 @@ public final class IrVerifier {
         if (value instanceof Value.Convert) {
             return widthOfConversion((Value.Convert) value, implied);
         }
-        Value.Eval eval = value instanceof Value.Eval ? (Value.Eval) value : null;
-        Expression expression = eval != null ? eval.expression() : ((Value.Expr) value).expression();
-        return widthOfExpression(expression, implied,
-                eval == null ? ExpressionForm.EXPR : ExpressionForm.EVAL);
+        if (value instanceof Value.Eval) {
+            return widthOfOperation(((Value.Eval) value).operation(), implied);
+        }
+        return widthOfExpression(((Value.Expr) value).expression(), implied, ExpressionForm.EXPR);
+    }
+
+    /**
+     * The width of one operation, and the rules its operator answers to.
+     *
+     * <p>Because {@code eval} is one operation, there is no evaluation order to
+     * work out and the width is simply the one width its operands share
+     * ({@code docs/ir.md} §5.1).
+     */
+    private Integer widthOfOperation(Operation operation, Integer implied) {
+        Operator operator = operation.operator();
+        Integer width = null;
+        for (Value operand : operation.operands()) {
+            Integer own = widthOf(operand, width == null ? implied : width);
+            if (width == null) {
+                width = own;
+            } else {
+                require(own == null || width.equals(own), operand.position(),
+                        "a " + width + "-byte operand cannot meet a " + own + "-byte one in one "
+                                + "operation; every operand has the same width "
+                                + "(docs/ir.md §3.2)");
+            }
+        }
+        checkOperator(operator, operation.position(),
+                signednessOf(operation.operands().get(0)),
+                operator.arity() == 1 ? null : signednessOf(operation.operands().get(1)));
+        if (operator.divides()) {
+            require(width == null || width.intValue() == 2, operation.position(),
+                    "division is 16 bits in v1, and this is " + width + " bytes; a wider division "
+                            + "is written out by hand (docs/ir.md §6.2)");
+        }
+        return width;
     }
 
     private void checkAddress(MemoryOperand operand) {

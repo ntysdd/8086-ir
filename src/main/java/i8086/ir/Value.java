@@ -80,23 +80,24 @@ public abstract class Value {
     }
 
     /**
-     * {@code eval(...)}: do it as written.
+     * {@code eval(...)}: one operation, done as written.
      *
-     * <p>The flags it leaves are the ones the written sequence of instructions
-     * would leave, and any width change or operand shape is worked out on the
-     * way ({@code docs/ir.md} §5.1).
+     * <p>Because it is one operation, the flags it leaves are that operation's
+     * flags and nothing has to be worked out; and because it is done as written,
+     * it may carry a load, which {@code expr} may not
+     * ({@code docs/ir.md} §5.1).
      */
     public static final class Eval extends Value {
 
-        private final Expression expression;
+        private final Operation operation;
 
-        public Eval(SourcePos position, Expression expression) {
+        public Eval(SourcePos position, Operation operation) {
             super(position);
-            this.expression = expression;
+            this.operation = operation;
         }
 
-        public Expression expression() {
-            return expression;
+        public Operation operation() {
+            return operation;
         }
     }
 

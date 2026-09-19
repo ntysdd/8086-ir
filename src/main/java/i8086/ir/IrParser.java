@@ -170,9 +170,9 @@ public final class IrParser {
         }
         if (first.isName("eval")) {
             Token keyword = next();
-            Expression expression = parseParenthesisedExpression();
+            Operation operation = parseParenthesisedOperation();
             endOfLine();
-            return new Item.Eval(keyword.position(), expression);
+            return new Item.Eval(keyword.position(), operation);
         }
         if (first.is(TokenKind.IDENT) && target.condition(first.name()) != null) {
             next();
@@ -250,7 +250,7 @@ public final class IrParser {
         }
         if (first.isName("eval")) {
             next();
-            return new Value.Eval(first.position(), parseParenthesisedExpression());
+            return new Value.Eval(first.position(), parseParenthesisedOperation());
         }
         if (first.isName("expr")) {
             next();
@@ -314,6 +314,104 @@ public final class IrParser {
         Expression expression = parseExpression();
         expectPunct(")");
         return expression;
+    }
+
+    private Operation parseParenthesisedOperation() {
+        expectPunct("(");
+        Operation operation = parseOperation();
+        expectPunct(")");
+        return operation;
+    }
+
+    /**
+     * One operation, which is all {@code eval} takes ({@code docs/ir.md} §5.1).
+     *
+     * <p>The grammar says so rather than the verifier, because a rule the model
+     * cannot express is a rule nobody can break: an {@link Operation} holds an
+     * operator and its operands, so a second operation has nowhere to go.
+     */
+    private Operation parseOperation() {
+        Token at = peek();
+        if (operatorHere() == Operator.COMPLEMENT) {
+            next();
+            return new Operation(at.position(), Operator.COMPLEMENT,
+                    one(parseOperationOperand("an operand")));
+        }
+
+        Value left = parseOperationOperand("the first operand");
+        Token between = peek();
+        Operator operator = operatorHere();
+        require(operator != null && operator.arity() == 2, between.position(),
+                "eval(...) takes exactly one operation, so an operator belongs here; anything "
+                        + "with structure is written with expr(...), which is a tree "
+                        + "(docs/ir.md §5.1)");
+        next();
+        Value right = parseOperationOperand("the second operand");
+        require(operatorHere() == null, peek().position(),
+                "eval(...) takes exactly one operation, and this would be a second one; the "
+                        + "rest belongs in expr(...) or in a statement of its own (docs/ir.md §5.1)");
+        // The operation's position is its operator's, the way an expression node's
+        // is: that is where a complaint about the operator belongs.
+        return new Operation(between.position(), operator, two(left, right));
+    }
+
+    private static List<Value> one(Value value) {
+        List<Value> operands = new ArrayList<Value>(1);
+        operands.add(value);
+        return operands;
+    }
+
+    private static List<Value> two(Value left, Value right) {
+        List<Value> operands = new ArrayList<Value>(2);
+        operands.add(left);
+        operands.add(right);
+        return operands;
+    }
+
+    /**
+     * A value an operation may take: a name, a literal or a load. A load is an
+     * operand and not an operation, so {@code eval(a + [p])} is one operation.
+     */
+    private Value parseOperationOperand(String what) {
+        Token at = peek();
+        if (startsMemoryOperand()) {
+            return new Value.Memory(at.position(), parseMemoryOperand());
+        }
+        if (at.is(TokenKind.NUMBER)) {
+            next();
+            return new Value.Number(at.position(), at.value(), at.text());
+        }
+        if (at.isName("eval") || at.isName("expr")) {
+            throw new CompileError(at.position(),
+                    "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
+        }
+        if (at.is(TokenKind.IDENT) && Conversion.named(at.name()) != null) {
+            throw new CompileError(at.position(),
+                    "a conversion is not an operand of an operation: the operands of one "
+                            + "operation are one width, and a conversion is how that width changes "
+                            + "(docs/ir.md §3.2, §3.5)");
+        }
+        if (at.is(TokenKind.IDENT) && Operator.named(at.name()) != null) {
+            throw new CompileError(at.position(),
+                    "'" + at.text() + "' is an operator, so it needs operands (docs/ir.md §5.5)");
+        }
+        if (at.is(TokenKind.IDENT) && isWordOfTheSurface(at.name())) {
+            throw new CompileError(at.position(),
+                    "'" + at.text() + "' is a word of the surface, so it is not an operand here");
+        }
+        if (at.is(TokenKind.IDENT)) {
+            next();
+            return new Value.Name(at.position(), at.name());
+        }
+        throw new CompileError(at.position(),
+                "expected " + what + ", but found " + at.describe());
+    }
+
+    /** Whether a word means something in the surface other than a name. */
+    private static boolean isWordOfTheSurface(String name) {
+        return STATEMENT_WORDS.contains(name)
+                || Size.named(name) != null
+                || Size.fromDirective(name) != null;
     }
 
     private Expression parseExpression() {

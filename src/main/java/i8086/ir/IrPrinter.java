@@ -4,6 +4,8 @@ import i8086.asm.Instruction;
 import i8086.asm.InstructionPrinter;
 import i8086.asm.Numbers;
 
+import java.util.List;
+
 /**
  * Writes a module back out in the IR surface syntax.
  *
@@ -85,8 +87,21 @@ public final class IrPrinter {
     }
 
     private static void printEvalStatement(StringBuilder text, Item.Eval item) {
-        text.append(INDENT).append("eval(").append(printExpression(item.expression(), 0, false))
+        text.append(INDENT).append("eval(").append(printOperation(item.operation()))
                 .append(")\n");
+    }
+
+    /**
+     * One operation, written the way it was parsed: operands around the operator,
+     * or the operator in front for the one that takes a single operand.
+     */
+    private static String printOperation(Operation operation) {
+        List<Value> operands = operation.operands();
+        if (operation.operator().arity() == 1) {
+            return operation.operator().spelling() + printValue(operands.get(0));
+        }
+        return printValue(operands.get(0)) + " " + operation.operator().spelling() + " "
+                + printValue(operands.get(1));
     }
 
     private static String printPlace(Place place) {
@@ -106,7 +121,7 @@ public final class IrPrinter {
             return printMemoryOperand(((Value.Memory) value).operand());
         }
         if (value instanceof Value.Eval) {
-            return "eval(" + printExpression(((Value.Eval) value).expression(), 0, false) + ")";
+            return "eval(" + printOperation(((Value.Eval) value).operation()) + ")";
         }
         if (value instanceof Value.Expr) {
             return "expr(" + printExpression(((Value.Expr) value).expression(), 0, false) + ")";

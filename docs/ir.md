@@ -280,22 +280,61 @@ capture form), and how much of `lahf`/`sahf`/`pushf` is exposed directly.
 All arithmetic is written through one of two forms. There is no bare
 `s = a + b`.
 
-### 5.1 `eval(...)` — do it as written — [decided]
+The two differ in **how they are defined**, and everything else follows from
+that:
+
+* **`eval(...)` is defined constructively.** It is an operation — one operation,
+  not a tree — done as written. There is no evaluation order to reason about and
+  no question which operation's flags come out, because there is one operation
+  and they are its.
+* **`expr(...)` is defined declaratively.** It is a value, and nothing else is
+  promised, so the compiler may realise it however it likes.
+
+That is also the division of labour: `eval` is how you say *what happens*,
+`expr` is how you say *what the answer is*.
+
+### 5.1 `eval(...)` — one operation, done as written — [decided]
 
 ```
-s = eval(a + b)     ; ≡  mov s, a ; add s, b
-a = eval(a + b)     ; ≡  add a, b          (the move is elided)
-eval(a + b)         ; compute, discard the value, leave the flags defined
+s = eval(a + b)     ; one addition
+s = eval(a + [p])   ; one addition, whose second operand is a load
+a = eval(a + b)     ; and when the destination is the first operand the move is
+                    ; elided: add a, b
+s = eval(~a)        ; one complement
+eval(a + b)         ; one addition, value discarded, flags left defined
 ```
 
-* `eval` follows program order, and the flags it leaves are **defined**: they are
-  the flags the naive sequence of instructions would leave.
-* It may carry memory operands.
+* **One operation.** `eval(a + b + c)` and `eval(a + b * c)` are refused: they
+  are two operations, and which one's flags came out would be a question.
+  Anything with structure is written with `expr(...)`, which is a tree, or broken
+  into statements:
+
+  ```
+  var t: i16
+  t = expr(x * 4)
+  y = eval(x + t)
+  ```
+
+  A **load is an operand and not an operation**, so `eval(a + [p])` is still one
+  operation. That is the case that needs `eval` and cannot use `expr`.
+* **What happens is what is written**, and the flags it leaves are **defined**:
+  they are that operation's flags.
+* **The value is computed, then written.** `s = eval(...)` means: compute the
+  operation's value, then store it in `s`. The elision above is a *code
+  generation* fact and not part of the meaning, and it holds when writing the
+  result straight into the destination cannot change anything. It does not hold
+  for `a = eval(b - a)`, where the destination is needed *after* it would have
+  been overwritten: the value is `b - a`<sub>old</sub>, and reading the elision
+  as "`mov a, b` then `sub a, a`" would give zero. A register allocator gets that
+  right for free; a definition that reads like a recipe does not.
 * Consequence: while those flags are live, folding, reassociation and strength
   reduction are constrained. Replacing `MUL` with `SHL` changes the flags, so it
   is legal only when the flags are dead. Folding is legal whenever the resulting
   flag bits can be reproduced (§4.2) — which, on the 8086, generally means only
   when the flags are dead.
+* A comparison is not written with `eval`: `cmp` and `test` are statements of
+  their own (§4.4), and like `eval` they are one operation, because a comparison
+  whose flags came from somewhere else would be a comparison nobody could read.
 
 ### 5.2 `expr(...)` — a value, and the optimiser's business — [decided]
 
@@ -303,7 +342,11 @@ eval(a + b)         ; compute, discard the value, leave the flags defined
 s = expr((a + b) * c)
 ```
 
-* Operands are **variables only**. No memory operands, no loads, no `volatile`.
+* It is a **tree**, which is the other half of the division of labour: structure
+  belongs here and a single operation belongs to `eval`. Brackets and precedence
+  decide the tree (§5.5).
+* Operands are **variables and literals only**. No memory operands, no loads, no
+  `volatile`, no labels.
 * Same width throughout, `u8` included.
 * It reads no flags, and it leaves `flags` **undefined**.
 * It is free to reassociate, CSE, duplicate, delete, strength-reduce and
@@ -352,7 +395,8 @@ nothing else and cost nothing.
 
 * In `expr`: `+ - * / % & | ^ ~`, and the shifts and rotates that do not read
   the carry (`shl shr sar rol ror`). Comparisons are **not** value expressions;
-  use `cmp` with `setcc`.
+  use `cmp` with `setcc`. A tree that needs a load is not written here at all:
+  it is written as `eval` of one operation per load, with the rest in `expr`.
 * Division **is** in `expr` (`/` and `%`). It reads no flags and touches no
   memory; the fault it can raise is covered by the rule below.
 * Divide-by-zero and quotient overflow are the hardware's contract (`#DE`), no
@@ -372,8 +416,12 @@ nothing else and cost nothing.
   whose body never runs must not introduce a trap. This is the only exception to
   "free to optimise", and it follows from §2.1: the compiler never invents a
   fault the program did not already contain.
-* In `eval` and as statements: all of the above, plus the carry consumers
-  (`adc sbb rcl rcr`), `cmp`, `test`, `setcc`, and the conditions.
+* In `eval`: any operator of the sets below, on the single operation it is
+  given. Because `eval` may read the flags, the carry consumers — `adc`, `sbb`,
+  `rcl`, `rcr` — belong there and nowhere else.
+* In `expr`: the operators that read no flags, as a tree.
+* `cmp`, `test`, `setcc` and the conditions are statements, not operands of
+  either form.
 * The governing rule: **an operation that reads the flags can appear only in
   `eval`, never in `expr`.** `adc`, `sbb`, `rcl` and `rcr` all read `CF`, so
   this is not a house style, it is the hardware.
