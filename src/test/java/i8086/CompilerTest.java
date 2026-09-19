@@ -82,6 +82,12 @@ public final class CompilerTest {
                 CompilerTest::refusesComputedStore);
         suite.add("Compiler reads the signedness of a comparison",
                 CompilerTest::readsComparisonSignedness);
+        suite.add("Compiler compiles an instruction-shaped statement as the eval form",
+                CompilerTest::instructionSpellingIsTheEvalForm);
+        suite.add("Compiler negates with the machine's one instruction",
+                CompilerTest::negatesInOneInstruction);
+        suite.add("Compiler still builds the zero for a subtraction from zero",
+                CompilerTest::buildsTheZeroForSubtractionFromZero);
         suite.add("Compiler refuses bad input with a position", CompilerTest::refusesBadInput);
         suite.add("Command line prints to standard output without an output file",
                 CompilerTest::printsToStandardOutput);
@@ -131,6 +137,58 @@ public final class CompilerTest {
             Assert.fail("cannot read examples/hello.ir: " + failure.getMessage());
             return null; // unreachable: fail always throws
         }
+    }
+
+    /**
+     * The two spellings of one operation compile to the same code.
+     *
+     * <p>That is what "a spelling and not a new operation" has to mean
+     * ({@code docs/ir.md} §7.3): the instruction-shaped statement is the same IR, so
+     * not only the optimiser but selection and allocation see one program.
+     */
+    private static void instructionSpellingIsTheEvalForm() {
+        String head = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n";
+        String tail = "    word [0x40] = s\n    ret\n";
+        Assert.assertEquals(
+                Compiler.compile("t.ir", head
+                        + "    s = eval(s + 1)\n    s = eval(-s)\n    s = eval(~s)\n" + tail),
+                Compiler.compile("t.ir", head
+                        + "    add s, 1\n    neg s\n    not s\n" + tail));
+    }
+
+    /**
+     * A negation is {@code NEG}, which is two bytes, rather than a zero that is built
+     * and subtracted from.
+     */
+    private static void negatesInOneInstruction() {
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "main:\n"
+                + "    mov bx, 0x1000\n"
+                + "    mov ax, [bx]\n"
+                + "    neg ax\n"
+                + "    mov word [0x40], ax\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n"
+                        + "    s = eval(-s)\n    word [0x40] = s\n    ret\n"));
+    }
+
+    /**
+     * {@code d = eval(0 - d)} is the same operation as {@code d = eval(-d)}, and it is
+     * still written out as subtracting from a zero.
+     *
+     * <p>This test says where the gap is rather than that all is well: recognising the
+     * shape is a target's business — a form for the subtraction whose first operand is
+     * the literal zero — and until there is one, the spelling that names the operation
+     * is the one that gets the instruction ({@code docs/ir.md} §7.3).
+     */
+    private static void buildsTheZeroForSubtractionFromZero() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var s: i16\n    var p: i16\n    p = 0x1000\n    s = [p]\n"
+                + "    s = eval(0 - s)\n    word [0x40] = s\n    ret\n");
+        Assert.assertFalse(assembly.contains("neg"), assembly);
     }
 
     /**

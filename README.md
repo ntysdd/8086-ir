@@ -106,7 +106,9 @@ The pipeline is a conventional one, adapted to the constraints of the target.
 Each step says where it stands: **built**, **partly**, or **planned**.
 
 1. **Parse** the textual IR into a module of items — labels, statements, data —
-   and print it back. Parse/print round-tripping is a tested invariant.
+   and print it back. Parse/print round-tripping is a tested invariant, and the
+   sugar of `docs/ir.md` §7.2 and §7.3 is normalised away here, so what the rest of
+   the pipeline sees is the canonical form.
    **Built.** The basic blocks and functions the rest of this list speaks of are
    derived from those items rather than parsed into existence: the graph is read
    off the item list in step 3, and there are no functions yet at all.
@@ -269,7 +271,9 @@ Working today:
 
 * **The IR surface** of [`docs/ir.md`](docs/ir.md): parsing, printing and
   verification, so `parse(print(ir)) == ir` and every refusal carries a position —
-  together with the control-flow sugar of §7.2, normalised away as it is read.
+  together with the sugar, normalised away as it is read: the control flow of §7.2,
+  the instruction-shaped statements of §7.3 (`add s, 1` is `s = eval(s + 1)` written
+  the machine's way), and the unary minus of §5.5.
 * **SSA construction and verification**, described in
   [`docs/ssa.md`](docs/ssa.md): the control flow graph, dominators and the dominance
   frontier, liveness, φ placement, and the renaming walk. Every variable is renamed

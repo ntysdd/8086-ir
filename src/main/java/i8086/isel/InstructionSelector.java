@@ -345,10 +345,10 @@ public final class InstructionSelector {
             emitValue(((Expression.Leaf) expression).value(), destination, false);
             return;
         }
-        if (expression instanceof Expression.Complement) {
-            Expression operand = ((Expression.Complement) expression).operand();
-            emitExpression(operand, destination);
-            emitInPlace(Operator.COMPLEMENT, destination, null, null, expression.position(),
+        if (expression instanceof Expression.Unary) {
+            Expression.Unary unary = (Expression.Unary) expression;
+            emitExpression(unary.operand(), destination);
+            emitInPlace(unary.operator(), destination, null, null, expression.position(),
                     false);
             return;
         }

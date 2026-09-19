@@ -171,8 +171,8 @@ public final class IrVerifier {
                     || expressionReadsFlags(apply.left())
                     || expressionReadsFlags(apply.right());
         }
-        if (expression instanceof Expression.Complement) {
-            return expressionReadsFlags(((Expression.Complement) expression).operand());
+        if (expression instanceof Expression.Unary) {
+            return expressionReadsFlags(((Expression.Unary) expression).operand());
         }
         return expressionReadsFlagsOf(((Expression.Leaf) expression).value());
     }
@@ -283,8 +283,8 @@ public final class IrVerifier {
             requireNoVolatile(((Expression.Leaf) expression).value());
             return widthOfLeaf(((Expression.Leaf) expression).value(), implied, form);
         }
-        if (expression instanceof Expression.Complement) {
-            return widthOfExpression(((Expression.Complement) expression).operand(), implied, form);
+        if (expression instanceof Expression.Unary) {
+            return widthOfExpression(((Expression.Unary) expression).operand(), implied, form);
         }
         Expression.Apply apply = (Expression.Apply) expression;
         checkExpressionOperator(apply);

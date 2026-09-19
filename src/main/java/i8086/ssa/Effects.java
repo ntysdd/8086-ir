@@ -296,8 +296,8 @@ public final class Effects {
     private static void expressionNames(Expression expression, List<Occurrence> found) {
         if (expression instanceof Expression.Leaf) {
             valueNames(((Expression.Leaf) expression).value(), found);
-        } else if (expression instanceof Expression.Complement) {
-            expressionNames(((Expression.Complement) expression).operand(), found);
+        } else if (expression instanceof Expression.Unary) {
+            expressionNames(((Expression.Unary) expression).operand(), found);
         } else {
             Expression.Apply apply = (Expression.Apply) expression;
             expressionNames(apply.left(), found);
@@ -334,8 +334,8 @@ public final class Effects {
         if (expression instanceof Expression.Leaf) {
             return valueReadsFlags(((Expression.Leaf) expression).value());
         }
-        if (expression instanceof Expression.Complement) {
-            return expressionReadsFlags(((Expression.Complement) expression).operand());
+        if (expression instanceof Expression.Unary) {
+            return expressionReadsFlags(((Expression.Unary) expression).operand());
         }
         Expression.Apply apply = (Expression.Apply) expression;
         return apply.operator().readsFlags()

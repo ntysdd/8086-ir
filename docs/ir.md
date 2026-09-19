@@ -460,7 +460,7 @@ operator is left-associative, and, tightest first,
 
 | binds | operators |
 |---|---|
-| 1 | `~` (prefix) |
+| 1 | `~` `-` (prefix) |
 | 2 | `* / % mul imul div idiv` |
 | 3 | `+ - adc sbb` |
 | 4 | `shl shr sar rol ror rcl rcr` |
@@ -475,13 +475,12 @@ nothing else and cost nothing.
   the carry (`shl shr sar rol ror`). Comparisons are **not** value expressions;
   use `cmp` with `setcc`. A tree that needs a load is not written here at all:
   it is written as `eval` of one operation per load, with the rest in `expr`.
-* **[proposed]** a unary minus, `-d`: one operation, the one the machine calls
-  `NEG`. It is not a new meaning — `NEG`'s flags are the flags of subtracting
-  from zero, `CF` included, so `-d`, `0 - d` and the instruction `neg d` are one
-  operation and it is the zero in `d = eval(0 - d)` that carries no information.
-  Two things it settles rather than assumes: which precedence row it belongs in
-  (with `~`, level 1, where a prefix can only be a prefix), and §12's open
-  question about negative literals, since `-1` and `-d` begin the same way.
+* **Unary minus, `-d`** — one operation, the one the machine calls `NEG`. It is not
+  a new meaning: `NEG`'s flags are the flags of subtracting from zero, `CF`
+  included, so `-d`, `0 - d` and the instruction `neg d` are one operation and it
+  is the zero in `d = eval(0 - d)` that carries no information. It binds like `~`
+  (level 1, where a prefix can only be a prefix), which also settles how `-1` and
+  `-d` are told apart: by position, the same way `a - b` and `-b` are.
 * Division **is** in `expr` (`/` and `%`). It reads no flags and touches no
   memory; the fault it can raise is covered by the rule below.
 * Divide-by-zero and quotient overflow are the hardware's contract (`#DE`), no
@@ -640,7 +639,7 @@ falling out of the loop is the path that needs no instruction at all. The inner
 branch of a `while` is therefore the condition **as written**, where an `if`
 branches on its opposite.
 
-### 7.3 Instruction-shaped statements — [proposed]
+### 7.3 Instruction-shaped statements — [decided]
 
 An operation may be written the way the machine writes it, with the destination
 spelled out instead of implied by the `=`:
@@ -651,6 +650,7 @@ sub s, t            ; exactly  s = eval(s - t)
 and s, 0xff         ; exactly  s = eval(s & 0xff)
 adc s, 1            ; exactly  s = eval(s adc 1)
 shl s, 1            ; exactly  s = eval(s shl 1)
+neg s               ; exactly  s = eval(-s)
 mov s, [p]          ; exactly  s = [p]
 ```
 
@@ -665,8 +665,10 @@ prints as labels and branches.
 It exists for one reason: a program written for an assembler can be brought over
 as it stands, one operation per line, without being rewritten into `eval` shape
 first. That is also the whole of what it promises, and it is why it is
-**one operation with two operands and no nesting**: `add s, 1 + 1` is a tree and
-belongs in `expr` (§5.4).
+**one operation, with exactly the operands the operation takes and no nesting**:
+`add s, 1 + 1` is a tree and belongs in `expr` (§5.4), and `mov` is the only word
+here that is not an operation at all — it is the bare assignment of §5.3, which
+the surface already spells with `=`.
 
 **A word is accepted only when it names an operation the surface already has.**
 That is where the line is, and it is not a matter of taste: a word that would
@@ -708,11 +710,10 @@ it means: `not d` and `d = eval(~d)` are one statement written twice, and so are
 `neg d` and `d = eval(0 - d)`, while `inc d` and `d = eval(d + 1)` are two
 different programs. Only the first kind may share a name.
 
-One thing this costs, which is a target's business and not the surface's: the
-spelling must not be worse than what it is a spelling of. `d = eval(0 - d)`
-compiles today to a copy, a zero and a subtract — seven bytes where `NEG` is two —
-so accepting `neg d` goes together with the target listing `NEG` as a form of the
-negation (§5.5, §5.6), not before it.
+Every word is answered by the target, which is where the reason for each refusal
+lives as well (`Target.statementOperator`, `Target.statementProblem`): whether a
+word names the operation it looks like is a fact about the machine, and on another
+machine the answer would be different.
 
 **A register name is not an operand here.** `mov ax, 1` would otherwise name a
 *variable* called `ax` — legal, since a variable is a virtual register whose name
@@ -721,9 +722,11 @@ wrote. A register is reached through inline assembly (§9), or through the pinni
 of §12 item 12 once it exists. The refusal is inside the new construct, so a
 program that already has a variable named `ax` is unaffected.
 
-**[proposed]** the whole construct, and in particular: whether `mov` is worth
-having when `=` already spells the assignment, and whether the word may be
-followed by more than the two operands an 8086 form takes.
+**[open]** one shape is not recognised yet, and it costs bytes: `d = eval(0 - d)`
+is the same operation as `d = eval(-d)` and is still emitted as building a zero and
+subtracting it — seven bytes against two. Recognising it is a form for the
+subtraction whose first operand is the literal zero, which is the target's business
+like every other encoding choice.
 
 **[open]** whether any of this should reach the assembler-facing side too — an
 `asm` block, or a `.8086`-style directive — or stay a statement form only.

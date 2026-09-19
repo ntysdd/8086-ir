@@ -35,8 +35,8 @@ public final class Signedness {
         if (expression instanceof Expression.Leaf) {
             return of(((Expression.Leaf) expression).value(), names);
         }
-        if (expression instanceof Expression.Complement) {
-            return of(((Expression.Complement) expression).operand(), names);
+        if (expression instanceof Expression.Unary) {
+            return of(((Expression.Unary) expression).operand(), names);
         }
         Expression.Apply apply = (Expression.Apply) expression;
         switch (apply.operator()) {

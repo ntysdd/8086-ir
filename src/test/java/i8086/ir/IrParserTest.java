@@ -445,6 +445,26 @@ public final class IrParserTest {
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
     }
 
+    private static void roundTripsNegation() {
+        // Unary minus is a prefix like ~, so it binds tighter than everything that is
+        // written between two operands, and the brackets the printer puts back are the
+        // ones that keep the tree the same shape (docs/ir.md §5.5).
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry main\n"
+                + "\n"
+                + "main:\n"
+                + "    var a: i16\n"
+                + "    var b: i16\n"
+                + "    a = eval(-a)\n"
+                + "    a = expr(-a * b)\n"
+                + "    a = expr(-a - b)\n"
+                + "    a = expr(-(a + b))\n"
+                + "    a = expr(-(-a))\n"
+                + "    a = expr(-(~a))\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+    }
+
     private static void refusesTwoOperationsInEval() {
         CompileError refused = Assert.assertThrows(CompileError.class,
                 () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"

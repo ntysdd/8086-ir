@@ -106,10 +106,10 @@ final class Renamer {
             Expression.Leaf leaf = (Expression.Leaf) expression;
             return new Expression.Leaf(expression.position(), rename(leaf.value(), versions));
         }
-        if (expression instanceof Expression.Complement) {
-            Expression.Complement complement = (Expression.Complement) expression;
-            return new Expression.Complement(expression.position(),
-                    rename(complement.operand(), versions));
+        if (expression instanceof Expression.Unary) {
+            Expression.Unary unary = (Expression.Unary) expression;
+            return new Expression.Unary(expression.position(), unary.operator(),
+                    rename(unary.operand(), versions));
         }
         Expression.Apply apply = (Expression.Apply) expression;
         return new Expression.Apply(expression.position(), apply.operator(),

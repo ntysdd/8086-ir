@@ -268,10 +268,10 @@ public final class ConstantPropagation implements Pass {
             return new Expression.Leaf(expression.position(),
                     replaceConstants(leaf.value(), constants, form));
         }
-        if (expression instanceof Expression.Complement) {
-            Expression.Complement complement = (Expression.Complement) expression;
-            return new Expression.Complement(expression.position(),
-                    replaceConstants(complement.operand(), constants, form));
+        if (expression instanceof Expression.Unary) {
+            Expression.Unary unary = (Expression.Unary) expression;
+            return new Expression.Unary(expression.position(), unary.operator(),
+                    replaceConstants(unary.operand(), constants, form));
         }
         Expression.Apply apply = (Expression.Apply) expression;
         return new Expression.Apply(expression.position(), apply.operator(),

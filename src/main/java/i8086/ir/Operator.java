@@ -19,8 +19,21 @@ import java.util.Locale;
  */
 public enum Operator {
 
-    /** Bitwise complement, the one unary operator. */
+    /** Bitwise complement. */
     COMPLEMENT("~", 1, 7, Flags.VALUE),
+
+    /**
+     * {@code -x}: negation, which the surface spells with a prefix minus.
+     *
+     * <p>The same character also spells subtraction, and the two are told apart by
+     * position like every prefix operator: {@code a - b} is one subtraction and
+     * {@code -b} is one negation. They are not the same operation in the tree —
+     * {@code -b} and {@code 0 - b} are equal without being the same thing — but
+     * they are the same value, the same flags and, on this machine, the same
+     * instruction, so the difference is never observable ({@code docs/ir.md}
+     * §5.5).
+     */
+    NEGATE("-", 1, 7, Flags.VALUE),
 
     MULTIPLY("*", 2, 6, Flags.VALUE),
     DIVIDE("/", 2, 6, Flags.VALUE),
@@ -130,11 +143,38 @@ public enum Operator {
         }
     }
 
-    /** The operator this word names, or null if it names none. */
+    /**
+     * The operator this word names between two operands, or null if it names none.
+     *
+     * <p>A spelling may be shared by two operators of different arity — the infix
+     * minus of subtraction and the prefix minus of negation — so the two-operand one
+     * wins here. That is the whole of the convention, and it is why
+     * {@link #prefix(String)} exists: what a word means is decided by where it stands,
+     * and the caller is what knows where that is.
+     */
     public static Operator named(String word) {
         String name = word.toLowerCase(Locale.ROOT);
+        Operator unary = null;
         for (Operator operator : values()) {
-            if (operator.spelling.equals(name)) {
+            if (!operator.spelling.equals(name)) {
+                continue;
+            }
+            if (operator.arity != 1) {
+                return operator;
+            }
+            unary = operator;
+        }
+        return unary;
+    }
+
+    /**
+     * The operator this word names where a value would begin: the one that takes a
+     * single operand, or null if this word begins none.
+     */
+    public static Operator prefix(String word) {
+        String name = word.toLowerCase(Locale.ROOT);
+        for (Operator operator : values()) {
+            if (operator.arity == 1 && operator.spelling.equals(name)) {
                 return operator;
             }
         }

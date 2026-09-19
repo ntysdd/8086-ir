@@ -69,14 +69,30 @@ public abstract class Expression {
         }
     }
 
-    /** {@code ~x}, the one operator that takes a single operand. */
-    public static final class Complement extends Expression {
+    /**
+     * An operand and the operator in front of it.
+     *
+     * <p>One node for every operator that takes a single operand, rather than one
+     * node per operator: a walker over the tree then has one shape to handle
+     * instead of one per unary operator, and the failure mode of forgetting one is
+     * a silent miscompile rather than a compile error.
+     */
+    public static final class Unary extends Expression {
 
+        private final Operator operator;
         private final Expression operand;
 
-        public Complement(SourcePos position, Expression operand) {
+        public Unary(SourcePos position, Operator operator, Expression operand) {
             super(position);
+            if (operator.arity() != 1) {
+                throw new IllegalArgumentException(operator + " does not take a single operand");
+            }
+            this.operator = operator;
             this.operand = operand;
+        }
+
+        public Operator operator() {
+            return operator;
         }
 
         public Expression operand() {

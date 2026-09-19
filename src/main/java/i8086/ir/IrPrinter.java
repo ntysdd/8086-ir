@@ -157,15 +157,22 @@ public final class IrPrinter {
         if (expression instanceof Expression.Leaf) {
             return printValue(((Expression.Leaf) expression).value());
         }
-        if (expression instanceof Expression.Complement) {
-            Expression operand = ((Expression.Complement) expression).operand();
-            return "~" + printExpression(operand, Operator.COMPLEMENT.precedence(), true);
+        int precedence;
+        String text;
+        if (expression instanceof Expression.Unary) {
+            // The operator goes in front and its operand needs the same treatment as
+            // any other child, brackets included: - -a is -(-a) written worse.
+            Expression.Unary unary = (Expression.Unary) expression;
+            precedence = unary.operator().precedence();
+            text = unary.operator().spelling()
+                    + printExpression(unary.operand(), precedence, true);
+        } else {
+            Expression.Apply apply = (Expression.Apply) expression;
+            precedence = apply.operator().precedence();
+            text = printExpression(apply.left(), precedence, false)
+                    + " " + apply.operator().spelling() + " "
+                    + printExpression(apply.right(), precedence, true);
         }
-        Expression.Apply apply = (Expression.Apply) expression;
-        int precedence = apply.operator().precedence();
-        String text = printExpression(apply.left(), precedence, false)
-                + " " + apply.operator().spelling() + " "
-                + printExpression(apply.right(), precedence, true);
         boolean needsBrackets = precedence < parentPrecedence
                 || (precedence == parentPrecedence && rightOperand);
         return needsBrackets ? "(" + text + ")" : text;

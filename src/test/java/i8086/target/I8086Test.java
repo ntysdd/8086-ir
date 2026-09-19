@@ -3,6 +3,7 @@ package i8086.target;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.ir.Operator;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
 
@@ -32,6 +33,53 @@ public final class I8086Test {
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
         suite.add("I8086 says an instruction that writes nothing destroys nothing",
                 I8086Test::destroysNothing);
+        suite.add("I8086 names the operations its mnemonics spell",
+                I8086Test::namesStatementOperations);
+        suite.add("I8086 says why a mnemonic is not a statement",
+                I8086Test::explainsStatementRefusals);
+    }
+
+    /**
+     * The words a statement may begin with, and which operation each one names.
+     *
+     * <p>A word is here only when the operation it names on this machine is the
+     * operation the surface already has, which is why {@code inc} is not: it is one
+     * byte where {@code add} is three, and shorter precisely because it does not touch
+     * the carry, so it is not a spelling of {@code d = eval(d + 1)}
+     * ({@code docs/ir.md} §7.3).
+     */
+    private static void namesStatementOperations() {
+        Target target = Targets.byName("8086");
+        Assert.assertEquals(Operator.ADD, target.statementOperator("add"));
+        Assert.assertEquals(Operator.SUBTRACT, target.statementOperator("sub"));
+        Assert.assertEquals(Operator.XOR, target.statementOperator("xor"));
+        Assert.assertEquals(Operator.COMPLEMENT, target.statementOperator("not"));
+        Assert.assertEquals(Operator.NEGATE, target.statementOperator("neg"));
+        Assert.assertEquals(Operator.SHIFT_LEFT, target.statementOperator("shl"));
+        Assert.assertEquals(Operator.MULTIPLY_UNSIGNED, target.statementOperator("mul"));
+        Assert.assertEquals(Operator.DIVIDE_SIGNED, target.statementOperator("idiv"));
+        Assert.assertNull(target.statementOperator("inc"), "inc is not an operation");
+        Assert.assertNull(target.statementOperator("dec"), "dec is not an operation");
+        Assert.assertNull(target.statementOperator("xchg"), "xchg is not an operation");
+        Assert.assertNull(target.statementOperator("tuesday"), "nor is a word of its own");
+    }
+
+    private static void explainsStatementRefusals() {
+        Target target = Targets.byName("8086");
+        // The carry is the difference between inc and add 1, and a reader would not
+        // see it, so the refusal has to say so rather than list what is allowed.
+        Assert.assertTrue(target.statementProblem("inc", 1).contains("CF"),
+                target.statementProblem("inc", 1));
+        // One operand, and ax and dx read and written behind the writer's back.
+        Assert.assertTrue(target.statementProblem("mul", 1).contains("dx"),
+                target.statementProblem("mul", 1));
+        Assert.assertTrue(target.statementProblem("cwd", 0).contains("ax"),
+                target.statementProblem("cwd", 0));
+        // Two operands is the operation the surface has, so there is nothing to say.
+        Assert.assertNull(target.statementProblem("mul", 2), "mul d, s is the operation");
+        Assert.assertNull(target.statementProblem("add", 2), "add d, s is the operation");
+        // A word this target has never heard of is the parser's complaint to make.
+        Assert.assertNull(target.statementProblem("tuesday", 1), "not a mnemonic at all");
     }
 
     private static void destroyedRegisters() {

@@ -266,6 +266,130 @@ public final class I8086 implements Target {
     }
 
     /**
+     * The mnemonics that may begin a statement, and the operation each one names
+     * ({@code docs/ir.md} §7.3).
+     *
+     * <p>Every word here is a second spelling of an operation the surface already
+     * has, and the test is not whether the machine's instruction matches the
+     * surface's operation perfectly — {@code not} and {@code rol} do not — but
+     * whether the two spellings mean the same thing. {@code not d} and
+     * {@code d = eval(~d)} are one statement; {@code inc d} and {@code d = eval(d + 1)}
+     * are two different programs, and that is why {@code inc} is in
+     * {@link #STATEMENT_PROBLEMS} instead.
+     *
+     * <p>The words that are already operators — {@code adc}, {@code shl}, {@code mul}
+     * and the rest — are listed here too rather than looked up, so that this table is
+     * the whole answer to "what may begin a statement" and there is no second place to
+     * look.
+     */
+    private static final Map<String, Operator> STATEMENT_WORDS = statementWords();
+
+    private static Map<String, Operator> statementWords() {
+        Map<String, Operator> words = new LinkedHashMap<String, Operator>();
+        // The words the surface spells with a symbol, then the ones it already spells as
+        // words: 'adc' and 'shl' are operators with a single spelling, and 'add' and
+        // 'and' are second spellings of '+' and '&'.
+        statement(words, Operator.ADD, "add");
+        statement(words, Operator.SUBTRACT, "sub");
+        statement(words, Operator.AND, "and");
+        statement(words, Operator.OR, "or");
+        statement(words, Operator.XOR, "xor");
+        statement(words, Operator.COMPLEMENT, "not");
+        statement(words, Operator.NEGATE, "neg");
+        statement(words, Operator.ADD_WITH_CARRY, "adc");
+        statement(words, Operator.SUBTRACT_WITH_BORROW, "sbb");
+        statement(words, Operator.SHIFT_LEFT, "shl");
+        statement(words, Operator.SHIFT_RIGHT, "shr");
+        statement(words, Operator.SHIFT_ARITHMETIC, "sar");
+        statement(words, Operator.ROTATE_LEFT, "rol");
+        statement(words, Operator.ROTATE_RIGHT, "ror");
+        statement(words, Operator.ROTATE_LEFT_THROUGH_CARRY, "rcl");
+        statement(words, Operator.ROTATE_RIGHT_THROUGH_CARRY, "rcr");
+        statement(words, Operator.MULTIPLY_UNSIGNED, "mul");
+        statement(words, Operator.MULTIPLY_SIGNED, "imul");
+        statement(words, Operator.DIVIDE_UNSIGNED, "div");
+        statement(words, Operator.DIVIDE_SIGNED, "idiv");
+        return Collections.unmodifiableMap(words);
+    }
+
+    private static void statement(Map<String, Operator> words, Operator operator, String word) {
+        words.put(word, operator);
+    }
+
+    /**
+     * The mnemonics that look like statements and are not, with the reason, so that the
+     * refusal can say why instead of listing what is allowed ({@code docs/ir.md} §7.3).
+     *
+     * <p>{@code inc} is the one worth reading: it is one byte where {@code add} is
+     * three, and it is shorter precisely because it does not touch the carry — which is
+     * the same fact the form table records in {@link Form#keepsFlags()}, and the same
+     * reason it cannot be a spelling of {@code d = eval(d + 1)}.
+     */
+    private static final Map<String, String> STATEMENT_PROBLEMS = statementProblems();
+
+    /**
+     * The words that are a statement at one operand count and not at another.
+     *
+     * <p>{@code mul d, s} is the surface's operation and {@code mul r} is the machine's
+     * one-operand form, which reads and writes {@code ax} and {@code dx} behind the
+     * writer's back. So the count is part of the question and not part of the answer:
+     * it is what the caller passes in ({@link Target#statementProblem(String, int)}).
+     */
+    private static final Map<String, String> ONE_OPERAND_PROBLEMS = oneOperandProblems();
+
+    private static Map<String, String> statementProblems() {
+        Map<String, String> problems = new LinkedHashMap<String, String>();
+        for (String word : Arrays.asList("inc", "dec")) {
+            problems.put(word, "'" + word + "' leaves CF alone where 'd = eval(d + 1)' defines "
+                    + "it, so the two are different programs and the difference is one a reader "
+                    + "would not see: write the 'eval' form, and where the flags turn out to "
+                    + "matter to nobody, the compiler reaches the one-byte " + word + " by itself "
+                    + "(docs/ir.md §7.3)");
+        }
+        for (String word : Arrays.asList("cwd", "cbw")) {
+            problems.put(word, "'" + word + "' works on ax (and dx) with no operand saying so, and "
+                    + "the surface has no operation for it (docs/ir.md §7.3)");
+        }
+        problems.put("xchg", "'xchg' does two writes at once, which is not one operation: write "
+                + "the two assignments, or keep it in an inline block (docs/ir.md §7.3, §9)");
+        problems.put("lea", "'lea' is an address and an addressing mode, not an operation: a "
+                + "label's address is written 'p = msg', and a computed one has no surface form "
+                + "yet (docs/ir.md §5.3, §12 item 12)");
+        for (String word : Arrays.asList("push", "pop", "in", "out", "int", "into", "iret",
+                "hlt", "cli", "sti", "lahf", "sahf", "pushf", "popf", "loop", "jcxz",
+                "movsb", "movsw", "stosb", "stosw", "lodsb", "lodsw")) {
+            problems.put(word, "'" + word + "' is a target operation the surface has no spelling "
+                    + "for yet, so it is written in an inline block (docs/ir.md §11, §9)");
+        }
+        return Collections.unmodifiableMap(problems);
+    }
+
+    private static Map<String, String> oneOperandProblems() {
+        Map<String, String> problems = new LinkedHashMap<String, String>();
+        for (String word : Arrays.asList("mul", "imul", "div", "idiv")) {
+            problems.put(word, "the one-operand '" + word + "' "
+                    + "multiplies or divides what is in ax and leaves part of its answer in dx, "
+                    + "which is not the operation '" + word + "' names here: that one takes two "
+                    + "operands and names its destination (docs/ir.md §7.3, §12 item 12)");
+        }
+        return Collections.unmodifiableMap(problems);
+    }
+
+    @Override
+    public Operator statementOperator(String word) {
+        return STATEMENT_WORDS.get(word);
+    }
+
+    @Override
+    public String statementProblem(String word, int operands) {
+        String problem = STATEMENT_PROBLEMS.get(word);
+        if (problem != null) {
+            return problem;
+        }
+        return operands == 1 ? ONE_OPERAND_PROBLEMS.get(word) : null;
+    }
+
+    /**
      * The registers a value may live in, in the order the allocator should use
      * them up.
      *
@@ -322,6 +446,11 @@ public final class I8086 implements Target {
         table.get(Operator.SUBTRACT).add(new Form("dec", registers(1), Long.valueOf(1), false, 1));
 
         table.put(Operator.COMPLEMENT, one(new Form("not", registers(1), 2)));
+
+        // NEG is subtraction from zero, and it is two bytes where building the zero
+        // and subtracting it is seven. Its flags are the subtraction's, so nothing
+        // is given up by preferring it (docs/ir.md §5.5).
+        table.put(Operator.NEGATE, one(new Form("neg", registers(1), 2)));
         shifts(table, Operator.SHIFT_LEFT, "shl");
         shifts(table, Operator.SHIFT_RIGHT, "shr");
         shifts(table, Operator.SHIFT_ARITHMETIC, "sar");

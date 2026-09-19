@@ -106,6 +106,40 @@ public interface Target {
     }
 
     /**
+     * The operation a mnemonic names when it begins a statement, or null when this
+     * target does not accept the instruction-shaped form ({@code docs/ir.md} §7.3).
+     *
+     * <p>This is the same kind of question as {@link #condition(String)}: the surface
+     * has a word and the target knows whether it is one of its own. The answer is an
+     * operator rather than a mnemonic, because the operator is the vocabulary the rest
+     * of the compiler is written in — which is what keeps the machine's words on this
+     * side of the boundary ({@code AGENTS.md}, invariant 2).
+     *
+     * <p>A word belongs in the table only when the operation it names on this machine
+     * is the operation the surface already has. What that rules out is the point of
+     * having the table here rather than in the parser: the surface's {@code -} is
+     * {@code SUB}, and this machine's {@code inc} is <em>not</em> {@code ADD 1} — it
+     * leaves the carry alone — so {@code inc} is not a spelling of anything
+     * ({@code docs/ir.md} §7.3).
+     */
+    default Operator statementOperator(String word) {
+        return null;
+    }
+
+    /**
+     * Why this mnemonic cannot begin a statement here, or null when the word means
+     * nothing to this target and the complaint is the parser's to make.
+     *
+     * <p>Asked with the number of operands that were written, because on a real
+     * machine that is often what decides the answer: {@code mul s, t} is the surface's
+     * operation and {@code mul r} is a different instruction that reads and writes
+     * {@code ax} and {@code dx} behind the writer's back.
+     */
+    default String statementProblem(String word, int operands) {
+        return null;
+    }
+
+    /**
      * The registers a value may live in, in the order they should be used up.
      *
      * <p>This is the register class the allocator colours against: what is in the

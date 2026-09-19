@@ -98,7 +98,8 @@ public final class UnreadFlags implements Pass {
     private static Expression tree(Operation operation) {
         List<Value> operands = operation.operands();
         if (operation.operator().arity() == 1) {
-            return new Expression.Complement(operation.position(), leaf(operands.get(0)));
+            return new Expression.Unary(operation.position(), operation.operator(),
+                    leaf(operands.get(0)));
         }
         return new Expression.Apply(operation.position(), operation.operator(),
                 leaf(operands.get(0)), leaf(operands.get(1)));

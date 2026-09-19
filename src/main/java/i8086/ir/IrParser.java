@@ -444,11 +444,158 @@ public final class IrParser {
             return new Item.Branch(first.position(), target.condition(first.name()), where);
         }
         if (first.is(TokenKind.IDENT)) {
-            throw notImplemented(first, statementDescription(first));
+            return parseInstructionStatement(first);
         }
         throw new CompileError(first.position(),
                 "expected a label, a data definition, 'var', an assignment, 'ret', 'asm', "
                         + "'cmp', 'jmp' or a condition, but found " + first.describe());
+    }
+
+    /**
+     * A statement written the way the machine writes it: an operation whose
+     * destination is spelled out ({@code docs/ir.md} §7.3).
+     *
+     * <p>{@code OP d, s} is the same statement as {@code d = eval(d OP s)} and is
+     * built as that, so nothing downstream — the verifier, the passes, the printer —
+     * has to know this spelling exists. Which words are accepted is the target's
+     * answer, because whether a word names the operation it looks like is a fact about
+     * the machine ({@link Target#statementOperator(String)}).
+     *
+     * <p>{@code mov} is handled here rather than asked about, because it is not an
+     * operation: it is the bare assignment of §5.3, which the surface already spells
+     * with {@code =}.
+     */
+    private Item parseInstructionStatement(Token first) {
+        String word = first.name();
+        boolean move = word.equals("mov");
+        next();
+        // The operands are read before the question is asked, because how many were
+        // written is part of what the target is asked about: 'mul s, t' is an
+        // operation and 'mul s' is an instruction that works on ax and dx.
+        List<Value> operands = parseInstructionOperands();
+        endOfLine();
+        if (move) {
+            return moveStatement(first, operands);
+        }
+        Operator operator = target.statementOperator(word);
+        if (operator == null || operator.arity() != operands.size()) {
+            throw statementRefusal(first, operands.size(), operator);
+        }
+        Place destination = place(operands.get(0));
+        if (destination == null) {
+            throw new CompileError(first.position(),
+                    "the first operand of '" + first.text() + "' is where the result goes, so it "
+                            + "is a variable or a memory operand, and a literal is neither "
+                            + "(docs/ir.md §7.3)");
+        }
+        return new Item.Assign(first.position(), destination,
+                new Value.Eval(first.position(),
+                        new Operation(first.position(), operator, operands)));
+    }
+
+    /** The operands of an instruction-shaped statement, in the order they were written. */
+    private List<Value> parseInstructionOperands() {
+        List<Value> operands = new ArrayList<Value>();
+        if (peek().is(TokenKind.NEWLINE) || peek().isEof()) {
+            return operands;
+        }
+        operands.add(parseInstructionOperand("an operand"));
+        while (peek().is(",")) {
+            next();
+            operands.add(parseInstructionOperand("an operand"));
+        }
+        if (!peek().is(TokenKind.NEWLINE) && !peek().isEof()) {
+            throw new CompileError(peek().position(),
+                    "an instruction-shaped statement is one operation with its operands written "
+                            + "out, so nothing here has structure: anything computed is written "
+                            + "with expr(...) in a statement of its own (docs/ir.md §5.4, §7.3)");
+        }
+        return operands;
+    }
+
+    /** {@code mov d, s}, which is the assignment {@code d = s} (§5.3). */
+    private Item moveStatement(Token first, List<Value> operands) {
+        if (operands.size() != 2) {
+            throw new CompileError(first.position(),
+                    "'mov' takes a destination and a value, and " + operands.size()
+                            + (operands.size() == 1 ? " was" : " were") + " written; the "
+                            + "assignment is also spelled 'd = s' (docs/ir.md §5.3, §7.3)");
+        }
+        Place destination = place(operands.get(0));
+        if (destination == null) {
+            throw new CompileError(first.position(),
+                    "'mov' needs somewhere to put the value: a variable or a memory operand, "
+                            + "not a literal (docs/ir.md §5.3)");
+        }
+        return new Item.Assign(first.position(), destination, operands.get(1));
+    }
+
+    /** The place a value can stand in as the destination of a statement, or null. */
+    private static Place place(Value value) {
+        if (value instanceof Value.Name) {
+            return new Place.Name(value.position(), ((Value.Name) value).name());
+        }
+        if (value instanceof Value.Memory) {
+            return new Place.Memory(value.position(), ((Value.Memory) value).operand());
+        }
+        return null;
+    }
+
+    /**
+     * One operand of an instruction-shaped statement: a variable, a memory operand or
+     * a literal, and never a register name.
+     *
+     * <p>A register name is refused here and not everywhere, because a variable may
+     * legally be called {@code ax} ({@code docs/ir.md} §3.1) and {@code mov ax, 1}
+     * would then quietly mean a variable rather than the register the writer meant
+     * ({@code docs/ir.md} §7.3).
+     */
+    private Value parseInstructionOperand(String what) {
+        Token at = peek();
+        if (at.is(TokenKind.IDENT) && target.isRegister(at.name())) {
+            throw new CompileError(at.position(),
+                    "'" + at.text() + "' is a register, and a register is not an operand here: "
+                            + "this spelling is for operations on variables and memory, and a "
+                            + "value that has to be in a register of its own is written in an "
+                            + "inline block (docs/ir.md §7.3, §9, §12 item 12)");
+        }
+        return parseOperationOperand(what);
+    }
+
+    /**
+     * The refusal for a word that cannot begin a statement here.
+     *
+     * <p>The target's reason comes first, because only the target knows why its own
+     * machine's word is not the operation it looks like. The surface's own words come
+     * second, for the ones that are real constructs of the surface not built yet.
+     */
+    private CompileError statementRefusal(Token at, int operands, Operator operator) {
+        String problem = target.statementProblem(at.name(), operands);
+        if (problem != null) {
+            return new CompileError(at.position(), problem);
+        }
+        String surface = statementDescription(at);
+        if (surface != null) {
+            return notImplemented(at, surface);
+        }
+        if (operator != null) {
+            return new CompileError(at.position(), "'" + at.text() + "' takes " + operator.arity()
+                    + " operand" + (operator.arity() == 1 ? "" : "s") + " and " + operands
+                    + (operands == 1 ? " was" : " were") + " written; the operation itself is "
+                    + "written " + evalSpelling(operator) + " (docs/ir.md §5.1, §7.3)");
+        }
+        return new CompileError(at.position(),
+                "a statement does not begin with '" + at.text() + "': an operation is written "
+                        + "'d = eval(d + 1)' or as the instruction-shaped statement 'add d, 1', "
+                        + "and an instruction this surface has no operation for goes in an "
+                        + "inline block (docs/ir.md §5.1, §7.3, §9)");
+    }
+
+    /** How an operation is written in the form everything downstream understands. */
+    private static String evalSpelling(Operator operator) {
+        return operator.arity() == 1
+                ? "'d = eval(" + operator.spelling() + "d)'"
+                : "'d = eval(d " + operator.spelling() + " s)'";
     }
 
     private Item parseCompare() {
@@ -595,10 +742,10 @@ public final class IrParser {
      */
     private Operation parseOperation() {
         Token at = peek();
-        if (operatorHere() == Operator.COMPLEMENT) {
+        Operator prefix = prefixOperatorHere();
+        if (prefix != null) {
             next();
-            return new Operation(at.position(), Operator.COMPLEMENT,
-                    one(parseOperationOperand("an operand")));
+            return new Operation(at.position(), prefix, one(parseOperationOperand("an operand")));
         }
 
         Value left = parseOperationOperand("the first operand");
@@ -702,9 +849,10 @@ public final class IrParser {
 
     private Expression parseUnaryExpression() {
         Token at = peek();
-        if (operatorHere() == Operator.COMPLEMENT) {
+        Operator prefix = prefixOperatorHere();
+        if (prefix != null) {
             next();
-            return new Expression.Complement(at.position(), parseUnaryExpression());
+            return new Expression.Unary(at.position(), prefix, parseUnaryExpression());
         }
         if (at.is("(")) {
             // Brackets are syntax, not a node: the tree already says what binds to
@@ -725,6 +873,23 @@ public final class IrParser {
         }
         if (token.is(TokenKind.IDENT)) {
             return Operator.named(token.name());
+        }
+        return null;
+    }
+
+    /**
+     * The operator that begins here where a value would, or null if a value does.
+     *
+     * <p>Position is what tells a shared spelling apart: {@code -} in front of an
+     * operand is negation and between two of them is subtraction.
+     */
+    private Operator prefixOperatorHere() {
+        Token token = peek();
+        if (token.is(TokenKind.PUNCT)) {
+            return Operator.prefix(token.text());
+        }
+        if (token.is(TokenKind.IDENT)) {
+            return Operator.prefix(token.name());
         }
         return null;
     }
@@ -873,11 +1038,7 @@ public final class IrParser {
         if (name.startsWith("set")) {
             return "the setcc family (docs/ir.md §4.4)";
         }
-        if (name.startsWith(".if") || name.startsWith(".else")
-                || name.startsWith(".end") || name.startsWith(".while")) {
-            return "control flow sugar (docs/ir.md §7.2)";
-        }
-        return "a statement beginning with '" + first.text() + "'";
+        return null;
     }
 
     /** What follows a label on its own line: a data definition, or nothing. */

@@ -109,11 +109,11 @@ final class Folder {
         if (expression instanceof Expression.Leaf) {
             return value(((Expression.Leaf) expression).value(), constants, form);
         }
-        if (expression instanceof Expression.Complement) {
-            Long operand = expression(((Expression.Complement) expression).operand(), constants,
-                    type, form);
+        if (expression instanceof Expression.Unary) {
+            Expression.Unary unary = (Expression.Unary) expression;
+            Long operand = expression(unary.operand(), constants, type, form);
             return operand == null ? null
-                    : apply(Operator.COMPLEMENT, operand.longValue(), 0, type.bytes());
+                    : apply(unary.operator(), operand.longValue(), 0, type.bytes());
         }
         Expression.Apply apply = (Expression.Apply) expression;
         if (apply.operator().dependsOnSignedness() || apply.operator().readsFlags()) {
@@ -151,6 +151,10 @@ final class Folder {
         switch (operator) {
             case COMPLEMENT:
                 return Long.valueOf(mask(~first, bytes));
+            case NEGATE:
+                // Two's complement, so the same bits as 0 - x at this width
+                // (docs/ir.md §5.5).
+                return Long.valueOf(mask(-first, bytes));
             case ADD:
                 return Long.valueOf(mask(first + second, bytes));
             case SUBTRACT:

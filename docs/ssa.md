@@ -206,7 +206,7 @@ properties of the form rather than of any one pass:
 * **A pass builds the form it means.** The form is a value; a pass that changes
   one thing answers with a new one, and the version tables follow the content —
   deleting a statement deletes the version it defined, and a version nothing
-  defines is not a version ({@code SsaForm.rewriting}). A pass may not invent a
+  defines is not a version (`SsaForm.rewriting`). A pass may not invent a
   version.
 * **What a pass may not assume is written down.** Two occurrences of a variable's
   undefined value are not the same value (§5), and while a module contains an
@@ -238,7 +238,7 @@ construct, and does not want one.
 The price is precision rather than correctness: the variable is one mutable name
 again, so the allocator sees one interval where the form had three. That is the
 shape the input had and the shape the back end was written for
-({@code docs/ir.md} §3.1).
+(`docs/ir.md` §3.1).
 
 ## 9. Not here yet
 
@@ -256,11 +256,11 @@ shape the input had and the shape the back end was written for
   something can say when two accesses are the same memory, a load is not reusable.
 * **An inline block that says what it reads.** Until it can, a module containing
   one is optimised conservatively (§4, §7). That is the missing half of
-  {@code docs/ir.md} §9.
+  `docs/ir.md` §9.
 * **The rest of the pass list.** The three of §7 are what exists; copy
   propagation, value numbering, load elimination, loop-invariant code motion and
   branch simplification are named in `README.md` and not written. Reassociating an
-  expression, folding a comparison, and the identities ({@code x + 0},
-  {@code x * 1}) are all waiting on the same thing: a pass has to be able to ask
+  expression, folding a comparison, and the identities (`x + 0`,
+  `x * 1`) are all waiting on the same thing: a pass has to be able to ask
   what the flags of an operation are worth, and today it can only ask whether
   anybody reads them.
