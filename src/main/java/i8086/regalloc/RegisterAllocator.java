@@ -56,6 +56,9 @@ public final class RegisterAllocator {
 
     private Selection run(Selection selection) {
         lastSeen.putAll(lastSeen(selection));
+        if (selection.controlFlow()) {
+            keepValuesThatCrossABlockAlive(selection);
+        }
 
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
         int index = 0;
@@ -67,7 +70,52 @@ public final class RegisterAllocator {
             }
             pieces.add(piece.with(rewritten));
         }
-        return new Selection(pieces);
+        return new Selection(pieces, selection.controlFlow());
+    }
+
+    /**
+     * Stops reusing the register of anything that lives across a block boundary.
+     *
+     * <p>The intervals here are linear, and execution is not. A value whose life
+     * spans a label is therefore given its register for the rest of the function,
+     * which is enough to be right: two values that never share a register cannot
+     * interfere, whatever the control flow does. Values that live entirely inside
+     * one block may still share, because a block is entered at its top and runs
+     * forwards.
+     */
+    private void keepValuesThatCrossABlockAlive(Selection selection) {
+        int total = selection.instructions().size();
+        Map<String, Integer> first = new LinkedHashMap<String, Integer>();
+        List<Integer> boundaries = new ArrayList<Integer>();
+
+        int index = 0;
+        for (Selection.Piece piece : selection.pieces()) {
+            if (piece.item() instanceof i8086.ir.Item.Label) {
+                boundaries.add(Integer.valueOf(index));
+            }
+            for (Instruction instruction : piece.instructions()) {
+                for (Operand operand : instruction.operands()) {
+                    if (operand instanceof Operand.Virtual) {
+                        String name = ((Operand.Virtual) operand).name();
+                        if (!first.containsKey(name)) {
+                            first.put(name, Integer.valueOf(index));
+                        }
+                    }
+                }
+                index++;
+            }
+        }
+
+        for (Map.Entry<String, Integer> entry : first.entrySet()) {
+            int from = entry.getValue().intValue();
+            int to = lastSeen.get(entry.getKey()).intValue();
+            for (Integer boundary : boundaries) {
+                if (from < boundary.intValue() && boundary.intValue() <= to) {
+                    lastSeen.put(entry.getKey(), Integer.valueOf(total));
+                    break;
+                }
+            }
+        }
     }
 
     /** Where each value appears for the last time, over the whole run. */

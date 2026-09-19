@@ -509,6 +509,18 @@ Labels, `jmp`, and the `jcc` family. This is what the pipeline sees.
   the canonical labels-and-branches form, so `print(parse(text))` is not `text`
   unless `text` was already canonical — while `parse(print(ir)) == ir` continues
   to hold. The two invariants are about different things and both are tested.
+* The labels the sugar invents are named so that no name a person can write looks
+  like one, and they are numbered in the order they are created, so the output is
+  the same on every run (`AGENTS.md`, invariant 6).
+* Choosing a signed or an unsigned test needs the signedness of what is compared,
+  and that is written in the declarations — which may come after the comparison.
+  So the declarations are read first; the parse proper is still the authority on
+  what a declaration is, and the earlier reading only feeds an inference. A
+  comparison that mentions no variable at all is unsigned, which is what the
+  plainest mnemonics say: `jb` and `ja`.
+* The sugar needs one thing of the target beyond the conditions themselves: their
+  opposites. `jb` against `jnc` is not a rule anybody could guess, so it is asked
+  rather than derived.
 
 ## 8. Storage state and the stack
 

@@ -53,13 +53,31 @@ public final class Selection {
     }
 
     private final List<Piece> pieces;
+    private final boolean controlFlow;
+
+    public Selection(List<Piece> pieces, boolean controlFlow) {
+        this.pieces = Collections.unmodifiableList(new ArrayList<Piece>(pieces));
+        this.controlFlow = controlFlow;
+    }
 
     public Selection(List<Piece> pieces) {
-        this.pieces = Collections.unmodifiableList(new ArrayList<Piece>(pieces));
+        this(pieces, false);
     }
 
     public List<Piece> pieces() {
         return pieces;
+    }
+
+    /**
+     * Whether any of the instructions goes somewhere.
+     *
+     * <p>What has to know is the allocator: a register given away inside a loop
+     * body would be read again by the next time round, and the intervals it works
+     * with are linear. The selector is what knows, because the selector is what
+     * emitted them.
+     */
+    public boolean controlFlow() {
+        return controlFlow;
     }
 
     /** Every instruction, in order, with the pieces flattened away. */

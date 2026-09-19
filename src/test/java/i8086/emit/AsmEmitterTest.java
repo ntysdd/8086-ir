@@ -52,7 +52,7 @@ public final class AsmEmitterTest {
         suite.add("Asm emitter writes the whole program", AsmEmitterTest::writesWholeProgram);
         suite.add("Asm emitter writes arithmetic", AsmEmitterTest::writesArithmetic);
         suite.add("Asm emitter refuses a branch it cannot select yet",
-                AsmEmitterTest::refusesBranch);
+                AsmEmitterTest::writesALoop);
         suite.add("Asm emitter drops the target and the entry point",
                 AsmEmitterTest::dropsModuleMetadata);
         suite.add("Asm emitter flattens an inline block", AsmEmitterTest::flattensInlineBlock);
@@ -147,14 +147,33 @@ public final class AsmEmitterTest {
     }
 
     /**
-     * A comparison is not selectable yet, so the whole path refuses it — and the
-     * refusal comes from the selector, which is where the missing work is.
+     * A loop, from the sugar to the text, with nothing in between but the pieces
+     * that were already there. The two variables live across a label, so they get a
+     * register each and keep it.
      */
-    private static void refusesBranch() {
-        CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> emit("target 8086\norg 0\nentry a\na:\n    var x: u16\n    jmp a\n"));
-        Assert.assertEquals("test.ir:6:5", refused.position().toString());
-        Assert.assertTrue(refused.getMessage().contains("instruction selection cannot emit"),
-                "the refusal says which stage is missing: " + refused.getMessage());
+    private static void writesALoop() {
+        String assembly = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var i: u16\n"
+                + "    var n: u16\n"
+                + "    i = 0\n"
+                + "    n = 3\n"
+                + "    .while i < n\n"
+                + "        i = eval(i + 1)\n"
+                + "    .endw\n"
+                + "    ret\n");
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "main:\n"
+                + "    mov ax, 0\n"
+                + "    mov cx, 3\n"
+                + "\n"
+                + "$lbl0:\n"
+                + "    cmp ax, cx\n"
+                + "    jnc $lbl1\n"
+                + "    add ax, 1\n"
+                + "    jmp $lbl0\n"
+                + "\n"
+                + "$lbl1:\n"
+                + "    ret\n", assembly);
     }
 }

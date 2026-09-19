@@ -359,17 +359,12 @@ public final class IrParserTest {
     }
 
     private static void namesUnimplemented() {
-        CompileError sugar = Assert.assertRefused("test.ir:4:1",
-                () -> parse("target 8086\norg 0\nentry a\n.if 1\n"));
-        Assert.assertTrue(sugar.getMessage().startsWith("not implemented yet:"),
-                "the sugar says so: " + sugar.getMessage());
-        Assert.assertTrue(sugar.getMessage().contains("docs/ir.md"),
-                "and points at the section that specifies it");
-
         CompileError setcc = Assert.assertRefused("test.ir:4:1",
                 () -> parse("target 8086\norg 0\nentry a\nsetc x\n"));
-        Assert.assertTrue(setcc.getMessage().contains("setcc family"),
-                "and so does the setcc family: " + setcc.getMessage());
+        Assert.assertTrue(setcc.getMessage().startsWith("not implemented yet:"),
+                "the setcc family says so: " + setcc.getMessage());
+        Assert.assertTrue(setcc.getMessage().contains("docs/ir.md"),
+                "and points at the section that specifies it: " + setcc.getMessage());
     }
 
     private static void readsExpressions() {

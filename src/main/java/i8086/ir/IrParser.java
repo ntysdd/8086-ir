@@ -13,8 +13,11 @@ import i8086.target.Targets;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -47,10 +50,25 @@ public final class IrParser {
             "var", "ret", "asm", "jmp", "cmp", "test",
             "target", "org", "entry"));
 
+    /** How a generated label is named: no name a person can write looks like this. */
+    private static final String GENERATED_LABEL = "$lbl";
+
     private final String file;
     private final List<Token> tokens;
     private int index;
     private Target target;
+    private int generatedLabels;
+
+    /**
+     * The type of every declared variable, read before anything else.
+     *
+     * <p>The control-flow sugar has to know the signedness of the values it
+     * compares — that is what decides between {@code jb} and {@code jl} — and that
+     * is written in the declarations, which may come after it. So the
+     * declarations are read first; the parse proper is still the authority on what
+     * a declaration is, and this only feeds an inference.
+     */
+    private Map<String, Type> declaredTypes = Collections.emptyMap();
 
     private IrParser(String file, List<Token> tokens) {
         this.file = file;
@@ -62,6 +80,7 @@ public final class IrParser {
     }
 
     private Module parseModule() {
+        declaredTypes = declaredTypes(tokens);
         SourcePos start = peek().position();
         String target = null;
         String entry = null;
@@ -89,10 +108,29 @@ public final class IrParser {
 
         List<Item> items = new ArrayList<Item>();
         while (!peek().isEof()) {
-            items.add(parseItem());
-            skipNewlines();
+            items.addAll(parseItems());
+            if (!peek().isEof()) {
+                throw new CompileError(peek().position(),
+                        "'" + peek().text() + "' closes nothing: there is no '.if' or '.while' "
+                                + "for it to end");
+            }
         }
         return new Module(target, origin.intValue(), entry, entryPosition, items);
+    }
+
+    /** The type of every name a {@code var} declares, for the sugar to reason with. */
+    private static Map<String, Type> declaredTypes(List<Token> tokens) {
+        Map<String, Type> types = new LinkedHashMap<String, Type>();
+        for (int i = 0; i + 3 < tokens.size(); i++) {
+            if (tokens.get(i).isName("var") && tokens.get(i + 1).is(TokenKind.IDENT)
+                    && tokens.get(i + 2).is(":") && tokens.get(i + 3).is(TokenKind.IDENT)) {
+                Type type = Type.named(tokens.get(i + 3).name());
+                if (type != null) {
+                    types.put(tokens.get(i + 1).name(), type);
+                }
+            }
+        }
+        return types;
     }
 
     private static boolean isHeaderWord(String name) {
@@ -130,7 +168,205 @@ public final class IrParser {
         return expect(TokenKind.IDENT, "a label name after 'entry'").name();
     }
 
-    private Item parseItem() {
+    /**
+     * Every item until the end of the file or until something closes a block.
+     *
+     * <p>What closes a block is not decided here: this stops, and the construct
+     * that opened the block says whether the word it stopped at is the one it was
+     * waiting for.
+     */
+    private List<Item> parseItems() {
+        List<Item> items = new ArrayList<Item>();
+        while (!peek().isEof() && !closesABlock(peek())) {
+            items.addAll(parseItem());
+            skipNewlines();
+        }
+        return items;
+    }
+
+    private static boolean closesABlock(Token token) {
+        return token.is(TokenKind.IDENT) && (token.name().equals(".elseif")
+                || token.name().equals(".else") || token.name().equals(".endif")
+                || token.name().equals(".endw"));
+    }
+
+    private List<Item> parseItem() {
+        Token first = peek();
+
+        if (first.isName(".if")) {
+            return parseIf(next());
+        }
+        if (first.isName(".while")) {
+            return parseWhile(next());
+        }
+        if (first.is(TokenKind.IDENT) && first.name().startsWith(".")) {
+            throw new CompileError(first.position(),
+                    "'" + first.text() + "' is not a directive of this surface");
+        }
+
+        List<Item> one = new ArrayList<Item>();
+        one.add(parseStatement());
+        return one;
+    }
+
+    /**
+     * {@code .if cond ... .elseif cond ... .else ... .endif}, into tests and jumps:
+     *
+     * <pre>
+     *   cmp ...
+     *   j{not cond} L1      ; past this branch when the test fails
+     *   ...                 ; the body
+     *   jmp END
+     * L1: ...
+     * END:
+     * </pre>
+     *
+     * <p>The shape is {@code docs/ir.md} §7.2's: the sugar is normalised away
+     * here, and the printer prints what it became.
+     */
+    private List<Item> parseIf(Token keyword) {
+        SourcePos at = keyword.position();
+        List<Item> out = new ArrayList<Item>();
+        String end = null;
+        String next = freshLabel();
+        out.addAll(test(parseCondition("'.if'"), next, at));
+        endOfLine();
+
+        while (true) {
+            out.addAll(parseItems());
+            if (peek().isName(".elseif")) {
+                Token here = next();
+                end = end == null ? freshLabel() : end;
+                out.add(jump(end, here.position()));
+                out.add(label(next, here.position()));
+                next = freshLabel();
+                out.addAll(test(parseCondition("'.elseif'"), next, here.position()));
+                endOfLine();
+                continue;
+            }
+            if (peek().isName(".else")) {
+                Token here = next();
+                endOfLine();
+                end = end == null ? freshLabel() : end;
+                out.add(jump(end, here.position()));
+                out.add(label(next, here.position()));
+                out.addAll(parseItems());
+            } else {
+                out.add(label(next, at));
+            }
+            if (end != null) {
+                out.add(label(end, at));
+            }
+            require(peek().isName(".endif"), peek().position(),
+                    "expected '.endif' to close the '.if' at " + at);
+            next();
+            endOfLine();
+            return out;
+        }
+    }
+
+    /** {@code .while cond ... .endw}: test at the top, jump back at the bottom. */
+    private List<Item> parseWhile(Token keyword) {
+        SourcePos at = keyword.position();
+        List<Item> out = new ArrayList<Item>();
+        String top = freshLabel();
+        String end = freshLabel();
+        out.add(label(top, at));
+        out.addAll(test(parseCondition("'.while'"), end, at));
+        endOfLine();
+        out.addAll(parseItems());
+        out.add(jump(top, at));
+        out.add(label(end, at));
+        require(peek().isName(".endw"), peek().position(),
+                "expected '.endw' to close the '.while' at " + at);
+        next();
+        endOfLine();
+        return out;
+    }
+
+    /** One test of the sugar: compare, then branch past this branch when it fails. */
+    private List<Item> test(Condition condition, String falseTarget, SourcePos where) {
+        List<Item> out = new ArrayList<Item>();
+        out.add(new Item.Compare(where, Item.Compare.Kind.CMP, condition.left, condition.right));
+        String taken = target.conditionFor(condition.comparison, condition.signed);
+        out.add(new Item.Branch(where, target.negate(taken), falseTarget));
+        return out;
+    }
+
+    /** A comparison as the sugar writes one, with the signedness its operands imply. */
+    private Condition parseCondition(String what) {
+        Token at = peek();
+        Value left = parseValue();
+        Token operator = peek();
+        Comparison comparison = operator.is(TokenKind.PUNCT)
+                ? Comparison.named(operator.text()) : null;
+        require(comparison != null, operator.position(),
+                what + " needs a comparison — '==', '!=', '<', '<=', '>' or '>=' — but found "
+                        + operator.describe());
+        next();
+        Value right = parseValue();
+        return new Condition(left, comparison, right,
+                comparisonSignedness(left, right, comparison, at.position()));
+    }
+
+    /**
+     * Whether the comparison is between signed values.
+     *
+     * <p>A variable says; a literal and a load do not, so they take the answer
+     * from the other side. When nothing says, the answer is unsigned, which is
+     * what the plainest mnemonics say: {@code jb} and {@code ja}.
+     */
+    private boolean comparisonSignedness(Value left, Value right, Comparison comparison,
+                                         SourcePos at) {
+        Boolean leftSigned = signednessOf(left);
+        Boolean rightSigned = signednessOf(right);
+        require(leftSigned == null || rightSigned == null || leftSigned.equals(rightSigned), at,
+                "the two sides of '" + comparison.spelling() + "' are one signed and one unsigned, "
+                        + "so which test to use would be a guess; make them the same type, or "
+                        + "compare through a variable of the type you mean (docs/ir.md §3.5)");
+        if (leftSigned != null) {
+            return leftSigned.booleanValue();
+        }
+        return rightSigned != null && rightSigned.booleanValue();
+    }
+
+    private Boolean signednessOf(Value value) {
+        if (value instanceof Value.Name) {
+            Type type = declaredTypes.get(((Value.Name) value).name());
+            return type == null ? null : Boolean.valueOf(type.isSigned());
+        }
+        return null;
+    }
+
+    private String freshLabel() {
+        return GENERATED_LABEL + generatedLabels++;
+    }
+
+    private static Item label(String name, SourcePos where) {
+        return new Item.Label(where, name);
+    }
+
+    private static Item jump(String target, SourcePos where) {
+        return new Item.Jump(where, target);
+    }
+
+    /** A comparison the sugar is about to turn into flags. */
+    private static final class Condition {
+
+        private final Value left;
+        private final Comparison comparison;
+        private final Value right;
+        private final boolean signed;
+
+        Condition(Value left, Comparison comparison, Value right, boolean signed) {
+            this.left = left;
+            this.comparison = comparison;
+            this.right = right;
+            this.signed = signed;
+        }
+    }
+
+    private Item parseStatement() {
         Token first = peek();
 
         // Before labels: `es:[p]` starts with the same two tokens as a label,

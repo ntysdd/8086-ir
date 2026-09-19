@@ -223,18 +223,23 @@ Working today:
 
 * The IR surface of [`docs/ir.md`](docs/ir.md): parsing, printing, and
   verification, so `parse(print(ir)) == ir` and every refusal carries a position.
+* The control-flow sugar of §7.2 — `.if`, `.elseif`, `.else`, `.while` —
+  normalised away as it is read, into comparisons, branches and labels.
 * The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it.
 * Instruction selection and register allocation, enough to compile arithmetic on
-  variables: `var`, assignments, `eval`, `expr`, and the operators the 8086 has
-  forms for. A register allocator that does not spill, and says so.
+  variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
+  `jmp`, the `jcc` family, and the operators the 8086 has forms for. A register
+  allocator that does not spill, and says so; when there is control flow, a value
+  that lives across a label keeps one register rather than reusing it, which is
+  right rather than clever.
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
 Not built yet, and refused with a reason rather than guessed at: the SSA middle
 of the pipeline and every optimization pass, instruction selection for loads and
-stores, conversions, comparisons and branches, `setcc`, the control-flow sugar,
-and the assembler.
+stores, conversions, `setcc`, an instruction whose operands are implicit
+(`mul`, `div`, a shift by a count in a register), and the assembler.
 
 Planned milestones:
 

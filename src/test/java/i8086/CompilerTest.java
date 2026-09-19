@@ -49,6 +49,9 @@ public final class CompilerTest {
                 CompilerTest::refusesFlagLosingForm);
         suite.add("Compiler gives a dead value's register away", CompilerTest::reusesRegisters);
         suite.add("Compiler refuses rather than spilling", CompilerTest::refusesToSpill);
+        suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
+        suite.add("Compiler reads the signedness of a comparison",
+                CompilerTest::readsComparisonSignedness);
         suite.add("Compiler refuses bad input with a position", CompilerTest::refusesBadInput);
         suite.add("Command line reports an unreadable input", CompilerTest::reportsUnreadableInput);
         suite.add("Command line refuses an unknown command", CompilerTest::refusesUnknownCommand);
@@ -169,6 +172,44 @@ public final class CompilerTest {
                 + "    var x: i16\n    var y: i16\n"
                 + "    " + first + "\n"
                 + "    " + second + "\n"
+                + "    ret\n";
+    }
+
+    /**
+     * A loop the sugar wrote, compiled: the comparison, the branch back, and the
+     * exit, with the two variables each in a register for the whole of it.
+     */
+    private static void compilesSugar() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var i: u16\n    var n: u16\n"
+                + "    i = 0\n    n = 3\n"
+                + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    cmp ax, cx\n    jnc $lbl1\n"),
+                "the loop tests at the top and leaves when the comparison fails: " + assembly);
+        Assert.assertTrue(assembly.contains("    jmp $lbl0\n"),
+                "and goes back at the bottom: " + assembly);
+    }
+
+    /**
+     * The one word that decides between two instructions several layers down:
+     * {@code i16} compares signed and {@code u16} unsigned, and each says so in
+     * the mnemonic.
+     */
+    private static void readsComparisonSignedness() {
+        String signed = Compiler.compile("t.ir", comparisonProgram("i16"));
+        String unsigned = Compiler.compile("t.ir", comparisonProgram("u16"));
+        Assert.assertTrue(signed.contains("    jge $lbl0\n"),
+                "a signed less-than leaves on jge: " + signed);
+        Assert.assertTrue(unsigned.contains("    jnc $lbl0\n"),
+                "an unsigned one leaves on jnc: " + unsigned);
+    }
+
+    private static String comparisonProgram(String type) {
+        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var x: " + type + "\n    var z: u16\n"
+                + "    x = 0\n"
+                + "    .if x < 0\n        z = 1\n    .endif\n"
                 + "    ret\n";
     }
 

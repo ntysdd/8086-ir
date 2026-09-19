@@ -3,6 +3,8 @@ package i8086.target;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.ir.Comparison;
+import i8086.ir.Item;
 import i8086.ir.Operator;
 
 import java.util.ArrayList;
@@ -76,6 +78,44 @@ public final class I8086 implements Target {
             words.put(alias, canonical);
         }
     }
+
+    /**
+     * The opposite of each condition, in both directions: the pairs are what the
+     * flag tests come in.
+     */
+    private static final Map<String, String> OPPOSITES = opposites();
+
+    private static Map<String, String> opposites() {
+        Map<String, String> pairs = new LinkedHashMap<String, String>();
+        opposite(pairs, "jo", "jno");
+        opposite(pairs, "js", "jns");
+        opposite(pairs, "jz", "jnz");
+        opposite(pairs, "jp", "jnp");
+        opposite(pairs, "jc", "jnc");
+        opposite(pairs, "ja", "jbe");
+        opposite(pairs, "jg", "jle");
+        opposite(pairs, "jge", "jl");
+        return Collections.unmodifiableMap(pairs);
+    }
+
+    private static void opposite(Map<String, String> pairs, String one, String other) {
+        pairs.put(one, other);
+        pairs.put(other, one);
+    }
+
+    /**
+     * The forms that set the flags from two values.
+     *
+     * <p>{@code cmp} subtracts without keeping the result and {@code test} ANDs
+     * without keeping it; both are two bytes when both operands are registers.
+     */
+    private static final List<Form> COMPARE_FORMS = Collections.unmodifiableList(
+            Arrays.asList(new Form("cmp", shapes(Shape.REGISTER, Shape.REGISTER), 2),
+                    new Form("cmp", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3)));
+
+    private static final List<Form> TEST_FORMS = Collections.unmodifiableList(
+            Arrays.asList(new Form("test", shapes(Shape.REGISTER, Shape.REGISTER), 2),
+                    new Form("test", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3)));
 
     private static Set<String> names(String... names) {
         return Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(names)));
@@ -204,6 +244,45 @@ public final class I8086 implements Target {
     @Override
     public List<String> valueRegisters() {
         return VALUE_REGISTERS;
+    }
+
+    @Override
+    public String negate(String condition) {
+        String opposite = OPPOSITES.get(condition);
+        if (opposite == null) {
+            throw new IllegalArgumentException("no condition is called '" + condition + "'");
+        }
+        return opposite;
+    }
+
+    @Override
+    public String conditionFor(Comparison comparison, boolean signed) {
+        switch (comparison) {
+            case EQUAL:
+                return "jz";
+            case NOT_EQUAL:
+                return "jnz";
+            case LESS:
+                return signed ? "jl" : "jc";
+            case LESS_OR_EQUAL:
+                return signed ? "jle" : "jbe";
+            case GREATER:
+                return signed ? "jg" : "ja";
+            default:
+                // Unsigned "not below" is the carry being clear, which is the
+                // same test as "not carry" — the canonical word for it.
+                return signed ? "jge" : "jnc";
+        }
+    }
+
+    @Override
+    public String jumpMnemonic() {
+        return "jmp";
+    }
+
+    @Override
+    public List<Form> compareForms(Item.Compare.Kind kind) {
+        return kind == Item.Compare.Kind.TEST ? TEST_FORMS : COMPARE_FORMS;
     }
 
     @Override

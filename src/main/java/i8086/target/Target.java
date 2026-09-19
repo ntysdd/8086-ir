@@ -2,6 +2,8 @@ package i8086.target;
 
 import i8086.SourcePos;
 import i8086.asm.Operand;
+import i8086.ir.Comparison;
+import i8086.ir.Item;
 import i8086.ir.Operator;
 
 import java.util.List;
@@ -53,6 +55,52 @@ public interface Target {
      * has to list them.
      */
     List<String> conditions();
+
+    /**
+     * The condition that is the opposite of this one.
+     *
+     * <p>The control-flow sugar is written as "branch past this branch when the
+     * test fails", so it has to be able to say the opposite of what was written
+     * ({@code docs/ir.md} §7.2). Which words are opposites is the machine's
+     * business: {@code jb} against {@code jnc} is not a rule anybody could guess.
+     */
+    String negate(String condition);
+
+    /**
+     * The condition that tests a comparison, given whether its operands are
+     * signed.
+     *
+     * <p>This is where {@code <} becomes {@code jb} or {@code jl}, and it is here
+     * rather than in the parser because the answer is about flags and not about
+     * comparisons.
+     */
+    String conditionFor(Comparison comparison, boolean signed);
+
+    /**
+     * The instruction that goes somewhere unconditionally.
+     *
+     * <p>A branch is not an operation, so it has no entry in {@link #forms}: its
+     * operand is a label, and the shapes there describe registers and literals.
+     */
+    String jumpMnemonic();
+
+    /**
+     * The forms that set the flags from two values: {@code cmp} and {@code test}.
+     */
+    List<Form> compareForms(Item.Compare.Kind kind);
+
+    /**
+     * Whether a mnemonic is one that goes somewhere.
+     *
+     * <p>Derived from what this target already says — the jump and the conditions
+     * are its whole vocabulary of branching — so it needs no table of its own. It
+     * is asked about inline assembly as well as about selected code, because a
+     * block of it can jump too, and whatever reasons about a run of instructions
+     * has to know.
+     */
+    default boolean isBranch(String mnemonic) {
+        return mnemonic.equals(jumpMnemonic()) || condition(mnemonic) != null;
+    }
 
     /**
      * The registers a value may live in, in the order they should be used up.

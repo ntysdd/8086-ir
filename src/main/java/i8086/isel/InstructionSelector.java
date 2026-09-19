@@ -48,6 +48,7 @@ public final class InstructionSelector {
     private final Target target;
     private int temps;
     private List<Instruction> out;
+    private boolean controlFlow;
 
     public InstructionSelector(Target target) {
         this.target = target;
@@ -62,9 +63,14 @@ public final class InstructionSelector {
         for (Item item : module.items()) {
             out = new ArrayList<Instruction>();
             select(item);
+            for (Instruction instruction : out) {
+                if (target.isBranch(instruction.mnemonic())) {
+                    controlFlow = true;
+                }
+            }
             pieces.add(new Selection.Piece(item, out));
         }
-        return new Selection(pieces);
+        return new Selection(pieces, controlFlow);
     }
 
     // --- items -------------------------------------------------------------
@@ -87,6 +93,21 @@ public final class InstructionSelector {
             selectAssign((Item.Assign) item);
             return;
         }
+        if (item instanceof Item.Compare) {
+            selectCompare((Item.Compare) item);
+            return;
+        }
+        if (item instanceof Item.Jump) {
+            out.add(new Instruction(item.position(), target.jumpMnemonic(), operands(
+                    new Operand.Name(item.position(), ((Item.Jump) item).target()))));
+            return;
+        }
+        if (item instanceof Item.Branch) {
+            Item.Branch branch = (Item.Branch) item;
+            out.add(new Instruction(item.position(), branch.condition(), operands(
+                    new Operand.Name(item.position(), branch.target()))));
+            return;
+        }
         if (item instanceof Item.Eval) {
             // The value is thrown away, so it needs somewhere to go that is not
             // anybody's variable; the flags are why the statement was written, so
@@ -102,6 +123,45 @@ public final class InstructionSelector {
             throw notYet(assign, "a store into memory");
         }
         emitValue(assign.value(), ((Place.Name) assign.place()).name(), flagsMayBeRead(assign.value()));
+    }
+
+    /**
+     * {@code cmp} or {@code test}: two operands and no value.
+     *
+     * <p>It is an operation in the same sense {@code eval} is — one operation,
+     * done as written — so the flags it leaves are the ones the writer asked for
+     * and the branch after it reads those. The machine's forms take a register
+     * first, so a literal on the left is put into one: {@code cmp 5, x} is not
+     * something this machine can say, and saying it another way is cheap.
+     */
+    private void selectCompare(Item.Compare compare) {
+        String first;
+        if (compare.left() instanceof Value.Number) {
+            first = temp();
+            emitValue(compare.left(), first, true);
+        } else {
+            first = registerNameOf(compare.left());
+        }
+
+        List<Operand> operands = new ArrayList<Operand>();
+        operands.add(virtual(first, compare.position()));
+        operands.add(operandOf(compare.right()));
+
+        Form best = null;
+        List<Operand> written = null;
+        for (Form form : target.compareForms(compare.kind())) {
+            List<Operand> candidate = writtenOperands(form, operands);
+            if (candidate != null && (best == null || form.bytes() < best.bytes())) {
+                best = form;
+                written = candidate;
+            }
+        }
+        if (best == null) {
+            throw new CompileError(compare.position(),
+                    "no way to compare these operands is available yet: a memory operand is not "
+                            + "handled yet");
+        }
+        out.add(new Instruction(compare.position(), best.mnemonic(), written));
     }
 
     /** Whether the flags this value leaves can be read by anything afterwards. */
