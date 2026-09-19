@@ -120,6 +120,10 @@ public final class IrVerifier {
             checkPad(item);
             return flagsDefined;
         }
+        if (item instanceof Item.Data) {
+            checkData((Item.Data) item);
+            return flagsDefined;
+        }
         if (item instanceof Item.Jump) {
             checkLabelTarget(((Item.Jump) item).target(), item.position());
             return flagsDefined;
@@ -179,6 +183,28 @@ public final class IrVerifier {
             return expressionReadsFlags(((Expression.Unary) expression).operand());
         }
         return expressionReadsFlagsOf(((Expression.Leaf) expression).value());
+    }
+
+    /**
+     * A label in a data list is its address, and an address has to be a label's.
+     *
+     * <p>Which is a question about the module and not about the text: a label may be
+     * defined later than the data that names it, so this is checked here rather than
+     * while reading ({@code docs/ir.md} §10.2). The width is the parser's business —
+     * a name is one word, so it belongs in a {@code dw} list.
+     */
+    private void checkData(Item.Data data) {
+        for (Item.Data.Atom atom : data.atoms()) {
+            if (!atom.isName()) {
+                continue;
+            }
+            require(!names.isVariable(atom.name()), data.position(),
+                    "'" + atom.name() + "' is a variable, and a variable is a register rather"
+                            + " than an address; a data item can name a label");
+            require(names.isLabel(atom.name()), data.position(),
+                    "'" + atom.name() + "' is not a label, and a data item's value is an address"
+                            + " (docs/ir.md §10.2)");
+        }
     }
 
     private Item checkPad(Item item) {

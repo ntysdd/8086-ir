@@ -910,6 +910,7 @@ main:
 
 msg: db "Hello, world!$"
 tbl: dw 0x1234, 0x5678
+jmp: dw handler1, handler2      ; labels, so these are addresses
 buf: pad 32
 ```
 
@@ -917,7 +918,6 @@ buf: pad 32
 nothing beyond the image. Reserved space is **zero bytes emitted into the
 image**, and it is written with `pad`, which is bytes that exist in the image and
 mean nothing:
-
 ```
 buf:  pad 32             ; 32 zero bytes, named
 sled: pad 400, 0x90      ; 400 bytes of 0x90: a NOP sled
@@ -942,6 +942,30 @@ opposite of what happens here.
 A label may name a piece of padding, and then it is an address like any other:
 `buf: pad 32` makes `buf` the address of the padding, usable as `p = buf` or
 `[buf + 2]`.
+
+**A `dw` list may name labels, and then each is its address.** That is how a
+pointer table, a vector table or a jump table is written:
+
+```
+tbl: dw  handler1, handler2, 0x1234
+```
+
+The value is an **address**, and like `org` and `pad to` it is not something the
+front end can work out: an address depends on where everything lands. So the IR
+states it and the assembler resolves it, which is also why the names are checked
+by the verifier rather than while reading — the label may be defined after the data
+that names it.
+
+Three things about the form are deliberate:
+
+* **A label is written plainly**, `dw msg`, without `offset`. A data item's value
+  *is* a constant, and a label's value *is* its address, so there is nothing to
+  disambiguate; `dw offset msg` is refused and the complaint says so.
+* **It belongs in a `dw` list.** An address is one word wide, so it does not fit in
+  `db`, and a `dd` list would be a far pointer — segment *and* offset — which this
+  surface cannot express yet.
+* **A variable is not a candidate.** A variable is a register, not an address, and
+  naming one is refused rather than turned into whatever the allocator chose.
 
 ### 10.3 `pad to` — laying out an image that has a fixed shape — [decided]
 
@@ -1009,10 +1033,10 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 3. The no-spill marker's spelling (§8.2).
 4. Inline assembly operand binding for variables, and inputs/outputs (§9).
 5. Whether string operations and `jcxz` get a surface (§11).
-6. Whether anything beyond the image is ever offered (§10), and the alignment form
-   that reaches a multiple rather than a length (`align`), which `pad to` is not;
-   plus whether a data item may hold a label's address, so that a pointer table or
-   a vector table can be written.
+6. Whether anything beyond the image is ever offered (§10), the alignment form that
+   reaches a multiple rather than a length (`align`), and whether `dd` can hold a
+   far pointer — a segment and an offset — which is the other half of §10.2's `dw`
+   label.
 7. What a conversion does to the flags (§3.5), which the target's flag effects
    will answer.
 8. Whether `expr` may take a label, which is a constant and not a load, but is

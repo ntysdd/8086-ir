@@ -108,6 +108,10 @@ public final class AsmEmitter {
             }
             if (atom.isText()) {
                 text.append('"').append(atom.text()).append('"');
+            } else if (atom.isName()) {
+                // NASM wants a label in data written plainly too: there a bare symbol is
+                // already its address, and the bracketed form is what it points at.
+                text.append(atom.name());
             } else {
                 text.append(Numbers.spelling(atom.number()));
             }

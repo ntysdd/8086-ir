@@ -1122,13 +1122,29 @@ public final class IrParser {
                 atoms.add(Item.Data.Atom.ofNumber(value.value()));
             } else if (value.is(TokenKind.STRING)) {
                 require(size == Size.BYTE, value.position(),
-                        "a string is a sequence of bytes, so it needs 'db', not '" + sizeWord.text() + "'");
+                        "a string is a sequence of bytes, so it needs 'db', not '" + sizeWord.text()
+                                + "'");
                 next();
                 atoms.add(Item.Data.Atom.ofText(value.text()));
+            } else if (isWord(value, "offset") && tokenAt(1).is(TokenKind.IDENT)) {
+                throw new CompileError(value.position(),
+                        "a label in data is written plainly, as 'dw name', because a data item's "
+                                + "value is a constant and a label's value is its address "
+                                + "(docs/ir.md §10.2, §4)");
+            } else if (value.is(TokenKind.IDENT)) {
+                // A label in a list of data is its address: a pointer table, a vector
+                // table, a jump table (docs/ir.md §10.2). The value is not known here
+                // — it depends on where everything lands — so the IR states it and the
+                // assembler resolves it, exactly as 'pad to' and an operand do.
+                next();
+                require(size == Size.WORD, value.position(),
+                        "the address of a label is one word wide, so it belongs in a 'dw' "
+                                + "list; in a '" + sizeWord.text() + "' list it would not fit");
+                atoms.add(Item.Data.Atom.ofName(value.name()));
             } else {
                 throw new CompileError(value.position(),
-                        "expected a number or a string after '" + sizeWord.text() + "', but found "
-                                + value.describe());
+                        "expected a number, a string or a label after '" + sizeWord.text()
+                                + "', but found " + value.describe());
             }
             if (peek().is(",")) {
                 next();

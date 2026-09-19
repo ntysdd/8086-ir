@@ -142,27 +142,45 @@ public abstract class Item {
      */
     public static final class Data extends Item {
 
-        /** One element: a number, or a string of bytes for {@code db}. */
+        /** One element: a number, a string of bytes for {@code db}, or a label's address. */
         public static final class Atom {
 
             private final long number;
             private final String text;
+            private final String name;
 
-            private Atom(long number, String text) {
+            private Atom(long number, String text, String name) {
                 this.number = number;
                 this.text = text;
+                this.name = name;
             }
 
             public static Atom ofNumber(long number) {
-                return new Atom(number, null);
+                return new Atom(number, null, null);
             }
 
             public static Atom ofText(String text) {
-                return new Atom(0, text);
+                return new Atom(0, text, null);
+            }
+
+            /**
+             * A label, whose value is its address ({@code docs/ir.md} §10.2).
+             *
+             * <p>Not known here: an address depends on where everything lands, so this
+             * is stated by the IR and resolved by the assembler, like {@code pad to} and
+             * like any operand naming a label.
+             */
+            public static Atom ofName(String name) {
+                return new Atom(0, null, name);
             }
 
             public boolean isText() {
                 return text != null;
+            }
+
+            /** Whether this element is a label rather than a value written out. */
+            public boolean isName() {
+                return name != null;
             }
 
             public long number() {
@@ -171,6 +189,10 @@ public abstract class Item {
 
             public String text() {
                 return text;
+            }
+
+            public String name() {
+                return name;
             }
         }
 

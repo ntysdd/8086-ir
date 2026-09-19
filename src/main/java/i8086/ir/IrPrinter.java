@@ -252,6 +252,8 @@ public final class IrPrinter {
             }
             if (atom.isText()) {
                 text.append('"').append(atom.text()).append('"');
+            } else if (atom.isName()) {
+                text.append(name(atom.name(), target));
             } else {
                 text.append(Numbers.spelling(atom.number()));
             }

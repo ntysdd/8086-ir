@@ -199,7 +199,12 @@ db   0x55, 0xAA             bytes
 dw   0x1234                 words
 dd   0x00012345             double words
 db   "Hello, world!$"       a string, one byte per character
+dw   handler1, handler2     a label is its address, so a dw list is a table
 ```
+
+`[decided]` a label in a `dw` list means its address, and it is written plainly:
+`dw msg`, not `dw offset msg` (`docs/ir.md` §10.2). The same spelling is what NASM
+wants, so unlike the `offset` of an operand this one needs no translation.
 
 `[decided]` the repeat form for space in the image is `pad`, spelled the same as
 the IR's (`docs/ir.md` §10.2, §10.3): `pad 32`, `pad 400, 0x90`, and `pad to 510`
