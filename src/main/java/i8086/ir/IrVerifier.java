@@ -888,11 +888,17 @@ public final class IrVerifier {
                     "'" + segment + "' is not a segment register on this target");
         }
         String base = operand.base();
-        if (base == null || names.isVariable(base) || names.isLabel(base)) {
+        if (base == null || names.isLabel(base)) {
             return;
         }
-        throw new CompileError(operand.position(),
-                "unknown name '" + base + "': no variable or label has that name");
+        Type based = names.typeOf(base);
+        if (based == null) {
+            throw new CompileError(operand.position(),
+                    "unknown name '" + base + "': no variable or label has that name");
+        }
+        require(based.bytes() == POINTER_BYTES, operand.position(),
+                "an address is a near pointer, so it is " + POINTER_BYTES + " bytes wide; '" + base
+                        + "' is " + based.bytes() + " (docs/ir.md §3.3)");
     }
 
     /** The type of a variable, complaining usefully when the name is something else. */

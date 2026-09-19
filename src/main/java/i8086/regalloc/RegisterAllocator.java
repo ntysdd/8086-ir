@@ -454,8 +454,7 @@ public final class RegisterAllocator {
 
     /** The first register this value may have and no neighbour is using, or null. */
     private String freeRegister(String value) {
-        List<String> allowed = addresses.contains(value) ? target.addressRegisters()
-                : target.valueRegisters();
+        List<String> allowed = registersFor(value);
         Set<String> inUse = coloursInUse(value);
         Set<String> forbidden = keepOut.get(value);
         for (String candidate : allowed) {
@@ -471,6 +470,33 @@ public final class RegisterAllocator {
     }
 
     /**
+     * The registers a value may live in.
+     *
+     * <p>The target's own class, cut down when the value is a byte: a byte value occupies a register
+     * whose low half has a name, because that is the half an instruction reads and writes, and this
+     * machine has no byte half for {@code si}, {@code di} or {@code bp} at all
+     * ({@code docs/ir.md} §3.2). A value used as an address needs one of the address registers, and
+     * a byte value is never one: an address is a pointer, and a pointer is a word (§3.3).
+     */
+    private List<String> registersFor(String value) {
+        boolean byteWide = isByteWide(value);
+        List<String> allowed = new ArrayList<String>();
+        for (String register : addresses.contains(value) ? target.addressRegisters()
+                : target.valueRegisters()) {
+            if (!byteWide || target.byteRegister(register) != null) {
+                allowed.add(register);
+            }
+        }
+        return allowed;
+    }
+
+    /** Whether this value is narrower than the register that holds it. */
+    private boolean isByteWide(String value) {
+        Type type = selection.typeOf(value);
+        return type != null && type.bytes() < Size.WORD.bytes();
+    }
+
+    /**
      * The cell this value may live in, or null when it may not live in one at all.
      *
      * <p>Three things can say no, and {@link #noRegister} says which one it was: the value is
@@ -479,7 +505,7 @@ public final class RegisterAllocator {
      */
     private String usableHome(String value) {
         String cell = groupHomes.get(value);
-        if (cell == null || !wholeRegister(value)) {
+        if (cell == null || !fitsInARegister(value)) {
             return null;
         }
         if (keepOutHome(value).contains(cell) || cellsInUse(value).contains(cell)) {
@@ -572,16 +598,15 @@ public final class RegisterAllocator {
     }
 
     /**
-     * Whether a value is the width of a whole register, which is the only width a home holds.
+     * Whether a value fits in a register, which is what a home holds.
      *
-     * <p>Moving a value in and out of its home is a machine access, and the access this back
-     * end can make is one register wide: nothing here can name half of a register, and two of
-     * them at once is not an access either ({@code docs/ir.md} §3.4). A value that is not that
-     * wide is refused where it is needed rather than quietly denied its home.
+     * <p>A home is moved in and out with a machine access, so the value has to be one of the two
+     * widths an access can be: a byte or a word ({@code docs/ir.md} §3.1.2, §3.4). Wider than that
+     * is refused rather than quietly truncated.
      */
-    private boolean wholeRegister(String value) {
+    private boolean fitsInARegister(String value) {
         Type type = selection.typeOf(value);
-        return type != null && type.bytes() == Size.WORD.bytes();
+        return type != null && type.bytes() <= Size.WORD.bytes();
     }
 
     /** The registers the values alive at a point are in. A value in a home is in none. */
@@ -821,6 +846,7 @@ public final class RegisterAllocator {
                         + ", so say what it really destroys with 'clobbers(...)', or write the "
                         + "value to memory and read it into a name of its own afterwards")
                         + homeProblem(value)
+                        + byteProblem(value)
                         + ": this allocation does not spill, because a program that needs "
                         + "more registers than the machine has is refused rather than given "
                         + "a frame (docs/ir.md §8.2)");
@@ -892,13 +918,13 @@ public final class RegisterAllocator {
             Instruction instruction = instructions.get(index);
             for (String value : readsHere(instruction, definedValue, cells)) {
                 if (loaded.add(value)) {
-                    out.add(load(instruction.position(), scratchOf(point, value),
+                    out.add(load(instruction.position(), value, scratchOf(point, value),
                             inHome.get(value)));
                 }
             }
             out.add(withScratches(instruction, at));
             if (index == storeAfter) {
-                out.add(store(instruction.position(), inHome.get(definedValue),
+                out.add(store(instruction.position(), definedValue, inHome.get(definedValue),
                         scratchOf(point, definedValue)));
             }
         }
@@ -1018,9 +1044,7 @@ public final class RegisterAllocator {
 
     /** The first register of the class this value needs that nothing in {@code busy} is using. */
     private String freeRegisterFor(String value, Set<String> busy) {
-        List<String> allowed = addresses.contains(value) ? target.addressRegisters()
-                : target.valueRegisters();
-        for (String candidate : allowed) {
+        for (String candidate : registersFor(value)) {
             if (!busy.contains(candidate)) {
                 return candidate;
             }
@@ -1054,8 +1078,10 @@ public final class RegisterAllocator {
 
     private Operand withScratches(Operand operand, Map<String, String> scratches) {
         if (operand instanceof Operand.Virtual) {
-            String register = scratches.get(groupOf(((Operand.Virtual) operand).name()));
-            return register == null ? operand : new Operand.Name(operand.position(), register);
+            String name = ((Operand.Virtual) operand).name();
+            String register = scratches.get(groupOf(name));
+            return register == null ? operand
+                    : new Operand.Name(operand.position(), written(groupOf(name), register));
         }
         if (operand instanceof Operand.Memory) {
             Operand.Memory memory = (Operand.Memory) operand;
@@ -1077,7 +1103,8 @@ public final class RegisterAllocator {
         if (register == null) {
             return atom;
         }
-        Operand.Memory.Atom resolved = Operand.Memory.Atom.ofName(register);
+        Operand.Memory.Atom resolved =
+                Operand.Memory.Atom.ofName(written(groupOf(atom.name()), register));
         return atom.isSubtracted() ? resolved.subtracted() : resolved;
     }
 
@@ -1089,14 +1116,16 @@ public final class RegisterAllocator {
      * Choosing between several would be the smallest-form question selection answers, and this
      * machine has one of each.
      */
-    private Instruction load(SourcePos where, String register, String cell) {
+    private Instruction load(SourcePos where, String value, String register, String cell) {
         return access(target.loadForms(), "load", where,
-                pair(new Operand.Name(where, register), cell(where, cell)));
+                pair(new Operand.Name(where, written(value, register)),
+                        cell(where, cell, accessWidth(value))));
     }
 
-    private Instruction store(SourcePos where, String cell, String register) {
+    private Instruction store(SourcePos where, String value, String cell, String register) {
         return access(target.storeForms(), "store", where,
-                pair(cell(where, cell), new Operand.Name(where, register)));
+                pair(cell(where, cell, accessWidth(value)),
+                        new Operand.Name(where, written(value, register))));
     }
 
     private static Instruction access(List<Form> forms, String what, SourcePos where,
@@ -1109,11 +1138,24 @@ public final class RegisterAllocator {
         return new Instruction(where, forms.get(0).mnemonic(), operands);
     }
 
-    /** The bytes of a home, as the address an access is made through. */
-    private static Operand.Memory cell(SourcePos where, String cell) {
+    /** The bytes of a home, as the address an access is made through, one access wide. */
+    private static Operand.Memory cell(SourcePos where, String cell, Size size) {
         List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
         atoms.add(Operand.Memory.Atom.ofName(cell));
-        return new Operand.Memory(where, Size.WORD, null, atoms);
+        return new Operand.Memory(where, size, null, atoms);
+    }
+
+    /**
+     * How wide an access to this value's cell is: the width of the value itself, which is a byte or
+     * a word because nothing wider can live in a home.
+     */
+    private Size accessWidth(String value) {
+        Type type = selection.typeOf(value);
+        Size size = type == null ? null : Size.ofBytes(type.bytes());
+        if (size == null) {
+            throw new IllegalStateException("no access width is known for '" + value + "'");
+        }
+        return size;
     }
 
     private static List<Operand> pair(Operand first, Operand second) {
@@ -1174,6 +1216,21 @@ public final class RegisterAllocator {
     }
 
     /**
+     * Why a byte value has fewer places to live than a word, when that is what went wrong.
+     *
+     * <p>A byte value occupies the low half of a register, so only the registers that have one can
+     * hold it — four of them, where a word has six ({@code docs/ir.md} §3.2). An author who counts
+     * six registers and wonders why {@code si} and {@code di} are idle deserves the sentence.
+     */
+    private String byteProblem(String value) {
+        if (!isByteWide(value)) {
+            return "";
+        }
+        return "; and a byte value can only live in the registers that have a low half, which is "
+                + "four of them (docs/ir.md §3.2)";
+    }
+
+    /**
      * What became of the home this value was given, when it could not have it.
      *
      * <p>A program that declared a home and is then refused deserves to be told which of the
@@ -1186,10 +1243,10 @@ public final class RegisterAllocator {
         if (cell == null) {
             return "";
         }
-        if (!wholeRegister(value)) {
+        if (!fitsInARegister(value)) {
             return "; its home '" + cell + "' cannot hold it either, because a value is moved in "
-                    + "and out of a home one whole register at a time and this one is not that "
-                    + "wide (docs/ir.md §3.1.2, §3.4)";
+                    + "and out of a home one access at a time, and this one is wider than a "
+                    + "register (docs/ir.md §3.1.2, §3.4)";
         }
         if (keepOutHome(value).contains(cell)) {
             return "; its home '" + cell + "' is written by the program while the value is alive, "
@@ -1207,6 +1264,10 @@ public final class RegisterAllocator {
     /**
      * Rewrites an instruction with every value replaced by the register it lives in.
      *
+     * <p>A byte value is written by the name of the half of the register it lives in — {@code al}
+     * for {@code ax} — because that half is what an instruction reads and writes
+     * ({@code docs/ir.md} §3.2).
+     *
      * <p>The names inside a memory operand are resolved too: an address is a value like any
      * other, and by the time an instruction is printed there is no such thing as a name that
      * has not been decided. A name that is not one of the module's values is a label, and a
@@ -1221,8 +1282,8 @@ public final class RegisterAllocator {
         List<Operand> operands = new ArrayList<Operand>();
         for (Operand operand : instruction.operands()) {
             if (operand instanceof Operand.Virtual) {
-                operands.add(((Operand.Virtual) operand)
-                        .resolvedTo(registerOf(((Operand.Virtual) operand).name())));
+                String name = ((Operand.Virtual) operand).name();
+                operands.add(((Operand.Virtual) operand).resolvedTo(written(name)));
             } else if (operand instanceof Operand.Memory) {
                 operands.add(resolve((Operand.Memory) operand));
             } else {
@@ -1240,10 +1301,37 @@ public final class RegisterAllocator {
                 // register to.
                 atoms.add(atom);
             } else {
-                atoms.add(Operand.Memory.Atom.ofName(registerOf(atom.name())));
+                Operand.Memory.Atom resolved = Operand.Memory.Atom.ofName(written(atom.name()));
+                atoms.add(atom.isSubtracted() ? resolved.subtracted() : resolved);
             }
         }
         return new Operand.Memory(operand.position(), operand.size(), operand.segment(), atoms);
+    }
+
+    /**
+     * The name a register is written by for this value: itself, or its low half when the value is a
+     * byte.
+     *
+     * <p>A byte value lives in the low half of a register, and that half is what an instruction
+     * reads and writes ({@code docs/ir.md} §3.2). A byte value given a register with no byte half
+     * would be a bug in {@link #registersFor} rather than a program this cannot compile, so it is
+     * said that way.
+     */
+    private String written(String value, String register) {
+        if (!isByteWide(value)) {
+            return register;
+        }
+        String half = target.byteRegister(register);
+        if (half == null) {
+            throw new IllegalStateException("'" + register + "' was given a byte value but has no "
+                    + "byte half");
+        }
+        return half;
+    }
+
+    /** The name a value's register is written by in an instruction. */
+    private String written(String name) {
+        return written(groupOf(name), registerOf(name));
     }
 
     /**

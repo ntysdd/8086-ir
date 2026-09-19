@@ -79,15 +79,21 @@ public final class CompilerTest {
                 CompilerTest::keepsValuesOutOfTheSegmentScratch);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
-        suite.add("Compiler refuses a byte value a whole register cannot hold",
-                CompilerTest::refusesAByteValueItsHomeCannotHold);
+        suite.add("Compiler puts a byte value in its home", CompilerTest::putsAByteValueInItsHome);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
         suite.add("Compiler reads through a pointer and writes through a label",
                 CompilerTest::loadsAndStores);
         suite.add("Compiler gives an address a register that can hold one",
                 CompilerTest::addressesLiveInAddressRegisters);
         suite.add("Compiler keeps a volatile read nobody uses", CompilerTest::keepsVolatileReads);
-        suite.add("Compiler refuses a byte access", CompilerTest::refusesNarrowAccess);
+        suite.add("Compiler refuses an access wider than a register",
+                CompilerTest::refusesWideAccess);
+        suite.add("Compiler walks a byte string a byte at a time",
+                CompilerTest::walksAByteString);
+        suite.add("Compiler loads, changes and stores a byte", CompilerTest::worksOnBytes);
+        suite.add("Compiler refuses a multiply on bytes", CompilerTest::refusesAByteMultiply);
+        suite.add("Compiler refuses five byte values at one point",
+                CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
         suite.add("Compiler keeps a small shift to single steps", CompilerTest::repeatsSmallShifts);
         suite.add("Compiler keeps a value out of the register a shift destroys",
@@ -811,15 +817,12 @@ public final class CompilerTest {
     }
 
     /**
-     * A byte value and a home: the home cannot hold it, because a value is moved in and out of
-     * one a whole register at a time and half a register has no name here. With every register
-     * destroyed by the call, there is nowhere for the value to be, and the refusal says which of
-     * the two rules it was ({@code docs/ir.md} §3.1.2, §3.4).
-     *
-     * <p>The comparison is what keeps the byte alive: nothing else observes a byte value yet.
+     * A byte value waiting in its home across a call that destroys every register: the access is
+     * one byte wide, and the value lives in the low half of whichever register moves it
+     * ({@code docs/ir.md} §3.1.2, §3.2).
      */
-    private static void refusesAByteValueItsHomeCannotHold() {
-        String source = "target 8086\norg 0x100\nentry $main\n\n"
+    private static void putsAByteValueInItsHome() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
                 + "$cell: pad 2\n\n$main:\n"
                 + "    var h: u8 in $cell\n"
                 + "    var x: u8\n"
@@ -829,13 +832,15 @@ public final class CompilerTest {
                 + "    cmp h, x\n"
                 + "    jz done\n"
                 + "done:\n"
-                + "    ret\n";
-        CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", source));
-        Assert.assertTrue(refused.getMessage().contains("cannot hold it either"),
-                refused.getMessage());
-        Assert.assertTrue(refused.getMessage().contains("one whole register at a time"),
-                "and says why: " + refused.getMessage());
+                + "    ret\n");
+        int stored = assembly.indexOf("mov byte [$cell], ");
+        int called = assembly.indexOf("int 0x13");
+        Assert.assertTrue(stored >= 0 && called > stored,
+                "the byte goes into its home one byte wide, before the call: " + assembly);
+        Assert.assertTrue(assembly.indexOf(", byte [$cell]", called) > called,
+                "and comes back out of it one byte wide afterwards: " + assembly);
+        Assert.assertFalse(assembly.contains("byte [$cell], ax"),
+                "nor with a whole register, which would write past it: " + assembly);
     }
 
     /**
@@ -1118,19 +1123,113 @@ public final class CompilerTest {
     }
 
     /**
-     * A byte load would need {@code al}, and this back end has no way to name half a
-     * register. The refusal says that rather than refusing in general terms, because
-     * that is the piece of the target description that is missing.
+     * The loop every boot loader and every DOS program starts with, and the reason byte accesses had
+     * to come before anything else: a string is bytes, and a byte is read one byte at a time
+     * ({@code docs/ir.md} §3.4).
      */
-    private static void refusesNarrowAccess() {
+    private static void walksAByteString() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                + "$msg: db \"Hi\", 0\n\n$main:\n"
+                + "    var p: u16\n"
+                + "    var c: u8\n"
+                + "    p = $msg\n"
+                + "loop:\n"
+                + "    c = byte [p]\n"
+                + "    cmp c, 0\n"
+                + "    jz done\n"
+                + "    p = eval(p + 1)\n"
+                + "    jmp loop\n"
+                + "done:\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("byte ["),
+                "the character is read one byte at a time: " + assembly);
+        Assert.assertFalse(assembly.contains("word ["),
+                "and never as a word, which would read the character after it too: " + assembly);
+        Assert.assertTrue(assembly.contains("jz $done") || assembly.contains("jz done"),
+                "and the terminator is what leaves the loop: " + assembly);
+    }
+
+    /** A byte is loaded, changed in place and stored back, all at one byte's width. */
+    private static void worksOnBytes() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var c: u8\n"
+                + "    var p: u16\n"
+                + "    p = 0x1000\n"
+                + "    c = byte [0x40]\n"
+                + "    c = eval(c + 1)\n"
+                + "    [p] = c\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("byte [0x40]"),
+                "the load is one byte wide: " + assembly);
+        Assert.assertTrue(assembly.contains("inc "),
+                "and one byte is added to it: " + assembly);
+        Assert.assertTrue(assembly.contains("mov [bx], "),
+                "and it goes back out with the width the value has, which is one byte: "
+                        + assembly);
+    }
+
+    /**
+     * Multiplication and division are done in registers the machine names itself, and the sequences
+     * the target declares are written for that sixteen-bit pair. A byte form exists and the target
+     * has not been asked for it, so this is refused rather than computed at the wrong width
+     * ({@code docs/ir.md} §6.1).
+     */
+    private static void refusesAByteMultiply() {
         CompileError refused = Assert.assertThrows(CompileError.class,
                 () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
-                        + "    var b: u8\n"
-                        + "    b = volatile byte [msg]\n"
+                        + "    var c: u8\n"
+                        + "    var d: u8\n"
+                        + "    c = byte [0x40]\n"
+                        + "    d = byte [0x41]\n"
+                        + "    c = eval(c * d)\n"
+                        + "    cmp c, 0\n"
+                        + "    jz done\n"
+                        + "done:\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("cannot be used with '*'"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("written for a word"),
+                "and says why: " + refused.getMessage());
+    }
+
+    /**
+     * A byte value lives in the low half of a register, so only four registers can hold one where a
+     * word has six. Five of them alive at once is therefore a refusal, and the refusal says why
+     * {@code si} and {@code di} are not being used ({@code docs/ir.md} §3.2, §8.2).
+     */
+    private static void refusesFiveLiveBytes() {
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n$main:\n");
+        for (char name = 'a'; name <= 'e'; name++) {
+            source.append("    var ").append(name).append(": u8\n");
+        }
+        for (char name = 'a'; name <= 'e'; name++) {
+            source.append("    ").append(name).append(" = byte [0x").append(name - 'a' + 40)
+                    .append("]\n");
+        }
+        source.append("again:\n");
+        for (char name = 'a'; name <= 'e'; name++) {
+            source.append("    cmp ").append(name).append(", 0\n    jz done\n");
+        }
+        source.append("    jmp again\ndone:\n    ret\n");
+
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", source.toString()));
+        Assert.assertTrue(refused.getMessage().contains("no register left"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("only live in the registers that have a low "
+                + "half, which is four"), "and counts the registers a byte has: "
+                + refused.getMessage());
+    }
+
+    private static void refusesWideAccess() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var wide: u32\n"
+                        + "    wide = volatile dword [msg]\n"
                         + "    ret\n"
                         + "\n"
-                        + "$msg: dw 0x1234\n"));
-        Assert.assertTrue(refused.getMessage().contains("half of one"),
+                        + "$msg: dw 0x1234, 0x5678\n"));
+        Assert.assertTrue(refused.getMessage().contains("two registers at once"),
                 "the refusal says what is missing: " + refused.getMessage());
     }
 

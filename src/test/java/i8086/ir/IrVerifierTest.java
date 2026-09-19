@@ -118,6 +118,8 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesALabelAsSegmentationState);
         suite.add("Ir verifier refuses a value too wide for segmentation state",
                 IrVerifierTest::refusesAWideSegmentationValue);
+        suite.add("Ir verifier refuses a byte value as an address",
+                IrVerifierTest::refusesAByteAddress);
         suite.add("Ir verifier warns about a store into a shared cell",
                 IrVerifierTest::warnsAboutSavesIntoSharedCells);
         suite.add("Ir verifier keeps quiet where a save is promised to stay",
@@ -195,6 +197,18 @@ public final class IrVerifierTest {
         Assert.assertRefused("test.ir:7:5",
                 () -> verify("    var b: u16 in cell writethrough\n"
                         + "    var a: u16 in cell\ncell: pad 2\n"));
+    }
+
+    /**
+     * An address is a near pointer, and a pointer is two bytes: a byte value that tried to be one
+     * would be half an address, and this machine has no eight-bit register that can go inside the
+     * brackets either ({@code docs/ir.md} §3.3, §3.4).
+     */
+    private static void refusesAByteAddress() {
+        CompileError refused = Assert.assertRefused("test.ir:7:5",
+                () -> verify("    var c: u8\n    word [c] = 2\n"));
+        Assert.assertTrue(refused.getMessage().contains("near pointer"),
+                refused.getMessage());
     }
 
     /**

@@ -469,8 +469,8 @@ program only when no value in the way has one to go to. `writethrough` is still 
 until every
 definition writes the cell, because compiling it as if the bytes were never written is a
 wrong answer the program is not told about, and a hard error is what this compiler gives
-instead. A value that is not the width of a register cannot use a home either: the access
-is one whole register wide, and half of one has no name here (§3.4).
+instead. A value wider than a register cannot use a home either: the access a home is moved
+with is one register's worth at most, and this back end cannot name a pair (§3.4).
 
 ### 3.2 Widths and signedness — [decided]
 
@@ -485,6 +485,15 @@ is one whole register wide, and half of one has no name here (§3.4).
 * **Literals are untyped.** The `1` in `eval(a + 1)` takes its width from
   context, the way an assembler immediate does. Literals are not a second type
   and do not violate the same-width rule.
+* **A byte value lives in the low half of a register.** The surface has no
+  half-registers: a value *is* a register, and a `u8` or `i8` value takes one whose
+  low byte has a name — `al`, `bl`, `cl`, `dl`, so `ax`, `bx`, `cx` or `dx`. An
+  instruction that reads or writes the value names that half, and which of the four
+  it is is the compiler's choice, not something the surface says. So a byte value has
+  fewer places to live than a word: `si`, `di` and `bp` cannot hold one at all, and a
+  program with four byte values alive at once has run out of registers (§8.2). A
+  memory access one byte wide is ordinary: `c = byte [p]` and `byte [p] = c` are one
+  load and one store, of the width the value has (§3.4).
 * **[open]** a literal cannot be written negative: `-1` is refused, and the bit
   pattern has to be written as `0xFFFF`. There is no unary minus in the surface,
   and whether there should be is not decided.

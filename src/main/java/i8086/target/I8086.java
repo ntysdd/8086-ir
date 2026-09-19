@@ -457,6 +457,30 @@ public final class I8086 implements Target {
     private static final List<String> SEGMENTATION_STATE = Collections.unmodifiableList(
             Arrays.asList("ds", "es", "ss", "sp"));
 
+    /**
+     * The low half of each register that has one, which is where a byte value lives
+     * ({@code docs/ir.md} §3.2).
+     *
+     * <p>Four registers and not six: {@code si}, {@code di} and {@code bp} have no byte half on
+     * this machine, so a byte value cannot live there at all. The high halves — {@code ah} and its
+     * neighbours — are a third place a byte can be, and they are deliberately not on this list:
+     * they are not where a value lives, they are the register a machine statement is given (§11).
+     */
+    private static final Map<String, String> LOW_HALVES = lowHalves();
+
+    private static Map<String, String> lowHalves() {
+        Map<String, String> table = new LinkedHashMap<String, String>();
+        lowHalf(table, "ax", "al");
+        lowHalf(table, "cx", "cl");
+        lowHalf(table, "dx", "dl");
+        lowHalf(table, "bx", "bl");
+        return Collections.unmodifiableMap(table);
+    }
+
+    private static void lowHalf(Map<String, String> table, String register, String low) {
+        table.put(register, low);
+    }
+
     /** The register a segment register is loaded through, since it takes no immediate. */
     private static final String SEGMENT_SCRATCH = "ax";
 
@@ -594,6 +618,11 @@ public final class I8086 implements Target {
     @Override
     public List<String> addressRegisters() {
         return ADDRESS_REGISTERS;
+    }
+
+    @Override
+    public String byteRegister(String register) {
+        return LOW_HALVES.get(register);
     }
 
     @Override

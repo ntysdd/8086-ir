@@ -302,7 +302,7 @@ public final class InstructionSelector {
                             + "compiler can emit yet: put the value in a variable and store that "
                             + "(docs/ir.md §5.3)");
         }
-        requireWordAccess(place.operand(), "store");
+        requireRegisterAccess(place.operand(), "store");
 
         List<Operand> operands = operands(memory(place.operand()), operandOf(value));
         Form form = smallest(literal ? target.storeLiteralForms() : target.storeForms(),
@@ -323,7 +323,7 @@ public final class InstructionSelector {
      * how to name half a register yet — so it is refused with that as the reason.
      */
     private void emitLoad(Value.Memory load, String destination) {
-        requireWordAccess(load.operand(), "load");
+        requireRegisterAccess(load.operand(), "load");
         List<Operand> operands = operands(virtual(destination, load.position()),
                 memory(load.operand()));
         Form form = smallest(target.loadForms(), operands);
@@ -334,20 +334,19 @@ public final class InstructionSelector {
     }
 
     /**
-     * Refuses an access narrower or wider than a register.
+     * Refuses an access wider than a register.
      *
-     * <p>The reason is worth stating rather than hiding: the machine can do a byte
-     * load, into {@code al}, and this back end has no way to name {@code al} — the
-     * allocator deals in whole registers, and half of one is not a register it can
-     * hand out. That is the piece of the target description that is missing, and the
-     * message says so.
+     * <p>A byte is fine: a byte value lives in the low half of a register that has a name for that
+     * half, and the allocator writes that half's name into the instruction ({@code docs/ir.md}
+     * §3.2). Wider than a register is a different matter — it is two registers at once, which
+     * nothing here can name.
      */
-    private static void requireWordAccess(MemoryOperand operand, String what) {
-        if (operand.size() != null && operand.size() != Size.WORD) {
+    private static void requireRegisterAccess(MemoryOperand operand, String what) {
+        if (operand.size() != null && operand.size().bytes() > Size.WORD.bytes()) {
             throw new CompileError(operand.position(),
                     "a " + operand.size().spelling() + " " + what + " is not something this "
-                            + "compiler can emit yet: a value lives in a whole register, and "
-                            + "nothing here can name half of one (docs/ir.md §3.4)");
+                            + "compiler can emit yet: it is two registers at once, and nothing "
+                            + "here can name a pair (docs/ir.md §3.4)");
         }
     }
 
@@ -665,6 +664,7 @@ public final class InstructionSelector {
             if (!(operand instanceof Value.Name) && !(operand instanceof Value.Number)) {
                 return null; // a load in an operand: not something this back end can hand on
             }
+            requireWordWide(operator, operand.position(), typeOf(operand));
         }
 
         SourcePos where = operands.get(0).position();
@@ -696,6 +696,29 @@ public final class InstructionSelector {
         }
         return target.divide(where, target0, left, right, signed,
                 operator == Operator.REMAINDER);
+    }
+
+    /** The type of an operand that names one, or null when it is a literal. */
+    private Type typeOf(Value value) {
+        return value instanceof Value.Name ? form.typeOf(((Value.Name) value).name()) : null;
+    }
+
+    /**
+     * Refuses a multiplication or division on a value narrower than a register.
+     *
+     * <p>The machine does these in registers it names itself — {@code ax} and {@code dx} — and the
+     * sequences the target declares are written for that sixteen-bit pair. A byte form exists
+     * ({@code mul r8} leaves its answer in {@code ax}), and this back end has not asked the target
+     * for it: doing a byte multiply with the word sequence would read whatever is in the top half of
+     * the register the value lives in, which is an answer nobody computed
+     * ({@code docs/ir.md} §6.1).
+     */
+    private void requireWordWide(Operator operator, SourcePos where, Type type) {
+        if (type != null && type.bytes() < Size.WORD.bytes()) {
+            throw new CompileError(where, "a " + type.spelling() + " cannot be used with '"
+                    + operator.spelling() + "' yet: this machine does it in a fixed register and "
+                    + "the sequence is written for a word (docs/ir.md §6.1)");
+        }
     }
 
     /**
@@ -751,6 +774,8 @@ public final class InstructionSelector {
         if (second == null || (!multiplies && !operator.divides())) {
             return null;
         }
+        requireWordWide(operator, where, form.typeOf(destination));
+        requireWordWide(operator, second.position(), typeOf(second));
         Operand inPlace = virtual(destination, where);
         Operand right = operandOf(second);
         boolean isSigned = signed != null && signed.booleanValue();

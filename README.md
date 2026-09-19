@@ -190,8 +190,10 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    pre-coloured nodes, which are not needed: what the machine insists on is handled
    by the copies its own sequences are written with. That an address has three
    registers to live in rather than six is the one place a value's class is narrower
-   than the machine, and there are still no sub-registers, so a byte value has
-   nowhere to live — which is why a byte access is refused.
+   than the machine when the value is a word, and a byte value is narrower still:
+   it lives in the low half of one of the four registers that has a half, so `si`
+   and `di` cannot hold it (`docs/ir.md` §3.2). An access is the width of the value
+   it moves, so a byte load is one byte and names `al` rather than `ax`.
 8. **Emit** assembly text for the selected target. **Built.**
 9. **Assemble** (optionally, in the same run): the bundled `asm` front end
    encodes instructions, choosing the shortest encoding for each form it is
@@ -327,7 +329,7 @@ Working today:
   runs (`docs/ir.md` §7.1).
 * **Instruction selection and register allocation**, enough to compile arithmetic
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
-  `jmp`, the `jcc` family, 16-bit loads and stores, and `*`, `/` and `%` signed and
+  `jmp`, the `jcc` family, loads and stores of a byte or a word, and `*`, `/` and `%` signed and
   unsigned. `volatile` is honoured: a read marked volatile happens even when nothing
   uses its value, while a plain read nobody uses is removed.
 * **A target that says what its instructions do to registers**: which registers an
@@ -355,8 +357,9 @@ Working today:
   register is taken, a value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
-Not built yet, and refused with a reason rather than guessed at: conversions and
-byte accesses (there are no sub-registers, so half a register has no name), `setcc`,
+Not built yet, and refused with a reason rather than guessed at: conversions
+(`movzx`, `movsx` and narrowing, which are the encodings this machine does not have and
+would be sequences the target declares), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
 refused until every definition writes those bytes — a wrong answer nobody is told about
@@ -392,7 +395,7 @@ Planned milestones:
    approach* is not written.
 5. 8086 instruction selection and register allocation. **Partly done**: enough
    for arithmetic, comparisons, control flow, multiplication and division, and
-   16-bit loads and stores; conversions and narrow accesses are refused with a
+   16-bit loads and stores, and byte-wide ones; conversions are refused with a
    reason.
 6. `sim` interpreter, and an end-to-end example that assembles and runs.
 7. A second backend on top of the existing target description, to prove that

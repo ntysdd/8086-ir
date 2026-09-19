@@ -223,6 +223,17 @@ public interface Target {
      */
     List<String> addressRegisters();
 
+    /**
+     * The name the low byte of a value register is written by, or null when this register has
+     * none.
+     *
+     * <p>It is how a byte value lives: the surface has no half-registers, so a value is a whole
+     * register, and an instruction that reads or writes one byte of it names the byte half —
+     * {@code al} for {@code ax} ({@code docs/ir.md} §3.2). A register with no such name cannot
+     * hold a byte value at all, which is why this is asked rather than assumed.
+     */
+    String byteRegister(String register);
+
     /** The forms that read a value out of memory into a register. */
     List<Form> loadForms();
 

@@ -29,6 +29,7 @@ public final class I8086Test {
     }
 
     public static void register(Suite suite) {
+        suite.add("I8086 says which register can hold a byte", I8086Test::byteHalves);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
         suite.add("I8086 says an instruction that writes nothing destroys nothing",
@@ -37,6 +38,31 @@ public final class I8086Test {
                 I8086Test::namesStatementOperations);
         suite.add("I8086 says why a mnemonic is not a statement",
                 I8086Test::explainsStatementRefusals);
+    }
+
+    /**
+     * Where a byte value lives: the low half of a register that has one, and no other register.
+     *
+     * <p>Four of the six value registers have a low byte and {@code si} and {@code di} do not, which
+     * is the whole of why a byte value has fewer places to live ({@code docs/ir.md} §3.2). The high
+     * halves are deliberately absent: {@code ah} is not somewhere a value lives, it is a register a
+     * machine statement is given.
+     */
+    private static void byteHalves() {
+        Target target = Targets.byName("8086");
+        Assert.assertEquals("al", target.byteRegister("ax"));
+        Assert.assertEquals("bl", target.byteRegister("bx"));
+        Assert.assertEquals("cl", target.byteRegister("cx"));
+        Assert.assertEquals("dl", target.byteRegister("dx"));
+        Assert.assertNull(target.byteRegister("si"), "si has no low byte");
+        Assert.assertNull(target.byteRegister("di"), "nor does di");
+        Assert.assertNull(target.byteRegister("ah"), "the high half is not where a value lives");
+        for (String register : target.valueRegisters()) {
+            Assert.assertTrue(target.byteRegister(register) == null
+                            || register.startsWith("a") || register.startsWith("b")
+                            || register.startsWith("c") || register.startsWith("d"),
+                    "only a register with a low byte names one: " + register);
+        }
     }
 
     /**
