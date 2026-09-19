@@ -237,6 +237,24 @@ public final class IrParserTest {
         Assert.assertEquals(HELLO, IrPrinter.print(parse(HELLO)));
     }
 
+    private static void roundTripsGeneratedLabels() {
+        // A module that used the sugar prints labels the compiler made up. Printing it
+        // and reading it back has to give the same module — it did not while those
+        // labels began with '$' and the lexer refused '$', which broke the round trip
+        // for every program with an .if or a .while in it (AGENTS.md, invariant 5).
+        String withSugar = "    var n: u16\n"
+                + "    .while n > 0\n"
+                + "        n = eval(n - 1)\n"
+                + "        .if n == 1\n"
+                + "            n = 2\n"
+                + "        .endif\n"
+                + "    .endw\n";
+        String header = "target 8086\norg 0x100\nentry main\n\nmain:\n";
+        String once = IrPrinter.print(parse(header + withSugar));
+        Assert.assertTrue(once.contains("..@lbl"), once);
+        Assert.assertEquals(once, IrPrinter.print(parse(once)));
+    }
+
     private static void reachesFixedPoint() {
         String loose = "; a comment\nTARGET 8086\nORG 100\nENTRY Start\n"
                 + "Start:\n"

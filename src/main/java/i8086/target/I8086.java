@@ -282,9 +282,9 @@ public final class I8086 implements Target {
      * the whole answer to "what may begin a statement" and there is no second place to
      * look.
      */
-    private static final Map<String, Operator> STATEMENT_WORDS = statementWords();
+    private static final Map<String, Operator> STATEMENT_WORDS = statementWordTable();
 
-    private static Map<String, Operator> statementWords() {
+    private static Map<String, Operator> statementWordTable() {
         Map<String, Operator> words = new LinkedHashMap<String, Operator>();
         // The words the surface spells with a symbol, then the ones it already spells as
         // words: 'adc' and 'shl' are operators with a single spelling, and 'add' and
@@ -380,6 +380,10 @@ public final class I8086 implements Target {
         return STATEMENT_WORDS.get(word);
     }
 
+    @Override
+    public List<String> statementWords() {
+        return Collections.unmodifiableList(new ArrayList<String>(STATEMENT_WORDS.keySet()));
+    }
     @Override
     public String statementProblem(String word, int operands) {
         String problem = STATEMENT_PROBLEMS.get(word);

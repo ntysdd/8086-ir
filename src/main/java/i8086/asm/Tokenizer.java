@@ -56,7 +56,7 @@ public final class Tokenizer {
                             "a carriage return must be followed by a newline");
                 }
                 tokens.add(newline(2));
-            } else if (isNameStart(c) || c == '.') {
+            } else if (isNameStart(c) || c == '.' || c == '$') {
                 tokens.add(scanName());
             } else if (isDigit(c)) {
                 tokens.add(scanNumber());
@@ -90,17 +90,44 @@ public final class Tokenizer {
 
     private Token scanName() {
         SourcePos start = here();
+        // The marker is not part of the name: '$ax' is the author saying 'this is my
+        // ax, not whatever word ax is' (docs/ir.md §3.1), and the token keeps the
+        // fact rather than the character so that every reader of a name — there are
+        // nine of them — does not have to strip it.
+        boolean forced = false;
+        if (peek() == '$') {
+            index++;
+            forced = true;
+        }
         int from = index;
         if (peek() == '.') {
             index++;
+            if (!atEnd() && peek() == '.') {
+                // A name the compiler generated: '..@lbl0' (docs/ir.md §7.2). One dot
+                // is the author's, two are ours, and a two-dot name without the '@'
+                // is refused rather than accepted as an ordinary name, because in an
+                // assembler that reads this dialect text a ragged name like '..lbl0'
+                // means something else again.
+                index++;
+                if (atEnd() || peek() != '@') {
+                    throw new CompileError(start,
+                            "a name beginning with '..' is one the compiler generated, as in "
+                                    + "'..@lbl0', and it is not something to write");
+                }
+                index++;
+            }
             if (atEnd() || !isNameStart(peek())) {
                 throw new CompileError(start, "a dot must begin a word, as in '.if'");
             }
+        } else if (atEnd() || !isNameStart(peek())) {
+            throw new CompileError(start, forced
+                    ? "a '$' marks a name as the author's, so a name has to follow it"
+                    : "expected a name");
         }
         while (!atEnd() && isNamePart(peek())) {
             index++;
         }
-        return token(TokenKind.IDENT, source.substring(from, index), 0, start);
+        return token(TokenKind.IDENT, source.substring(from, index), 0, start, forced);
     }
 
     private Token scanNumber() {
@@ -194,6 +221,11 @@ public final class Tokenizer {
 
     private Token token(TokenKind kind, String text, long value, SourcePos position) {
         return new Token(kind, text, value, position);
+    }
+
+    private Token token(TokenKind kind, String text, long value, SourcePos position,
+                        boolean forced) {
+        return new Token(kind, text, value, position, forced);
     }
 
     private SourcePos here() {

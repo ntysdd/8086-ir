@@ -109,6 +109,57 @@ prefix such as `byte`, a data directive such as `db`, a statement word such as
 `jmp`, or a condition such as `jc`. Such a declaration is refused, because the
 meaning of the word would then depend on where you looked.
 
+### 3.1.1 `$name` is the author's, `..@name` is the compiler's — [decided]
+
+Two prefixes settle what would otherwise be a running argument, and they are
+taken from NASM, which has the same problem and the same two answers:
+
+> An identifier may also be prefixed with a `$` to indicate that it is intended
+to be read as an identifier and not a reserved word.
+> — *NASM Manual*, §3.2
+
+> … if a label begins with the special prefix `..@`, then it does nothing to the
+local label mechanism.
+> — *NASM Manual*, §3.9
+
+* **`$name`** is the author's name whatever it looks like. `var $shl: i16` and
+  `$shl = 1` declare and use a variable called `shl`. The `$` is a **marker and
+  not part of the name**: `$ax` and `ax` name the same thing, which is the whole
+  point — it is a way to say "mine" where the surface would otherwise have to
+  guess.
+* **`..@name`** is the compiler's. Names it makes up begin there, and declaring
+  a *variable* with one is refused. Writing a label with one is not, because the
+  printer writes labels and its output has to be readable again.
+
+The two lists this leaves behind are worth stating plainly, because they are not
+the same list:
+
+* **What cannot be a plain name** is the narrow list: a word whose meaning the
+  surface could not tell from a name where it stands. Operators spelled as words
+  (`shl`, `adc`), and with them the operators written as symbols, since a symbol
+  is not a spelling a name can have; the size words, `byte`, `word`, `dword`, and
+  the directives `db`, `dw`, `dd`; the conversions `movzx` and `movsx`; the
+  conditions, every spelling of them; the structural words — `var`, `ret`, `asm`,
+  `jmp`, `cmp`, `test`, `target`, `org`, `entry`; and the sugar's own `.if`,
+  `.elseif`, `.else`, `.endif`, `.while`, `.endw`.
+* **What the printer marks with `$`** is the wide list: everything above, plus
+  every word that is meaningful only somewhere a name is not written — a type
+  name after `:`, a mnemonic that begins a statement, a register name inside an
+  inline block, and `eval`, `expr`, `volatile`, `clobbers`, `pad`, `to`. Input is
+  liberal and output is canonical, the same split as the thirty spellings of a
+  condition in §4.4: `var eval: i16` is accepted, and what comes back says
+  `$eval`.
+
+So a program never fails to compile because of a name it chose: the escape is
+always there, and it is one character. And a reader never has to work out whether
+the `eval` in front of them is a variable — if it is, it is written with the
+marker.
+
+**[open]** whether the narrow list should grow to all of the wide one, so that
+the rule is simply "every word the surface knows is the surface's". It would
+refuse programs that compile today, which is why it is not done, and the escape
+above is what makes it possible at all.
+
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 
 This distinction is load-bearing. It is what makes `expr` pure (§5.2), and it is
@@ -599,9 +650,11 @@ it leaves behind is the allocator's business, not an effect of the program (§2.
   the canonical labels-and-branches form, so `print(parse(text))` is not `text`
   unless `text` was already canonical — while `parse(print(ir)) == ir` continues
   to hold. The two invariants are about different things and both are tested.
-* The labels the sugar invents are named so that no name a person can write looks
-  like one, and they are numbered in the order they are created, so the output is
-  the same on every run (`AGENTS.md`, invariant 6).
+* The labels the sugar invents are written `..@lbl0`, `..@lbl1`, and so on — the
+  compiler's own namespace (§3.1.1), numbered in the order they are created, so
+  that the output is the same on every run (`AGENTS.md`, invariant 6). They used
+  to be written `$lbl0`, which stopped being right the moment `$` became the
+  author's marker, and which could not be read back at all.
 * Choosing a signed or an unsigned test needs the signedness of what is compared,
   and that is written in the declarations — which may come after the comparison.
   So the declarations are read first; the parse proper is still the authority on
@@ -719,8 +772,9 @@ machine the answer would be different.
 *variable* called `ax` — legal, since a variable is a virtual register whose name
 its author chose (§3.1) — and quietly mean something other than what the writer
 wrote. A register is reached through inline assembly (§9), or through the pinning
-of §12 item 12 once it exists. The refusal is inside the new construct, so a
-program that already has a variable named `ax` is unaffected.
+of §12 item 12 once it exists; a variable that really is called `ax` is written
+`$ax` (§3.1.1). The refusal is inside the new construct, so a program that
+already has a variable named `ax` is unaffected.
 
 **[open]** one shape is not recognised yet, and it costs bytes: `d = eval(0 - d)`
 is the same operation as `d = eval(-d)` and is still emitted as building a zero and

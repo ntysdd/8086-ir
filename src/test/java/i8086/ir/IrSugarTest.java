@@ -56,10 +56,10 @@ public final class IrSugarTest {
                 + "    var y: u16\n"
                 + "    var z: u16\n"
                 + "    cmp x, y\n"
-                + "    jnc $lbl0\n"
+                + "    jnc ..@lbl0\n"
                 + "    z = 1\n"
                 + "\n"
-                + "$lbl0:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
+                + "..@lbl0:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
                 + "    .if x < y\n"
                 + "        z = 1\n"
                 + "    .endif\n"));
@@ -75,14 +75,14 @@ public final class IrSugarTest {
                 + "    var y: u16\n"
                 + "    var z: u16\n"
                 + "    cmp x, y\n"
-                + "    jnz $lbl0\n"
+                + "    jnz ..@lbl0\n"
                 + "    z = 1\n"
-                + "    jmp $lbl1\n"
+                + "    jmp ..@lbl1\n"
                 + "\n"
-                + "$lbl0:\n"
+                + "..@lbl0:\n"
                 + "    z = 2\n"
                 + "\n"
-                + "$lbl1:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
+                + "..@lbl1:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
                 + "    .if x == y\n"
                 + "        z = 1\n"
                 + "    .else\n"
@@ -100,20 +100,20 @@ public final class IrSugarTest {
                 + "    var y: u16\n"
                 + "    var z: u16\n"
                 + "    cmp x, y\n"
-                + "    jnc $lbl0\n"
+                + "    jnc ..@lbl0\n"
                 + "    z = 1\n"
-                + "    jmp $lbl1\n"
+                + "    jmp ..@lbl1\n"
                 + "\n"
-                + "$lbl0:\n"
+                + "..@lbl0:\n"
                 + "    cmp x, y\n"
-                + "    jbe $lbl2\n"
+                + "    jbe ..@lbl2\n"
                 + "    z = 2\n"
-                + "    jmp $lbl1\n"
+                + "    jmp ..@lbl1\n"
                 + "\n"
-                + "$lbl2:\n"
+                + "..@lbl2:\n"
                 + "    z = 3\n"
                 + "\n"
-                + "$lbl1:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
+                + "..@lbl1:\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
                 + "    .if x < y\n"
                 + "        z = 1\n"
                 + "    .elseif x > y\n"
@@ -132,14 +132,14 @@ public final class IrSugarTest {
                 + "    var x: u16\n"
                 + "    var y: u16\n"
                 + "    var z: u16\n"
-                + "    jmp $lbl1\n"
+                + "    jmp ..@lbl1\n"
                 + "\n"
-                + "$lbl0:\n"
+                + "..@lbl0:\n"
                 + "    z = 1\n"
                 + "\n"
-                + "$lbl1:\n"
+                + "..@lbl1:\n"
                 + "    cmp x, y\n"
-                + "    ja $lbl0\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
+                + "    ja ..@lbl0\n", printed("    var x: u16\n    var y: u16\n    var z: u16\n"
                 + "    .while x > y\n"
                 + "        z = 1\n"
                 + "    .endw\n"));
@@ -149,11 +149,11 @@ public final class IrSugarTest {
     private static void readsSignedness() {
         Assert.assertTrue(printed("    var i: i16\n    var j: i16\n    var z: u16\n"
                         + "    .if i < j\n        z = 1\n    .endif\n")
-                        .contains("    jge $lbl0\n"),
+                        .contains("    jge ..@lbl0\n"),
                 "i16 < i16 is a signed test, and its opposite is jge");
         Assert.assertTrue(printed("    var i: u16\n    var j: u16\n    var z: u16\n"
                         + "    .if i < j\n        z = 1\n    .endif\n")
-                        .contains("    jnc $lbl0\n"),
+                        .contains("    jnc ..@lbl0\n"),
                 "u16 < u16 is an unsigned test, and its opposite is jnc");
     }
 
@@ -166,8 +166,8 @@ public final class IrSugarTest {
                 + "    .endw\n";
         String once = printed(body);
         Assert.assertEquals(once, printed(body));
-        Assert.assertTrue(once.contains("$lbl0") && once.contains("$lbl1")
-                        && once.contains("$lbl2"),
+        Assert.assertTrue(once.contains("..@lbl0") && once.contains("..@lbl1")
+                        && once.contains("..@lbl2"),
                 "the labels are numbered as they are created: " + once);
     }
 

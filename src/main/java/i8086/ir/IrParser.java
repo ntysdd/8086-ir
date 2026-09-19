@@ -46,12 +46,11 @@ public final class IrParser {
      * {@link Size} and from {@link Operator}, because those are not this file's
      * facts to know.
      */
-    private static final Set<String> STATEMENT_WORDS = new LinkedHashSet<String>(Arrays.asList(
-            "var", "ret", "asm", "jmp", "cmp", "test",
+    private static final Set<String> HEADER_WORDS = new LinkedHashSet<String>(Arrays.asList(
             "target", "org", "entry"));
 
-    /** How a generated label is named: no name a person can write looks like this. */
-    private static final String GENERATED_LABEL = "$lbl";
+    /** How a generated label is named: the compiler's own prefix, and a number. */
+    private static final String GENERATED_LABEL = "..@lbl";
 
     private final String file;
     private final List<Token> tokens;
@@ -122,7 +121,8 @@ public final class IrParser {
     private static Map<String, Type> declaredTypes(List<Token> tokens) {
         Map<String, Type> types = new LinkedHashMap<String, Type>();
         for (int i = 0; i + 3 < tokens.size(); i++) {
-            if (tokens.get(i).isName("var") && tokens.get(i + 1).is(TokenKind.IDENT)
+            if (tokens.get(i).isName("var") && !tokens.get(i).forced()
+                    && tokens.get(i + 1).is(TokenKind.IDENT)
                     && tokens.get(i + 2).is(":") && tokens.get(i + 3).is(TokenKind.IDENT)) {
                 Type type = Type.named(tokens.get(i + 3).name());
                 if (type != null) {
@@ -184,8 +184,33 @@ public final class IrParser {
         return items;
     }
 
+    /**
+     * The token that begins a line is a {@code $}-marked name, or null when it is
+     * whatever it looks like.
+     *
+     * <p>A name the author marked is theirs, so {@code $.if} is a variable called
+     * {@code .if} and not the sugar ({@code docs/ir.md} §3.1). The marker is what
+     * makes a variable of every word in the surface, including the ones that shape
+     * the text itself.
+     */
+    private static boolean marked(Token token) {
+        return token.is(TokenKind.IDENT) && token.forced();
+    }
+
+    /**
+     * Whether this token is the given word of the surface, rather than a name the
+     * author marked as theirs.
+     *
+     * <p>Every place that reads a word as syntax asks this instead of comparing the
+     * spelling, because {@code $} is exactly the way to have a variable called
+     * {@code eval} or {@code var} ({@code docs/ir.md} §3.1).
+     */
+    private static boolean isWord(Token token, String word) {
+        return !token.forced() && token.isName(word);
+    }
+
     private static boolean closesABlock(Token token) {
-        return token.is(TokenKind.IDENT) && (token.name().equals(".elseif")
+        return token.is(TokenKind.IDENT) && !token.forced() && (token.name().equals(".elseif")
                 || token.name().equals(".else") || token.name().equals(".endif")
                 || token.name().equals(".endw"));
     }
@@ -193,13 +218,13 @@ public final class IrParser {
     private List<Item> parseItem() {
         Token first = peek();
 
-        if (first.isName(".if")) {
+        if (first.isName(".if") && !first.forced()) {
             return parseIf(next());
         }
-        if (first.isName(".while")) {
+        if (first.isName(".while") && !first.forced()) {
             return parseWhile(next());
         }
-        if (first.is(TokenKind.IDENT) && first.name().startsWith(".")) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && first.name().startsWith(".")) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' is not a directive of this surface");
         }
@@ -408,36 +433,38 @@ public final class IrParser {
             next();
             return afterLabel(first);
         }
-        if (first.is(TokenKind.IDENT) && Size.fromDirective(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced()
+                && Size.fromDirective(first.name()) != null) {
             return parseData(next(), null);
         }
-        if (first.isName("var")) {
+        if (isWord(first, "var")) {
             return parseVar();
         }
-        if (first.isName("ret")) {
+        if (isWord(first, "ret")) {
             next();
             endOfLine();
             return new Item.Return(first.position());
         }
-        if (first.isName("asm")) {
+        if (isWord(first, "asm")) {
             return parseInlineAsm();
         }
-        if (first.isName("jmp")) {
+        if (isWord(first, "jmp")) {
             next();
             String where = expect(TokenKind.IDENT, "a label to jump to").name();
             endOfLine();
             return new Item.Jump(first.position(), where);
         }
-        if (first.isName("cmp") || first.isName("test")) {
+        if (isWord(first, "cmp") || isWord(first, "test")) {
             return parseCompare();
         }
-        if (first.isName("eval")) {
+        if (isWord(first, "eval")) {
             Token keyword = next();
             Operation operation = parseParenthesisedOperation();
             endOfLine();
             return new Item.Eval(keyword.position(), operation);
         }
-        if (first.is(TokenKind.IDENT) && target.condition(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced()
+                && target.condition(first.name()) != null) {
             next();
             String where = expect(TokenKind.IDENT, "a label to branch to").name();
             endOfLine();
@@ -552,12 +579,13 @@ public final class IrParser {
      */
     private Value parseInstructionOperand(String what) {
         Token at = peek();
-        if (at.is(TokenKind.IDENT) && target.isRegister(at.name())) {
+        if (at.is(TokenKind.IDENT) && !at.forced() && target.isRegister(at.name())) {
             throw new CompileError(at.position(),
                     "'" + at.text() + "' is a register, and a register is not an operand here: "
                             + "this spelling is for operations on variables and memory, and a "
                             + "value that has to be in a register of its own is written in an "
-                            + "inline block (docs/ir.md §7.3, §9, §12 item 12)");
+                            + "inline block; if a variable called '" + at.text() + "' was meant, "
+                            + "write '$' in front of it (docs/ir.md §7.3, §9, §3.1)");
         }
         return parseOperationOperand(what);
     }
@@ -613,6 +641,9 @@ public final class IrParser {
     private Item parseVar() {
         Token keyword = expectName("var");
         Token name = expect(TokenKind.IDENT, "a variable name");
+        require(!Vocabulary.generated(name.name()), name.position(),
+                "a name beginning with '..@' is one the compiler generated, so it cannot be "
+                        + "declared; the compiler's labels are its own (docs/ir.md §7.2)");
         requireNameable(name);
         expectPunct(":");
         Token typeWord = expect(TokenKind.IDENT, "a type after ':'");
@@ -632,14 +663,14 @@ public final class IrParser {
      * where you look. Better to say so at the declaration.
      */
     private void requireNameable(Token name) {
-        boolean reserved = Size.named(name.name()) != null
-                || Size.fromDirective(name.name()) != null
-                || STATEMENT_WORDS.contains(name.name())
-                || Operator.named(name.name()) != null
-                || Conversion.named(name.name()) != null
-                || target.condition(name.name()) != null;
-        require(!reserved, name.position(),
-                "'" + name.text() + "' is a word of the surface, so it cannot name anything");
+        // A '$' in front is the author saying the name is theirs, which is the whole
+        // point of having it (docs/ir.md §3.1).
+        if (name.forced()) {
+            return;
+        }
+        require(!Vocabulary.reserved(name.name(), target), name.position(),
+                "'" + name.text() + "' is a word of the surface, so it cannot name anything; "
+                        + "write '$' in front of it to say the name is yours (docs/ir.md §3.1)");
     }
 
     private Item parseAssignment() {
@@ -658,28 +689,29 @@ public final class IrParser {
         if (startsMemoryOperand()) {
             return new Value.Memory(first.position(), parseMemoryOperand());
         }
-        if (first.isName("eval")) {
+        if (isWord(first, "eval") && tokenAt(1).is("(")) {
             next();
             return new Value.Eval(first.position(), parseParenthesisedOperation());
         }
-        if (first.isName("expr")) {
+        if (isWord(first, "expr") && tokenAt(1).is("(")) {
             next();
             return new Value.Expr(first.position(), parseParenthesisedExpression());
         }
-        if (first.is(TokenKind.IDENT) && Conversion.named(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced()
+                && Conversion.named(first.name()) != null) {
             Conversion conversion = Conversion.named(first.name());
             next();
             return new Value.Convert(first.position(), conversion,
                     parseConversionOperand(conversion));
         }
-        if (first.is(TokenKind.IDENT) && Size.named(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && Size.named(first.name()) != null) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' says how wide a memory access is, so it needs a "
                             + "bracket after it; to narrow a value, 'byte' and 'word' take the low "
                             + "byte or the low word, and there is nothing wider than a 'dword' "
                             + "to narrow (docs/ir.md §3.5)");
         }
-        if (first.is(TokenKind.IDENT) && isOperatorWord(first.name())) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && isOperatorWord(first.name())) {
             throw new CompileError(first.position(),
                     "'" + first.text() + "' is an operator, so it needs an expression: "
                             + "write eval(...) or expr(...) around it (docs/ir.md §5)");
@@ -708,8 +740,9 @@ public final class IrParser {
      */
     private Value parseConversionOperand(Conversion conversion) {
         Token at = peek();
-        boolean anotherConversion = Conversion.named(at.name()) != null && !startsMemoryOperand();
-        if (at.isName("eval") || at.isName("expr") || anotherConversion) {
+        boolean anotherConversion = !at.forced() && Conversion.named(at.name()) != null
+                && !startsMemoryOperand();
+        if (isWord(at, "eval") || isWord(at, "expr") || anotherConversion) {
             throw new CompileError(at.position(),
                     "'" + conversion.spelling() + "' takes a value with one width, not "
                             + at.describe() + "; one conversion changes one width, which is what "
@@ -791,21 +824,21 @@ public final class IrParser {
             next();
             return new Value.Number(at.position(), at.value(), at.text());
         }
-        if (at.isName("eval") || at.isName("expr")) {
+        if ((isWord(at, "eval") || isWord(at, "expr")) && tokenAt(1).is("(")) {
             throw new CompileError(at.position(),
                     "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
         }
-        if (at.is(TokenKind.IDENT) && Conversion.named(at.name()) != null) {
+        if (at.is(TokenKind.IDENT) && !at.forced() && Conversion.named(at.name()) != null) {
             throw new CompileError(at.position(),
                     "a conversion is not an operand of an operation: the operands of one "
                             + "operation are one width, and a conversion is how that width changes "
                             + "(docs/ir.md §3.2, §3.5)");
         }
-        if (at.is(TokenKind.IDENT) && Operator.named(at.name()) != null) {
+        if (at.is(TokenKind.IDENT) && !at.forced() && Operator.named(at.name()) != null) {
             throw new CompileError(at.position(),
                     "'" + at.text() + "' is an operator, so it needs operands (docs/ir.md §5.5)");
         }
-        if (at.is(TokenKind.IDENT) && isWordOfTheSurface(at.name())) {
+        if (at.is(TokenKind.IDENT) && !at.forced() && Vocabulary.reserved(at.name(), target)) {
             throw new CompileError(at.position(),
                     "'" + at.text() + "' is a word of the surface, so it is not an operand here");
         }
@@ -815,13 +848,6 @@ public final class IrParser {
         }
         throw new CompileError(at.position(),
                 "expected " + what + ", but found " + at.describe());
-    }
-
-    /** Whether a word means something in the surface other than a name. */
-    private static boolean isWordOfTheSurface(String name) {
-        return STATEMENT_WORDS.contains(name)
-                || Size.named(name) != null
-                || Size.fromDirective(name) != null;
     }
 
     private Expression parseExpression() {
@@ -868,6 +894,11 @@ public final class IrParser {
     /** The operator that begins here, or null when an operand does. */
     private Operator operatorHere() {
         Token token = peek();
+        if (token.forced()) {
+            // '$adc' is the author's name, not the operator: the marker is exactly the
+            // way to have a variable called adc (docs/ir.md §3.1).
+            return null;
+        }
         if (token.is(TokenKind.PUNCT)) {
             return Operator.named(token.text());
         }
@@ -885,6 +916,9 @@ public final class IrParser {
      */
     private Operator prefixOperatorHere() {
         Token token = peek();
+        if (token.forced()) {
+            return null;
+        }
         if (token.is(TokenKind.PUNCT)) {
             return Operator.prefix(token.text());
         }
@@ -910,11 +944,12 @@ public final class IrParser {
             return new Value.Number(at.position(), at.value(), at.text());
         }
         if (at.is(TokenKind.IDENT)) {
-            if (at.isName("eval") || at.isName("expr")) {
+            if ((isWord(at, "eval") || isWord(at, "expr")) && tokenAt(1).is("(")) {
                 throw new CompileError(at.position(),
                         "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
             }
-            if (Operator.named(at.name()) != null || Conversion.named(at.name()) != null) {
+            if (!at.forced()
+                    && (Operator.named(at.name()) != null || Conversion.named(at.name()) != null)) {
                 throw new CompileError(at.position(),
                         "'" + at.text() + "' cannot appear inside an expression here: "
                                 + "an expression has one width and one set of flags "
@@ -945,7 +980,7 @@ public final class IrParser {
         if (token.is("[")) {
             return true;
         }
-        if (token.is(TokenKind.IDENT) && Size.named(token.name()) != null) {
+        if (token.is(TokenKind.IDENT) && !token.forced() && Size.named(token.name()) != null) {
             if (tokenAt(1).is("[")) {
                 return true;
             }
@@ -965,7 +1000,7 @@ public final class IrParser {
         if (token.is("[")) {
             return true;
         }
-        if (token.is(TokenKind.IDENT) && Size.named(token.name()) != null) {
+        if (token.is(TokenKind.IDENT) && !token.forced() && Size.named(token.name()) != null) {
             if (tokenAt(offset + 1).is("[")) {
                 return true;
             }
@@ -978,7 +1013,7 @@ public final class IrParser {
 
     /** Whether this token is the word that marks an access as one that must happen. */
     private static boolean isVolatileWord(Token token) {
-        return token.is(TokenKind.IDENT) && token.name().equals("volatile");
+        return token.is(TokenKind.IDENT) && !token.forced() && token.name().equals("volatile");
     }
 
     private Token tokenAt(int offset) {
@@ -994,7 +1029,8 @@ public final class IrParser {
         }
         Size size = null;
         Token afterVolatile = peek();
-        if (afterVolatile.is(TokenKind.IDENT) && Size.named(afterVolatile.name()) != null) {
+        if (afterVolatile.is(TokenKind.IDENT) && !afterVolatile.forced()
+                && Size.named(afterVolatile.name()) != null) {
             size = Size.named(afterVolatile.name());
             next();
         }
@@ -1047,7 +1083,8 @@ public final class IrParser {
         if (peek().is(TokenKind.NEWLINE) || peek().isEof()) {
             return new Item.Label(label.position(), label.name());
         }
-        if (peek().is(TokenKind.IDENT) && Size.fromDirective(peek().name()) != null) {
+        if (peek().is(TokenKind.IDENT) && !peek().forced()
+                && Size.fromDirective(peek().name()) != null) {
             return parseData(next(), label.name());
         }
         throw new CompileError(peek().position(),
@@ -1148,13 +1185,13 @@ public final class IrParser {
     private Operand parseOperand() {
         Token first = peek();
 
-        if (first.isName("offset")) {
+        if (isWord(first, "offset")) {
             next();
             return new Operand.Offset(first.position(),
                     expect(TokenKind.IDENT, "a label name after 'offset'").name());
         }
         Size size = null;
-        if (first.is(TokenKind.IDENT) && Size.named(first.name()) != null) {
+        if (first.is(TokenKind.IDENT) && !first.forced() && Size.named(first.name()) != null) {
             size = Size.named(first.name());
             next();
         }

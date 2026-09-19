@@ -18,21 +18,48 @@ public final class Token {
     private final String text;
     private final long value;
     private final SourcePos position;
+    private final boolean forced;
 
     Token(TokenKind kind, String text, long value, SourcePos position) {
+        this(kind, text, value, position, false);
+    }
+
+    Token(TokenKind kind, String text, long value, SourcePos position, boolean forced) {
         this.kind = kind;
         this.text = text;
         this.value = value;
         this.position = position;
+        this.forced = forced;
     }
 
     public TokenKind kind() {
         return kind;
     }
 
-    /** The spelling as written. For a string literal, its contents without quotes. */
+    /**
+     * The spelling as written, without the {@code $} that marked it as a name. For a
+     * string literal, its contents without quotes.
+     *
+     * <p>The marker is not part of the name — {@code $ax} names the same thing
+     * {@code ax} does — which is what makes {@code $} an escape from the surface's
+     * own words rather than a second namespace. {@link #written()} is what to quote
+     * in a diagnostic.
+     */
     public String text() {
         return text;
+    }
+
+    /**
+     * Whether the author wrote {@code $} in front of the name to say it is theirs
+     * rather than one of the surface's words ({@code docs/ir.md} §3.1).
+     */
+    public boolean forced() {
+        return forced;
+    }
+
+    /** The spelling as it appears in the source, marker and all. */
+    public String written() {
+        return forced ? "$" + text : text;
     }
 
     /** The numeric value. Only meaningful for {@link TokenKind#NUMBER}. */
@@ -74,7 +101,7 @@ public final class Token {
     public String describe() {
         switch (kind) {
             case IDENT:
-                return "word '" + text + "'";
+                return "word '" + written() + "'";
             case NUMBER:
                 return "number '" + text + "'";
             case STRING:

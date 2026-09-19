@@ -127,6 +127,17 @@ public interface Target {
     }
 
     /**
+     * Every mnemonic this target accepts as a statement, in a fixed order, for the
+     * tests that check the whole vocabulary at once — that a word the target knows
+     * can still be the author's name with a {@code $} in front of it
+     * ({@code docs/ir.md} §3.1), and that each refused word is refused with a
+     * reason rather than by falling through.
+     */
+    default List<String> statementWords() {
+        return Collections.emptyList();
+    }
+
+    /**
      * Why this mnemonic cannot begin a statement here, or null when the word means
      * nothing to this target and the complaint is the parser's to make.
      *

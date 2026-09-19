@@ -730,9 +730,9 @@ public final class CompilerTest {
                 + "    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    jmp $lbl1\n\n$lbl0:\n    inc ax\n"),
+        Assert.assertTrue(assembly.contains("    jmp ..@lbl1\n\n..@lbl0:\n    inc ax\n"),
                 "the loop body comes first and the test is jumped to: " + assembly);
-        Assert.assertTrue(assembly.contains("$lbl1:\n    cmp ax, 3\n    jc $lbl0\n"),
+        Assert.assertTrue(assembly.contains("..@lbl1:\n    cmp ax, 3\n    jc ..@lbl0\n"),
                 "and the constant is folded into the comparison: " + assembly);
     }
 
@@ -744,9 +744,9 @@ public final class CompilerTest {
     private static void readsComparisonSignedness() {
         String signed = Compiler.compile("t.ir", comparisonProgram("i16"));
         String unsigned = Compiler.compile("t.ir", comparisonProgram("u16"));
-        Assert.assertTrue(signed.contains("    jge $lbl0\n"),
+        Assert.assertTrue(signed.contains("    jge ..@lbl0\n"),
                 "a signed less-than leaves on jge: " + signed);
-        Assert.assertTrue(unsigned.contains("    jnc $lbl0\n"),
+        Assert.assertTrue(unsigned.contains("    jnc ..@lbl0\n"),
                 "an unsigned one leaves on jnc: " + unsigned);
     }
 

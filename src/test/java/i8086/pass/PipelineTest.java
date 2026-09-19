@@ -56,7 +56,7 @@ public final class PipelineTest {
     private static void leavingSsaIsVerified() {
         Module module = OutOfSsa.module(Pipeline.run(build()));
         IrVerifier.verify(module, Targets.byName("8086"));
-        Assert.assertTrue(IrPrinter.print(module).contains("    jmp $lbl1\n"),
+        Assert.assertTrue(IrPrinter.print(module).contains("    jmp ..@lbl1\n"),
                 "the loop is still a loop: " + IrPrinter.print(module));
     }
 

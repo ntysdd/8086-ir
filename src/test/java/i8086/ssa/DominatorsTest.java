@@ -82,8 +82,8 @@ public final class DominatorsTest {
         // join and neither dominates it.
         Assert.assertEquals("block0(main): idom null, frontier -, children block1 block2 block3\n"
                         + "block1: idom block0, frontier block3, children -\n"
-                        + "block2($lbl0): idom block0, frontier block3, children -\n"
-                        + "block3($lbl1): idom block0, frontier -, children -\n",
+                        + "block2(..@lbl0): idom block0, frontier block3, children -\n"
+                        + "block3(..@lbl1): idom block0, frontier -, children -\n",
                 describe("    var x: u16\n    x = 0\n    .if x < 0\n        x = 1\n    .else\n"
                         + "        x = 2\n    .endif\n    ret\n"));
     }
@@ -94,8 +94,8 @@ public final class DominatorsTest {
         // strictly dominate itself. That second entry is what makes the φ walk
         // carry on past a loop.
         Assert.assertEquals("block0(main): idom null, frontier -, children block2\n"
-                        + "block1($lbl0): idom block2, frontier block2, children -\n"
-                        + "block2($lbl1): idom block0, frontier block2,"
+                        + "block1(..@lbl0): idom block2, frontier block2, children -\n"
+                        + "block2(..@lbl1): idom block0, frontier block2,"
                         + " children block1 block3\n"
                         + "block3: idom block2, frontier -, children -\n",
                 describe("    var x: u16\n    var n: u16\n    x = 0\n    n = 3\n"

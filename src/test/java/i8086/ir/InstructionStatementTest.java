@@ -124,10 +124,12 @@ public final class InstructionStatementTest {
     private static void wordsStayNames() {
         // The words are statements' words, not the surface's: a variable may be called
         // add, and it stays one wherever a name is expected (docs/ir.md §3.1, §7.3).
-        Assert.assertEquals("    var add: i16\n"
+        // What comes back says '$add', because that is the canonical spelling of a name
+        // that looks like a word.
+        Assert.assertEquals("    var $add: i16\n"
                         + "    var s: i16\n"
-                        + "    add = 5\n"
-                        + "    s = eval(s + add)\n",
+                        + "    $add = 5\n"
+                        + "    s = eval(s + $add)\n",
                 became("    var add: i16\n"
                         + "    var s: i16\n"
                         + "    add = 5\n"

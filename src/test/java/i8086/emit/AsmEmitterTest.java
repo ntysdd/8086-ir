@@ -166,14 +166,14 @@ public final class AsmEmitterTest {
                 + "main:\n"
                 + "    mov ax, 0\n"
                 + "    mov cx, 3\n"
-                + "    jmp $lbl1\n"
+                + "    jmp ..@lbl1\n"
                 + "\n"
-                + "$lbl0:\n"
+                + "..@lbl0:\n"
                 + "    add ax, 1\n"
                 + "\n"
-                + "$lbl1:\n"
+                + "..@lbl1:\n"
                 + "    cmp ax, cx\n"
-                + "    jc $lbl0\n"
+                + "    jc ..@lbl0\n"
                 + "    ret\n", assembly);
     }
 }

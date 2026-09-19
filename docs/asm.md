@@ -89,6 +89,14 @@ block is a straight sequence of instructions.
   `Mov` are the same mnemonic, and `Counter` and `counter` are the same label.
   The emitter always writes lowercase, so the output does not depend on how the
   input was typed.
+* Two prefixes are the compiler's and the author's, and they are the same two the
+  IR surface has (`docs/ir.md` §3.1.1), taken from NASM: `..@` begins a name the
+  compiler generated, and `$` in front of a name is the author saying "this is
+  mine, not one of the mnemonics or registers". The `$` is a marker rather than
+  part of the name — `$ax` and `ax` name the same symbol — and a two-dot name
+  without the `@` is refused rather than read as an ordinary name, because in an
+  assembler that reads this text `..lbl0` is a local label and means something
+  else again.
 * **Numbers** are decimal (`26`) or hexadecimal with a `0x` prefix (`0x1A`,
   `0x1a`). A leading `-` is a unary minus applied by the operand parser, not part
   of the literal, so literals themselves are non-negative.
