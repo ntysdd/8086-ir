@@ -369,7 +369,11 @@ public final class RegisterAllocator {
                             + target.addressRegisters()
                             : "")
                             + (forbidden == null ? "" : ", because something it has to live "
-                            + "across destroys " + forbidden)
+                            + "across destroys " + forbidden
+                            + "; say what it really destroys with 'clobbers(...)', or write the "
+                            + "value to memory and read it into a name of its own afterwards — "
+                            + "allocation gives each name one register, so a name that spans the "
+                            + "call cannot be given one at all")
                             + ": this allocation does not spill, because a program that needs "
                             + "more registers than the machine has is refused rather than given "
                             + "a frame (docs/ir.md §8.2)");

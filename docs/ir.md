@@ -1097,6 +1097,45 @@ Three things about the form are deliberate:
 * **The list is written back**, so the canonical form says what the compiler will
   assume on the author's behalf, and a re-read statement gets the list it was read
   with.
+* **The list is believed.** It is a promise about code the compiler cannot see, so a
+  list that names too little is a promise broken, and the result is a value the
+  handler was trusted to keep. That is true of every inline-assembly facility there
+  has ever been, and the reason the default is the worst case rather than the
+  friendliest: silence is the only answer the target can give honestly.
+
+### 11.1 What to do when a value has to live across a call — [decided]
+
+Three ways, and a real boot loader uses all three:
+
+```
+; 1. say what the handler keeps, and let the allocator find a register
+int 0x13 clobbers(ax, bx, cx, dx, flags)
+
+; 2. or keep the value in memory, and read it into a name of its own afterwards
+word [save] = n
+int 0x10
+m = [save]
+
+; 3. or save and restore inside a block, and declare what is left destroyed
+asm clobbers(bx, cx, dx, flags) {
+    push ax
+    int 0x10
+    pop ax
+}
+```
+
+The second one is what hand-written boot code does most of the time, and it is why
+it so rarely needs to preserve anything: state goes in memory, and a register holds
+it only for the instruction that needs it. Note the two names in it: **allocation
+gives each name one register**, so a name that spans the call cannot be given one at
+all, whichever route is taken. Reading into `m` rather than back into `n` is what
+makes the memory route work.
+
+`pusha` and `popa` are **not 8086 instructions** — they arrived with the 80186 — so
+they are not statements this target can provide, and a block that writes them is
+writing 186 code. The third route above is their 8086 equivalent, and the first one
+is usually better than either: the allocator does the saving by choosing a register
+the handler keeps, which costs no instruction at all.
 
 **[open]** whether the four that take no immediate and clobber nothing, `hlt` in
 particular, should say that they leave — `hlt` waits for an interrupt and carries on,
