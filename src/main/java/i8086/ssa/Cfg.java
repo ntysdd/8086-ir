@@ -87,7 +87,7 @@ public final class Cfg {
     /** Whether the block this item ends cannot go on to the next item. */
     private static boolean leaves(Item item) {
         return item instanceof Item.Jump || item instanceof Item.Branch
-                || item instanceof Item.Return;
+                || item instanceof Item.FarJump || item instanceof Item.Return;
     }
 
     private void connect() {

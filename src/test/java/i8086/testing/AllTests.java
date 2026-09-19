@@ -19,6 +19,7 @@ public final class AllTests {
         i8086.ir.NameTest.register(suite);
         i8086.ir.PadTest.register(suite);
         i8086.ir.DataTest.register(suite);
+        i8086.ir.MachineTest.register(suite);
         i8086.ir.IrVerifierTest.register(suite);
         i8086.ssa.CfgTest.register(suite);
         i8086.ssa.DominatorsTest.register(suite);

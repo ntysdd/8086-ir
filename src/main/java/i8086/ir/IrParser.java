@@ -496,9 +496,15 @@ public final class IrParser {
         }
         if (isWord(first, "jmp")) {
             next();
-            String where = expect(TokenKind.IDENT, "a label to jump to").name();
+            Token where = peek();
+            if (where.is(TokenKind.NUMBER)) {
+                // 'jmp 0x0000:0x7E00' is a far jump: out of this image and into
+                // another, which is what a boot loader's last act is (docs/ir.md §7.1).
+                return parseFarJump(where);
+            }
+            String target = expect(TokenKind.IDENT, "a label to jump to").name();
             endOfLine();
-            return new Item.Jump(first.position(), where);
+            return new Item.Jump(first.position(), target);
         }
         if (isWord(first, "cmp") || isWord(first, "test")) {
             return parseCompare();
@@ -515,6 +521,11 @@ public final class IrParser {
             String where = expect(TokenKind.IDENT, "a label to branch to").name();
             endOfLine();
             return new Item.Branch(first.position(), target.condition(first.name()), where);
+        }
+        Integer immediate = target.machineStatements().get(first.name());
+        if (immediate != null && !first.forced() && !isNameFollowing(TokenKind.PUNCT, "=")
+                && !isNameFollowing(TokenKind.PUNCT, ":")) {
+            return parseMachineStatement(next(), immediate.intValue());
         }
         if (first.is(TokenKind.IDENT)) {
             return parseInstructionStatement(first);
@@ -661,6 +672,64 @@ public final class IrParser {
         return operator.arity() == 1
                 ? "'d = eval(" + operator.spelling() + "d)'"
                 : "'d = eval(d " + operator.spelling() + " s)'";
+    }
+
+    /**
+     * {@code jmp 0x0000:0x7E00}: a far jump, written out as two numbers.
+     *
+     * <p>Both are one word, and the offset is not a label: a far pointer wants the
+     * label's place *within the segment*, which nothing knows until the assembler has
+     * placed it ({@code docs/asm.md} §4).
+     */
+    private Item parseFarJump(Token segment) {
+        next();
+        expectPunct(":");
+        Token offset = peek();
+        if (offset.is(TokenKind.IDENT)) {
+            throw new CompileError(offset.position(),
+                    "a far jump takes two numbers, segment:offset; jumping to a label is not "
+                            + "supported yet, because the offset a far pointer needs is not the "
+                            + "one a label has until the assembler has placed it "
+                            + "(docs/ir.md §7.1, docs/asm.md §4)");
+        }
+        require(offset.is(TokenKind.NUMBER), offset.position(),
+                "expected an offset after the colon, but found " + offset.describe());
+        next();
+        endOfLine();
+        require(segment.value() <= 0xFFFF, segment.position(),
+                "a segment is one word wide, so it reaches 0xFFFF at most");
+        require(offset.value() <= 0xFFFF, offset.position(),
+                "an offset is one word wide, so it reaches 0xFFFF at most");
+        return new Item.FarJump(segment.position(), segment.value(), offset.value());
+    }
+
+    /**
+     * {@code int 0x13}, {@code hlt}, {@code iret}: a machine operation the target
+     * provides as a statement ({@code docs/ir.md} §11).
+     *
+     * <p>The clobber list is optional and the default is the target's worst case. That
+     * default is not a guess: only the program knows what a handler keeps, so silence
+     * means "everything", and a value that has to live across the statement is refused
+     * until the author says what is really destroyed.
+     */
+    private Item parseMachineStatement(Token keyword, int immediateBytes) {
+        List<Long> operands = new ArrayList<Long>();
+        if (immediateBytes > 0) {
+            Token value = expect(TokenKind.NUMBER, "an immediate");
+            long limit = (1L << (immediateBytes * 8)) - 1;
+            require(value.value() <= limit, value.position(),
+                    "'" + keyword.text() + "' takes " + immediateBytes + " byte(s) of immediate, "
+                            + "so " + value.text() + " does not fit");
+            operands.add(Long.valueOf(value.value()));
+        }
+        List<String> clobbers;
+        if (isWord(peek(), "clobbers")) {
+            clobbers = parseClobbers();
+        } else {
+            clobbers = target.machineClobbers(keyword.name());
+        }
+        endOfLine();
+        return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers);
     }
 
     private Item parseCompare() {

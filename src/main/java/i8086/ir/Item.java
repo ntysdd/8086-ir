@@ -332,7 +332,8 @@ public abstract class Item {
         }
     }
 
-    /** {@code jmp label}: go there, whatever the flags say. */    public static final class Jump extends Item {
+    /** {@code jmp label}: go there, whatever the flags say. */
+    public static final class Jump extends Item {
 
         private final String target;
 
@@ -343,6 +344,80 @@ public abstract class Item {
 
         public String target() {
             return target;
+        }
+    }
+
+    /**
+     * One machine instruction as a statement: {@code int 9}, {@code hlt}, {@code cli}
+     * ({@code docs/ir.md} §11).
+     *
+     * <p>What it is worth is that the compiler *understands* it, where an inline block
+     * is opaque in both directions: a block makes a whole module unoptimisable (§9),
+     * and this says exactly what it does — an effect, and a list of what it destroys.
+     *
+     * <p>The clobbers are stamped here by the parser, from the target's worst case or
+     * from what the author wrote, and they are what the allocator and SSA read: a
+     * machine statement says what it destroys the same way a block does.
+     */
+    public static final class Machine extends Item {
+
+        private final String mnemonic;
+        private final List<Long> operands;
+        private final List<String> clobbers;
+
+        public Machine(SourcePos position, String mnemonic, List<Long> operands,
+                       List<String> clobbers) {
+            super(position);
+            this.mnemonic = mnemonic;
+            this.operands = Collections.unmodifiableList(new ArrayList<Long>(operands));
+            this.clobbers = Collections.unmodifiableList(new ArrayList<String>(clobbers));
+        }
+
+        public String mnemonic() {
+            return mnemonic;
+        }
+
+        /** The immediates it is given: one for {@code int}, none for the rest. */
+        public List<Long> operands() {
+            return operands;
+        }
+
+        /** The registers and flags it destroys, which is what the optimiser believes. */
+        public List<String> clobbers() {
+            return clobbers;
+        }
+    }
+
+    /**
+     * {@code jmp 0x0000:0x7E00}: a far jump, out of this image and into another.
+     *
+     * <p>This is how a boot loader hands control to a kernel, and it is a statement
+     * rather than something inside a block for one reason: **the compiler knows it
+     * leaves**. Nothing after it runs, so nothing after it is reachable, which is the
+     * fact the graph needs and the fact a block cannot state ({@code docs/ir.md}
+     * §7.1, §9).
+     *
+     * <p>The address is two numbers. A far pointer whose offset is a label would be
+     * the label's place *within the segment*, which nothing here knows until the
+     * assembler has placed it; that spelling is still [open] ({@code docs/asm.md} §4).
+     */
+    public static final class FarJump extends Item {
+
+        private final long segment;
+        private final long offset;
+
+        public FarJump(SourcePos position, long segment, long offset) {
+            super(position);
+            this.segment = segment;
+            this.offset = offset;
+        }
+
+        public long segment() {
+            return segment;
+        }
+
+        public long offset() {
+            return offset;
         }
     }
 

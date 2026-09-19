@@ -212,10 +212,20 @@ public final class RegisterAllocator {
     private void keepClobbersOffLiveValues(Selection selection) {
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
-            boolean opaque = piece.item() instanceof Item.InlineAsm;
+            // An item that declares what it destroys: a block, and a machine statement
+            // such as an interrupt. Both mean the same thing by the list, and the
+            // declaration is the authority over what the target would assume.
+            boolean opaque = piece.item() instanceof Item.InlineAsm
+                    || piece.item() instanceof Item.Machine;
             Set<String> declared = new LinkedHashSet<String>();
-            if (opaque) {
+            if (piece.item() instanceof Item.InlineAsm) {
                 for (String destroyed : ((Item.InlineAsm) piece.item()).clobbers()) {
+                    if (target.isRegister(destroyed)) {
+                        declared.add(destroyed);
+                    }
+                }
+            } else if (piece.item() instanceof Item.Machine) {
+                for (String destroyed : ((Item.Machine) piece.item()).clobbers()) {
                     if (target.isRegister(destroyed)) {
                         declared.add(destroyed);
                     }
@@ -358,8 +368,8 @@ public final class RegisterAllocator {
                             ? ", which is used as an address and so can only live in one of "
                             + target.addressRegisters()
                             : "")
-                            + (forbidden == null ? "" : ", because an inline assembly block it "
-                            + "lives across destroys " + forbidden)
+                            + (forbidden == null ? "" : ", because something it has to live "
+                            + "across destroys " + forbidden)
                             + ": this allocation does not spill, because a program that needs "
                             + "more registers than the machine has is refused rather than given "
                             + "a frame (docs/ir.md §8.2)");

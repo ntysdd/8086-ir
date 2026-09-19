@@ -296,9 +296,16 @@ Working today:
   sector's `dw 0xAA55` (`docs/ir.md` §10.2, §10.3). `pad to` is resolved by the
   assembler, which is the only thing that knows how long the code before it is.
 * **An inline assembly block** that declares the registers it destroys, may name
-  labels of its own for a retry loop, and may end in a far jump —
-  `jmp 0x0000:0x7E00` — which is how a boot loader hands control to a kernel
+  labels of its own for a retry loop, and may contain anything the machine has
   (`docs/ir.md` §9, `docs/asm.md` §3, §4).
+* **Machine statements the target provides**: `int 0x13`, `hlt`, `cli`, `sti`, `nop`,
+  `iret`, each optionally saying what it destroys. They exist because a block is
+  opaque and these are not: an interrupt with a declared clobber list leaves the
+  rest of the module optimisable, and a value may live across it
+  (`docs/ir.md` §11).
+* **A far jump**, `jmp 0x0000:0x7E00`, which is how a boot loader hands control to a
+  kernel — and it is a statement because the compiler then knows nothing after it
+  runs (`docs/ir.md` §7.1).
 * **Instruction selection and register allocation**, enough to compile arithmetic
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, 16-bit loads and stores, and `*`, `/` and `%` signed and

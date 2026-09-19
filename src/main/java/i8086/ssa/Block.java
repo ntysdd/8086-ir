@@ -71,13 +71,13 @@ public final class Block {
     }
 
     /**
-     * The item that leaves this block — a jump, a branch or a return — or null
-     * when the block runs into the next one.
+     * The item that leaves this block — a jump, a branch, a far jump or a return — or
+     * null when the block runs into the next one.
      */
     public Item terminator() {
         Item last = items.get(items.size() - 1);
         if (last instanceof Item.Jump || last instanceof Item.Branch
-                || last instanceof Item.Return) {
+                || last instanceof Item.FarJump || last instanceof Item.Return) {
             return last;
         }
         return null;

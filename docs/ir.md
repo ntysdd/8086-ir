@@ -642,8 +642,25 @@ does not ship one. Hence 32-bit multiply without 32-bit divide.
 
 Labels, `jmp`, and the `jcc` family. This is what the pipeline sees.
 
+```
+jmp there              ; to a label in this module
+jmp 0x0000:0x7E00      ; to another segment: out of this image
+```
+
+**A far jump is a statement of its own**, not a line inside an inline block, and the
+reason is what the graph gets out of it: the compiler knows it leaves. Nothing after
+it runs, so nothing after it is reachable, and a block that follows it is dead code
+rather than a fall-through. A block ending in the same instruction cannot say that —
+a block goes on to the next item as far as the compiler is concerned (§9) — which is
+exactly the kind of fact worth giving a statement.
+
+Both numbers are one word, and the offset is **not a label**: a far pointer wants the
+label's place *within the segment*, which nothing here knows until the assembler has
+placed it ([`docs/asm.md`](asm.md) §4).
+
 `ret` ends the program's path, and it promises nothing about the registers: what
 it leaves behind is the allocator's business, not an effect of the program (§2.3).
+A far jump promises even less: it leaves the segment.
 
 ### 7.2 MASM-style sugar — [decided]
 
@@ -1046,14 +1063,46 @@ Operations that are not arithmetic: `in`/`out`, `int`, `hlt`, `cli`, `sti`,
 not provide one, using it is an **unsupported-input hard error** — never a silent
 substitution.
 
-None of them is selectable yet: the surface for them is decided, the back end does
-not emit them, and **inline assembly is how a program writes one today** (§9).
-That is a hard error rather than a fallback, but it is worth saying out loud
-because it is the shortest path to a program this compiler cannot compile and
-another assembler could.
+**Six of them are statements now**, and they are written the way the machine writes
+them:
 
-**[open]** whether string operations (`movsb` and friends) and `jcxz` get a
-surface of their own or are left to inline assembly.
+```
+cli
+int 0x10                       ; destroys everything, because silence cannot promise more
+int 0x13 clobbers(ax, bx, cx, dx, flags)
+sti
+hlt
+nop
+iret
+```
+
+What the target provides is a table, and the statement form exists for the thing a
+block cannot say: **the compiler understands it**. A block is opaque in both
+directions — it makes a whole module unoptimisable (§9) — while one of these says
+exactly what it does: it is an effect, and it carries a list of what it destroys,
+which is what an allocator and SSA need and all they need.
+
+Three things about the form are deliberate:
+
+* **No register operands**, which is why these six and not `in`/`out`. A value
+  cannot yet be named as being in a register (§12 item 12), so an operation that
+  reads or writes a named one has nowhere to put it, and inline assembly stays the
+  way to write those.
+* **The clobber list is optional, and silence means everything.** Only the program
+  knows what an interrupt handler keeps, so a target's honest answer for `int` is
+  "all of it", and a value that has to live across one is refused until the author
+  says what is really destroyed. That refusal is the compiler asking a question
+  rather than guessing: `int 0x10` alone will not let a value live across it, and
+  `int 0x10 clobbers(ax, dx, flags)` will.
+* **The list is written back**, so the canonical form says what the compiler will
+  assume on the author's behalf, and a re-read statement gets the list it was read
+  with.
+
+**[open]** whether the four that take no immediate and clobber nothing, `hlt` in
+particular, should say that they leave — `hlt` waits for an interrupt and carries on,
+so it stays in the block it is in, and `iret` leaves without the graph knowing. Both
+are conservative in the same direction as a block (§9), which is why neither is
+urgent.
 
 ## 12. Open questions
 

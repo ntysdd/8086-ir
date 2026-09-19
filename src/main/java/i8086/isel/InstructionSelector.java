@@ -3,6 +3,7 @@ package i8086.isel;
 import i8086.CompileError;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
+import i8086.asm.Numbers;
 import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.ir.Expression;
@@ -116,6 +117,26 @@ public final class InstructionSelector {
         if (item instanceof Item.Jump) {
             out.add(new Instruction(item.position(), target.jumpMnemonic(), operands(
                     new Operand.Name(item.position(), ((Item.Jump) item).target()))));
+            return;
+        }
+        if (item instanceof Item.Machine) {
+            // One instruction, with what it is given: an interrupt vector is a number,
+            // and a number needs no deciding (docs/ir.md §11).
+            Item.Machine machine = (Item.Machine) item;
+            List<Operand> given = new ArrayList<Operand>();
+            for (long operand : machine.operands()) {
+                given.add(new Operand.Number(item.position(), operand,
+                        Numbers.spelling(operand)));
+            }
+            out.add(new Instruction(item.position(), machine.mnemonic(), given));
+            return;
+        }
+        if (item instanceof Item.FarJump) {
+            // One instruction, and the operand shape is what makes it far: the machine
+            // has the immediate far pointer for exactly this (docs/ir.md §7.1).
+            Item.FarJump far = (Item.FarJump) item;
+            out.add(new Instruction(item.position(), target.jumpMnemonic(), operands(
+                    new Operand.Far(item.position(), far.segment(), far.offset()))));
             return;
         }
         if (item instanceof Item.Branch) {

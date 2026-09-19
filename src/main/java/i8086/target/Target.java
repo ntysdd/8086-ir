@@ -9,6 +9,7 @@ import i8086.ir.Operator;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -148,6 +149,33 @@ public interface Target {
      */
     default String statementProblem(String word, int operands) {
         return null;
+    }
+
+    /**
+     * The mnemonics this target provides as statements of their own, and the width in
+     * bytes of the one immediate each takes, or 0 for none ({@code docs/ir.md} §11).
+     *
+     * <p>These are the machine's operations that are not arithmetic and are not an
+     * operation the surface has a value for: an interrupt, a halt, the interrupt flag,
+     * a no-op, an interrupt return. They take no register operands — which is why they
+     * can be statements at all, since a value cannot be named as being in a register
+     * yet (§12 item 12) — and an author says which registers they destroy when the
+     * target's answer is too wide to be useful.
+     */
+    default Map<String, Integer> machineStatements() {
+        return Collections.emptyMap();
+    }
+
+    /**
+     * What one of those destroys when the author does not say: register names from
+     * {@link #valueRegisters()}, and {@code flags} ({@code docs/ir.md} §11).
+     *
+     * <p>The answer has to be the honest worst case, because only the program knows
+     * what a handler keeps: {@code int} therefore destroys everything, and a program
+     * that keeps a value across one is refused until it says what is really destroyed.
+     */
+    default List<String> machineClobbers(String mnemonic) {
+        return Collections.emptyList();
     }
 
     /**

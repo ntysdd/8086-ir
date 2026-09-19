@@ -98,6 +98,27 @@ public final class IrPrinter {
         } else if (item instanceof Item.Jump) {
             text.append(INDENT).append("jmp ")
                     .append(name(((Item.Jump) item).target(), target)).append('\n');
+        } else if (item instanceof Item.FarJump) {
+            Item.FarJump far = (Item.FarJump) item;
+            text.append(INDENT).append("jmp ").append(Numbers.spelling(far.segment()))
+                    .append(':').append(Numbers.spelling(far.offset())).append('\n');
+        } else if (item instanceof Item.Machine) {
+            Item.Machine machine = (Item.Machine) item;
+            text.append(INDENT).append(machine.mnemonic());
+            for (long operand : machine.operands()) {
+                text.append(' ').append(Numbers.spelling(operand));
+            }
+            // Written out whenever there is something to write, so that the canonical
+            // form says what the compiler will assume — including the worst case it
+            // assumed on the author's behalf. It is also what makes the round trip hold:
+            // a re-read statement gets the list it was read with.
+            for (int i = 0; i < machine.clobbers().size(); i++) {
+                text.append(i == 0 ? " clobbers(" : ", ").append(machine.clobbers().get(i));
+            }
+            if (!machine.clobbers().isEmpty()) {
+                text.append(')');
+            }
+            text.append('\n');
         } else if (item instanceof Item.Branch) {
             Item.Branch branch = (Item.Branch) item;
             text.append(INDENT).append(branch.condition()).append(' ')

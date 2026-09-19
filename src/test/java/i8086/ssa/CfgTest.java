@@ -28,6 +28,7 @@ public final class CfgTest {
         suite.add("Cfg keeps a straight line in one block", CfgTest::oneBlock);
         suite.add("Cfg starts a block at a label", CfgTest::labelsStartBlocks);
         suite.add("Cfg starts a block after something that leaves", CfgTest::retEndsABlock);
+        suite.add("Cfg lets a far jump leave the image", CfgTest::farJumpLeaves);
         suite.add("Cfg falls through to the next block", CfgTest::fallsThrough);
         suite.add("Cfg gives a branch two edges", CfgTest::branchHasTwoEdges);
         suite.add("Cfg counts a branch to the next label once", CfgTest::branchToTheNextLabel);
@@ -77,6 +78,18 @@ public final class CfgTest {
 
     private static String shape(String body) {
         return describe(Cfg.of(parse(body)));
+    }
+
+    /**
+     * A far jump is the one statement that says "nothing after this runs": it goes out
+     * of the image into another segment, and the fact that the compiler knows it is
+     * the whole reason it is a statement rather than a line in a block
+     * ({@code docs/ir.md} §7.1).
+     */
+    private static void farJumpLeaves() {
+        Assert.assertEquals("block0(main) -> -  <- -\n"
+                        + "block1(later) dead -> -  <- -\n",
+                shape("    jmp 0x0000:0x7E00\nlater:\n    ret\n"));
     }
 
     private static void oneBlock() {

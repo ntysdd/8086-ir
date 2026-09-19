@@ -394,6 +394,46 @@ public final class I8086 implements Target {
     }
 
     /**
+     * The machine's operations that are statements of their own, and what each
+     * destroys when the author does not say ({@code docs/ir.md} §11).
+     *
+     * <p>{@code int} takes a vector and destroys everything the allocator hands out:
+     * a handler is code this module has never seen. {@code iret} restores the flags
+     * from the stack, so the surface cannot say what they are afterwards. The other
+     * four touch neither the general registers nor the arithmetic flags.
+     */
+    private static final Map<String, Integer> MACHINE_STATEMENTS = machineStatementTable();
+
+    private static Map<String, Integer> machineStatementTable() {
+        Map<String, Integer> statements = new LinkedHashMap<String, Integer>();
+        statements.put("int", Integer.valueOf(1));
+        statements.put("hlt", Integer.valueOf(0));
+        statements.put("cli", Integer.valueOf(0));
+        statements.put("sti", Integer.valueOf(0));
+        statements.put("nop", Integer.valueOf(0));
+        statements.put("iret", Integer.valueOf(0));
+        return Collections.unmodifiableMap(statements);
+    }
+
+    @Override
+    public Map<String, Integer> machineStatements() {
+        return MACHINE_STATEMENTS;
+    }
+
+    @Override
+    public List<String> machineClobbers(String mnemonic) {
+        if (mnemonic.equals("int")) {
+            List<String> everything = new ArrayList<String>(valueRegisters());
+            everything.add("flags");
+            return Collections.unmodifiableList(everything);
+        }
+        if (mnemonic.equals("iret")) {
+            return Collections.singletonList("flags");
+        }
+        return Collections.emptyList();
+    }
+
+    /**
      * The registers a value may live in, in the order the allocator should use
      * them up.
      *

@@ -127,6 +127,30 @@ public final class IrVerifier {
             checkPad(item);
             return flagsDefined;
         }
+        if (item instanceof Item.FarJump) {
+            Item.FarJump far = (Item.FarJump) item;
+            require(far.segment() <= 0xFFFF, item.position(),
+                    "a segment is one word wide, so it reaches 0xFFFF at most");
+            require(far.offset() <= 0xFFFF, item.position(),
+                    "an offset is one word wide, so it reaches 0xFFFF at most");
+            // Nothing after this runs on the way out of the image, and the scan goes on
+            // to the next item regardless.
+            return false;
+        }
+        if (item instanceof Item.Machine) {
+            Item.Machine machine = (Item.Machine) item;
+            require(target.machineStatements().containsKey(machine.mnemonic()),
+                    item.position(),
+                    "'" + machine.mnemonic() + "' is not a statement this target provides");
+            for (String destroyed : machine.clobbers()) {
+                require(target.isRegister(destroyed) || destroyed.equals(Names.FLAGS),
+                        item.position(),
+                        "'" + destroyed + "' is neither a register nor '" + Names.FLAGS + "'");
+            }
+            // The flags are the one thing a machine statement may leave standing: 'cli'
+            // does not touch the arithmetic flags, and a comparison may be read after it.
+            return !machine.clobbers().contains(Names.FLAGS);
+        }
         if (item instanceof Item.Data) {
             checkData((Item.Data) item);
             return flagsDefined;

@@ -104,7 +104,8 @@ public final class Effects {
      */
     public static boolean hasEffect(Item item) {
         if (item instanceof Item.Branch || item instanceof Item.Jump
-                || item instanceof Item.Return || item instanceof Item.InlineAsm) {
+                || item instanceof Item.FarJump || item instanceof Item.Return
+                || item instanceof Item.InlineAsm || item instanceof Item.Machine) {
             return true;
         }
         if (item instanceof Item.Assign
@@ -175,7 +176,10 @@ public final class Effects {
             return ((Item.Assign) item).value() instanceof Value.Eval;
         }
         if (item instanceof Item.InlineAsm) {
-            return !sparesFlags((Item.InlineAsm) item);
+            return !clobbersFlags(((Item.InlineAsm) item).clobbers());
+        }
+        if (item instanceof Item.Machine) {
+            return !clobbersFlags(((Item.Machine) item).clobbers());
         }
         return false;
     }
@@ -187,13 +191,23 @@ public final class Effects {
             return value instanceof Value.Expr || value instanceof Value.Convert;
         }
         if (item instanceof Item.InlineAsm) {
-            return sparesFlags((Item.InlineAsm) item);
+            return clobbersFlags(((Item.InlineAsm) item).clobbers());
+        }
+        if (item instanceof Item.Machine) {
+            return clobbersFlags(((Item.Machine) item).clobbers());
         }
         return false;
     }
 
-    private static boolean sparesFlags(Item.InlineAsm block) {
-        return block.clobbers().contains(Names.FLAGS);
+    /**
+     * Whether a clobber list says the flags are destroyed.
+     *
+     * <p>One rule for the two things that carry a list — an inline block and a machine
+     * statement — because they mean the same thing by it: a list that names the flags
+     * takes them away, and one that does not leaves them standing.
+     */
+    private static boolean clobbersFlags(List<String> clobbers) {
+        return clobbers.contains(Names.FLAGS);
     }
 
     /**
