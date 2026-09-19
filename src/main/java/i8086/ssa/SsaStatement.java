@@ -16,7 +16,7 @@ public final class SsaStatement {
     private final Item item;
     private final String definedFlags;
 
-    SsaStatement(Item item, String definedFlags) {
+    public SsaStatement(Item item, String definedFlags) {
         this.item = item;
         this.definedFlags = definedFlags;
     }

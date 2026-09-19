@@ -38,7 +38,7 @@ import java.util.Set;
  * both places, because a second answer to "what does this do to the flags" is a
  * second thing to be wrong ({@code docs/ir.md} §4.2, {@code [open]}).
  */
-final class Effects {
+public final class Effects {
 
     private Effects() {
     }
@@ -47,7 +47,7 @@ final class Effects {
      * A name an item mentions: a variable, a label used as an address, or a
      * version once the module has been renamed.
      */
-    static final class Occurrence {
+    public static final class Occurrence {
 
         private final String name;
         private final boolean written;
@@ -59,16 +59,16 @@ final class Effects {
             this.position = position;
         }
 
-        String name() {
+        public String name() {
             return name;
         }
 
         /** Whether this occurrence is the place the item writes. */
-        boolean written() {
+        public boolean written() {
             return written;
         }
 
-        SourcePos position() {
+        public SourcePos position() {
             return position;
         }
     }
@@ -81,7 +81,7 @@ final class Effects {
      * reads nothing — and neither is a label that says where an item is, as
      * opposed to one used as an address inside a value.
      */
-    static List<Occurrence> occurrences(Item item) {
+    public static List<Occurrence> occurrences(Item item) {
         List<Occurrence> found = new ArrayList<Occurrence>();
         if (item instanceof Item.Assign) {
             Item.Assign assign = (Item.Assign) item;
@@ -110,7 +110,7 @@ final class Effects {
      * <p>A store is not a definition of a value: memory is not renamed, so
      * nothing in SSA has to be named for it ({@code docs/ir.md} §3.1).
      */
-    static String writtenVariable(Item item) {
+    public static String writtenVariable(Item item) {
         if (item instanceof Item.Assign) {
             Place place = ((Item.Assign) item).place();
             if (place instanceof Place.Name) {
@@ -121,7 +121,7 @@ final class Effects {
     }
 
     /** Whether this item leaves the flags defined. */
-    static boolean writesFlags(Item item) {
+    public static boolean writesFlags(Item item) {
         if (item instanceof Item.Compare || item instanceof Item.Eval) {
             return true;
         }
@@ -135,7 +135,7 @@ final class Effects {
     }
 
     /** Whether this item destroys the flags, leaving them undefined. */
-    static boolean killsFlags(Item item) {
+    public static boolean killsFlags(Item item) {
         if (item instanceof Item.Assign) {
             Value value = ((Item.Assign) item).value();
             return value instanceof Value.Expr || value instanceof Value.Convert;
@@ -159,7 +159,7 @@ final class Effects {
      * them. That is the verifier's model too, and it is the honest one: this
      * compiler cannot see inside the block.
      */
-    static boolean readsFlags(Item item) {
+    public static boolean readsFlags(Item item) {
         if (item instanceof Item.Branch) {
             return true;
         }
@@ -183,7 +183,7 @@ final class Effects {
      * ({@code docs/ir.md} §4.1): a branch reads them, and an operation that reads
      * the carry reads them, so both make them live.
      */
-    static List<String> readVariables(Item item, Names names) {
+    public static List<String> readVariables(Item item, Names names) {
         List<String> read = new ArrayList<String>();
         for (Occurrence occurrence : occurrences(item)) {
             if (!occurrence.written() && names.isVariable(occurrence.name())) {
@@ -197,7 +197,7 @@ final class Effects {
     }
 
     /** The variables this item defines, flags included. */
-    static Set<String> definedBy(Item item) {
+    public static Set<String> definedBy(Item item) {
         Set<String> defined = new LinkedHashSet<String>();
         String variable = writtenVariable(item);
         if (variable != null) {
@@ -210,7 +210,7 @@ final class Effects {
     }
 
     /** The variables a run of items defines, in the order they are first defined. */
-    static Set<String> definedBy(List<Item> items) {
+    public static Set<String> definedBy(List<Item> items) {
         Set<String> defined = new LinkedHashSet<String>();
         for (Item item : items) {
             defined.addAll(definedBy(item));
@@ -266,7 +266,7 @@ final class Effects {
     }
 
     /** Whether a value, wherever it sits, reads the flags. */
-    static boolean valueReadsFlags(Value value) {
+    public static boolean valueReadsFlags(Value value) {
         if (value instanceof Value.Eval) {
             return ((Value.Eval) value).operation().readsFlags();
         }

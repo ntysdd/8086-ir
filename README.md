@@ -127,6 +127,13 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    flag semantics the target description supplies. Each of these knows the
    machine only through the target description's general vocabulary, so each
    stays expressible for any target.
+
+   What runs today, in order: **constant propagation**, **dead value
+   elimination**, and **unread flags** — an operation whose flags nobody reads
+   stops claiming them, which is what lets the target use a form that disturbs
+   them. The passes are listed in `i8086.pass.Pipeline`, and a test compares that
+   list against the names written out here, so a pass added in one place and not
+   the other fails the build.
 5. **Run the target-specific tail.** Real machines have quirks that are not
    worth abstracting, and encoding-level knowledge is stated directly at the
    end of the optimizer, immediately before instruction selection: at most
@@ -238,9 +245,15 @@ Working today:
 * **SSA construction and verification**, described in [`docs/ssa.md`](docs/ssa.md):
   the control flow graph, dominators and the dominance frontier, liveness, φ
   placement, and the renaming walk. Every variable is renamed — the flags
-  included — and every use names the definition that reaches it. The form is
-  built and verified on every compile, so every program the tests compile is
-  evidence for both; `optimize --emit ssa` prints it. No pass reads it yet.
+  included — and every use names the definition that reaches it. `optimize
+  --emit ssa` prints the form.
+* **An optimiser**: constant propagation, dead value elimination, and giving up
+  flags nobody reads, run as a verified pass sequence between SSA and the back
+  end. Every pass runs on a verified form and its output is verified in turn.
+  Leaving SSA again is a transformation like any other, and its output — a module
+  with one name per variable — is checked by the surface's own verifier before
+  anything selects instructions from it. `optimize --emit ir` prints what the
+  passes left.
 * The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it.
 * Instruction selection and register allocation, enough to compile arithmetic on
@@ -253,13 +266,15 @@ Working today:
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
-Not built yet, and refused with a reason rather than guessed at: every
-optimization pass, instruction selection for loads and stores, conversions,
-`setcc`, an instruction whose operands are implicit (`mul`, `div`, a shift by a
-count in a register), and the assembler. SSA construction does not yet
-materialise a flag value that has to survive an instruction defining those flags,
-because the target does not state its flag effects per flag yet — and nothing
-asks it to.
+Not built yet, and refused with a reason rather than guessed at: instruction
+selection for loads and stores, conversions, `setcc`, an instruction whose
+operands are implicit (`mul`, `div`, a shift by a count in a register), and the
+assembler. SSA construction does not yet materialise a flag value that has to
+survive an instruction defining those flags, because the target does not state
+its flag effects per flag yet — and nothing asks it to. The optimiser is three
+passes and not the ten the pipeline describes; and while a module contains an
+inline assembly block, nothing in it may be removed, because a block cannot say
+what it reads yet.
 
 Planned milestones:
 
@@ -268,7 +283,9 @@ Planned milestones:
 2. Bundled assembler (encode + label resolution + branch relaxation) for 8086.
 3. SSA construction and verification. **Done**, apart from the flag
    materialisation that waits on the target's per-flag effects.
-4. Core optimization passes.
+4. Core optimization passes. **Started**: constant propagation, dead value
+   elimination and unread flags; the rest of the list in *Implementation
+   approach* is not written.
 5. 8086 instruction selection and register allocation. **Partly done**: enough
    for arithmetic, comparisons and control flow; loads, stores and conversions
    are refused with a reason.

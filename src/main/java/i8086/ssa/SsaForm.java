@@ -154,12 +154,62 @@ public final class SsaForm {
      * The same module and graph with different block contents.
      *
      * <p>This exists for the verifier, which has to be able to be handed a form a
-     * builder would not produce ({@code AGENTS.md} invariant 4), and for a pass
-     * that rewrites φ's without touching anything else. Nothing here checks the
-     * result: that is what the verifier is for.
+     * builder would not produce ({@code AGENTS.md} invariant 4): the version
+     * tables are kept exactly as they are, so a test can leave a version without a
+     * definition or give one the wrong variable. Nothing checks the result: that is
+     * what the verifier is for.
      */
     public SsaForm replacing(List<List<Phi>> newPhis, List<List<SsaStatement>> newStatements) {
         return new SsaForm(module, cfg, newPhis, newStatements, types, variables, undefined,
                 positions);
+    }
+
+    /**
+     * The same form with different content, and the version tables cut down to the
+     * definitions that content actually has.
+     *
+     * <p>This is what a pass uses. Deleting a statement deletes the version it
+     * defined, and a version nothing defines is not a version — so the tables have
+     * to follow the content rather than keep the definitions the content no longer
+     * has. A pass may not invent a version: every name it defines has to be one the
+     * form already knows, which is the same rule the verifier would apply, applied
+     * before it has to.
+     */
+    public SsaForm rewriting(List<List<Phi>> newPhis, List<List<SsaStatement>> newStatements) {
+        Set<String> defined = new LinkedHashSet<String>();
+        for (List<Phi> block : newPhis) {
+            for (Phi phi : block) {
+                defined.add(phi.name());
+            }
+        }
+        for (List<SsaStatement> block : newStatements) {
+            for (SsaStatement statement : block) {
+                String written = Effects.writtenVariable(statement.item());
+                if (written != null) {
+                    defined.add(written);
+                }
+                if (statement.definedFlags() != null) {
+                    defined.add(statement.definedFlags());
+                }
+            }
+        }
+
+        Map<String, Type> keptTypes = new LinkedHashMap<String, Type>();
+        Map<String, String> keptVariables = new LinkedHashMap<String, String>();
+        Map<String, SourcePos> keptPositions = new LinkedHashMap<String, SourcePos>();
+        for (Map.Entry<String, String> entry : variables.entrySet()) {
+            String name = entry.getKey();
+            if (!undefined.contains(name) && !defined.contains(name)) {
+                continue;
+            }
+            keptTypes.put(name, types.get(name));
+            keptVariables.put(name, entry.getValue());
+            SourcePos where = positions.get(name);
+            if (where != null) {
+                keptPositions.put(name, where);
+            }
+        }
+        return new SsaForm(module, cfg, newPhis, newStatements, keptTypes, keptVariables,
+                undefined, keptPositions);
     }
 }

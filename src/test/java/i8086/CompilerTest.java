@@ -40,6 +40,8 @@ public final class CompilerTest {
     public static void register(Suite suite) {
         suite.add("Compiler turns the shipped example into assembly",
                 CompilerTest::compilesShippedExample);
+        suite.add("Compiler folds a program with nothing unknown in it away",
+                CompilerTest::foldsWhatNothingReads);
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
         suite.add("Compiler keeps the flags under eval and spends them under expr",
                 CompilerTest::keepsAndSpendsFlags);
@@ -69,6 +71,31 @@ public final class CompilerTest {
                 CompilerTest::saysAssembleIsMissing);
     }
 
+    /**
+     * A program whose every input is a constant, and whose result nobody reads,
+     * compiles to nothing at all — and the IR the passes leave shows the same thing
+     * in the language it was written in.
+     *
+     * <p>Both answers are correct: the registers a program leaves behind are not
+     * something it promises ({@code docs/ir.md} §2.3), so a value nobody reads may
+     * be removed however much arithmetic was written to produce it. A module that
+     * wants a particular register to hold something says so, with an inline block
+     * or, one day, with a way to pin one.
+     */
+    private static void foldsWhatNothingReads() {
+        String source = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var x: i16\n    var y: i16\n"
+                + "    x = 1\n"
+                + "    x = eval(x + 1)\n"
+                + "    y = expr(x + x * 4)\n"
+                + "    ret\n";
+        Assert.assertEquals("org 0x100\n\nmain:\n    ret\n",
+                Compiler.compile("t.ir", source));
+        Assert.assertEquals("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: i16\n    var y: i16\n    ret\n",
+                Compiler.compile("t.ir", source, Compiler.Stage.IR));
+    }
+
     private static void compilesShippedExample() {
         Assert.assertEquals(EXPECTED_ASM, Compiler.compile("examples/hello.ir", readExample()));
     }
@@ -85,48 +112,85 @@ public final class CompilerTest {
     /**
      * The whole path on the arithmetic a person would actually write, including
      * the temporary the multiply needs.
+     *
+     * <p>Nothing observes a value yet — there are no loads, no stores and no return
+     * value — so a program whose result nobody reads is one the optimiser correctly
+     * deletes. Every test here therefore anchors its arithmetic with a conditional
+     * branch, which reads the flags: the last operation has to keep them, and what
+     * feeds it stays alive.
      */
     private static void compilesArithmetic() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "main:\n"
-                + "    mov ax, 1\n"
-                + "    add ax, 1\n"
+                + "    mov ax, cx\n"
+                + "    inc ax\n"
                 + "    mov cx, ax\n"
                 + "    shl cx, 1\n"
                 + "    shl cx, 1\n"
                 + "    mov dx, ax\n"
                 + "    add dx, cx\n"
+                + "    mov ax, dx\n"
+                + "    add ax, 1\n"
+                + "    jc l0\n"
+                + "\n"
+                + "l0:\n"
                 + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: i16\n    var y: i16\n"
-                        + "    x = 1\n"
-                        + "    x = eval(x + 1)\n"
+                        + "    var x: i16\n    var y: i16\n    var z: i16\n    var u: i16\n"
+                        + "    x = eval(u + 1)\n"
                         + "    y = expr(x + x * 4)\n"
+                        + "    z = eval(y + 1)\n"
+                        + "    jc l0\n"
+                        + "l0:\n"
                         + "    ret\n"));
     }
 
     /**
-     * The same program twice, differing in one word, and the difference is what
-     * the two forms are for: {@code eval} promises the flags are the operation's,
-     * so {@code add} it is; {@code expr} gives them up, so the machine's one-byte
-     * {@code inc} becomes available — and it is one byte precisely because it
+     * The one-word difference between the two forms, and what it buys.
+     *
+     * <p>{@code eval} promises the flags are the operation's, so as long as anyone
+     * reads them the machine has to use a form that leaves them the way an addition
+     * does. {@code expr} gives them up, which is what makes the one-byte
+     * {@code inc} available — and {@code inc} is one byte precisely because it
      * leaves the carry alone.
+     *
+     * <p>Which of the two applies is a question about <em>reading</em> rather than
+     * about a wish, and it is the question SSA answers: an {@code eval} whose flags
+     * nobody reads need not have claimed them, so the pass gives them up and the
+     * one-byte form appears. Both halves are in the program below — the first
+     * addition gets {@code inc}, the second pays for an {@code add} because the
+     * branch reads what it left.
      */
     private static void keepsAndSpendsFlags() {
-        Assert.assertTrue(
-                Compiler.compile("t.ir", arithmetic("x = eval(x + 1)", "y = 0"))
-                        .contains("    add ax, 1\n"),
-                "eval keeps the flags, so it pays for an add");
-        Assert.assertTrue(
-                Compiler.compile("t.ir", arithmetic("x = expr(x + 1)", "y = 0"))
-                        .contains("    inc ax\n"),
-                "expr gives them up, so the smaller instruction is available");
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "main:\n"
+                + "    inc ax\n"
+                + "    mov cx, ax\n"
+                + "    add cx, 1\n"
+                + "    jc l0\n"
+                + "\n"
+                + "l0:\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: i16\n    var y: i16\n"
+                        + "    x = eval(x + 1)\n"
+                        + "    y = eval(x + 1)\n"
+                        + "    jc l0\n"
+                        + "l0:\n"
+                        + "    ret\n"));
     }
 
     /** The 8086 has no multiply by a constant, so the target hands over a shift trick. */
     private static void expandsMultiply() {
-        String assembly = Compiler.compile("t.ir", arithmetic("x = expr(x * 4)", "y = 0"));
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var x: i16\n    var y: i16\n"
+                + "    x = expr(x * 4)\n"
+                + "    y = eval(x + 1)\n"
+                + "    jc l0\n"
+                + "l0:\n"
+                + "    ret\n");
         Assert.assertTrue(assembly.contains("    shl ax, 1\n    shl ax, 1\n"),
                 "four times x is two shifts in place: " + assembly);
     }
@@ -134,24 +198,54 @@ public final class CompilerTest {
     /**
      * A multiply whose flags are still wanted is refused, and the refusal says why
      * and what to write instead: the shift trick leaves different flags.
+     *
+     * <p>The branch is what makes them wanted. Without it the flags are nobody's,
+     * the pass gives them up, and the shift trick is allowed — which is the whole
+     * difference between a mistake and an optimisation.
      */
     private static void refusesFlagLosingForm() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", arithmetic("x = eval(x * 4)", "y = 0")));
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: i16\n"
+                        + "    x = eval(x * 4)\n"
+                        + "    jc l0\n"
+                        + "l0:\n"
+                        + "    ret\n"));
         Assert.assertTrue(refused.getMessage().contains("different flags"),
-                refused.getMessage());        Assert.assertTrue(refused.getMessage().contains("expr(...)"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("expr(...)"),
                 "and says what to write instead: " + refused.getMessage());
     }
 
     /**
-     * A value that is never read again gives its register away. Both stores land in
-     * {@code ax}, which is correct only because the first value is dead — removing
-     * the dead store itself waits for the optimiser.
+     * A value that is never read again gives its register away: both land in
+     * {@code ax}, which is right because the first is finished with by the time the
+     * second is wanted.
+     *
+     * <p>Both are kept rather than deleted because the branches read the flags their
+     * additions left. What the test is about is the register, not the survival.
      */
     private static void reusesRegisters() {
-        Assert.assertEquals("org 0x100\n\nmain:\n    mov ax, 1\n    mov ax, 2\n    ret\n",
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "main:\n"
+                + "    mov ax, cx\n"
+                + "    add ax, 1\n"
+                + "    jc l0\n"
+                + "    mov ax, cx\n"
+                + "    add ax, 2\n"
+                + "    jc l0\n"
+                + "\n"
+                + "l0:\n"
+                + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var a: u16\n    var b: u16\n    a = 1\n    b = 2\n    ret\n"));
+                        + "    var a: u16\n    var b: u16\n    var u: u16\n"
+                        + "    a = eval(u + 1)\n"
+                        + "    jc l0\n"
+                        + "    b = eval(u + 2)\n"
+                        + "    jc l0\n"
+                        + "l0:\n"
+                        + "    ret\n"));
     }
 
     /**
@@ -167,14 +261,15 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "main:\n"
-                        + "    mov cx, 1\n"
+                        + "    mov cx, ax\n"
+                        + "    add cx, 1\n"
                         + "    int 0x21\n"
                         + "    mov ax, cx\n"
                         + "    add ax, 1\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: u16\n    var y: u16\n"
-                        + "    x = 1\n"
+                        + "    var x: u16\n    var y: u16\n    var u: u16\n"
+                        + "    x = eval(u + 1)\n"
                         + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
                         + "    y = eval(x + 1)\n    ret\n"));
     }
@@ -184,20 +279,21 @@ public final class CompilerTest {
      *
      * <p>Striking a register off for a value the block cannot destroy would cost
      * registers for nothing, which on a machine with six of them is not a small
-     * thing.
+     * thing. Both values here are finished with before the block runs.
      */
     private static void ignoresClobbersOfDeadValues() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "main:\n"
-                        + "    mov ax, 1\n"
+                        + "    mov ax, cx\n"
+                        + "    add ax, 1\n"
                         + "    mov cx, ax\n"
                         + "    add cx, 1\n"
                         + "    int 0x21\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                        + "    var x: u16\n    var y: u16\n"
-                        + "    x = 1\n"
+                        + "    var x: u16\n    var y: u16\n    var u: u16\n"
+                        + "    x = eval(u + 1)\n"
                         + "    y = eval(x + 1)\n"
                         + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
                         + "    ret\n"));
@@ -207,36 +303,43 @@ public final class CompilerTest {
      * Seven values alive at once, on a machine with six registers to hold them: a
      * hard error rather than a frame, because a program that needs more registers
      * than the machine has is not quietly given the stack.
+     *
+     * <p>The inline block at the end is what keeps the seven alive: nothing else can
+     * observe a computed value yet, and a block that cannot say what it reads makes
+     * every value in its scope count as read ({@code docs/ir.md} §2.3, §9).
      */
     private static void refusesToSpill() {
-        String source = "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                + "    var a: u16\n    var b: u16\n    var c: u16\n    var d: u16\n"
-                + "    var e: u16\n    var f: u16\n    var g: u16\n"
-                + "    var y: u16\n"
-                + "    a = 1\n    b = 2\n    c = 3\n    d = 4\n    e = 5\n    f = 6\n    g = 7\n"
-                + "    y = eval(a + b)\n    y = eval(c + d)\n    y = eval(e + f)\n"
-                + "    y = eval(g + y)\n    ret\n";
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var y: u16\n    var u: u16\n");
+        for (char name = 'a'; name <= 'g'; name++) {
+            source.append("    var ").append(name).append(": u16\n");
+        }
+        for (char name = 'a'; name <= 'g'; name++) {
+            source.append("    ").append(name).append(" = eval(u + ").append(name - 'a' + 1)
+                    .append(")\n");
+        }
+        source.append("    y = expr(a + b + c + d + e + f + g)\n")
+                .append("    asm clobbers(ax) {\n        int 0x21\n    }\n")
+                .append("    ret\n");
+
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", source));
+                () -> Compiler.compile("t.ir", source.toString()));
         Assert.assertTrue(refused.getMessage().contains("no register left"),
                 refused.getMessage());
         Assert.assertTrue(refused.getMessage().contains("docs/ir.md"),
                 "and points at what that rule means: " + refused.getMessage());
     }
 
-    /** A program with one statement to compile, with the rest filled in. */
-    private static String arithmetic(String first, String second) {
-        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
-                + "    var x: i16\n    var y: i16\n"
-                + "    " + first + "\n"
-                + "    " + second + "\n"
-                + "    ret\n";
-    }
-
     /**
-     * A loop the sugar wrote, compiled: the jump to the test, the body, and the
-     * test at the bottom whose conditional branch is what goes back — so the body
-     * costs one instruction fewer every time round than a test at the top would.
+     * A loop the sugar wrote, compiled, with the passes having been through it.
+     *
+     * <p>Three things in the output are worth reading twice. {@code n} was the
+     * constant 3, so it is written into the comparison and the register that held it
+     * is gone. The body's addition is one nobody reads the flags of, so it is
+     * written with {@code expr} and the machine's one-byte {@code inc} appears. And
+     * the φ that merges the two values of {@code i} is nowhere, because leaving SSA
+     * renames both of them back to {@code i} and the copy it would need is an
+     * identity ({@code docs/ssa.md} §8).
      */
     private static void compilesSugar() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
@@ -244,10 +347,10 @@ public final class CompilerTest {
                 + "    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    jmp $lbl1\n\n$lbl0:\n    add ax, 1\n"),
+        Assert.assertTrue(assembly.contains("    jmp $lbl1\n\n$lbl0:\n    inc ax\n"),
                 "the loop body comes first and the test is jumped to: " + assembly);
-        Assert.assertTrue(assembly.contains("$lbl1:\n    cmp ax, cx\n    jc $lbl0\n"),
-                "and the condition's own branch goes back: " + assembly);
+        Assert.assertTrue(assembly.contains("$lbl1:\n    cmp ax, 3\n    jc $lbl0\n"),
+                "and the constant is folded into the comparison: " + assembly);
     }
 
     /**

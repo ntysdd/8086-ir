@@ -20,6 +20,11 @@ public final class AllTests {
         i8086.ssa.DominatorsTest.register(suite);
         i8086.ssa.SsaBuilderTest.register(suite);
         i8086.ssa.SsaVerifierTest.register(suite);
+        i8086.ssa.OutOfSsaTest.register(suite);
+        i8086.pass.ConstantPropagationTest.register(suite);
+        i8086.pass.DeadValueEliminationTest.register(suite);
+        i8086.pass.UnreadFlagsTest.register(suite);
+        i8086.pass.PipelineTest.register(suite);
         i8086.emit.AsmEmitterTest.register(suite);
         i8086.CompilerTest.register(suite);
     }

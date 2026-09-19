@@ -187,7 +187,53 @@ the surface's own rule, enforced before this point, and a second implementation 
 it would be a second thing to be wrong ([`docs/ir.md`](ir.md) §4.3). Nothing in the
 verifier knows a target, a register or an instruction.
 
-## 7. Not here yet
+## 7. What the passes do with it — [decided]
+
+The passes that read this form are listed in `i8086.pass.Pipeline`, and
+`README.md` says the same list. Three things about working on it are worth stating
+here, because they are properties of the form rather than of any one pass:
+
+* **Every pass runs on a verified form and has its output verified.** The
+  pipeline verifies once at the start and after each pass, which is the first
+  invariant and the reason a pass does not verify itself.
+* **A pass builds the form it means.** The form is a value; a pass that changes
+  one thing answers with a new one, and the version tables follow the content —
+  deleting a statement deletes the version it defined, and a version nothing
+  defines is not a version ({@code SsaForm.rewriting}). A pass may not invent a
+  version.
+* **What a pass may not assume is written down.** Two occurrences of a variable's
+  undefined value are not the same value (§5), and while a module contains an
+  inline block nothing in it may be removed (§5, and [`docs/ir.md`](ir.md) §2.3).
+  The second is why dead value elimination reads a form with a block in it as
+  "everything is used": keeping a value costs registers, and removing one the
+  block reads costs the program.
+
+## 8. Leaving SSA — [decided]
+
+What the passes leave is turned back into a module, because the back end works on
+the surface and not on versions ([`OutOfSsa`](../src/main/java/i8086/ssa/OutOfSsa.java)).
+
+In most compilers this step is where the trouble is: φ's become copies, the copies
+on one edge have to happen at once, cycles among them need a temporary, and an edge
+that leaves a block with two ways out has to be split first. None of that is needed
+here, and the reason is one sentence:
+
+> **every operand of a φ is a version of the same variable the φ defines.**
+
+So renaming each version back to the variable it belongs to turns every φ into
+`x = x`. The value the φ would have produced is the value the variable already
+holds on that path — that is what "the version reaching the end of the
+predecessor" means — so the copy is not merely skippable but unnecessary, and an
+edge with two ways out has nothing edge-specific left to place. A φ that carried a
+value *between* variables would need all of that machinery; this IR has no such
+construct, and does not want one.
+
+The price is precision rather than correctness: the variable is one mutable name
+again, so the allocator sees one interval where the form had three. That is the
+shape the input had and the shape the back end was written for
+({@code docs/ir.md} §3.1).
+
+## 9. Not here yet
 
 * **Flag materialisation.** The README's pipeline has SSA construction
   materialising a flag value — through a target-declared expansion — when one
@@ -196,10 +242,16 @@ verifier knows a target, a register or an instruction.
   ([`docs/ir.md`](ir.md) §4.2), and until it does there is nothing to ask. Nothing
   needs it today: no pass reasons about flags across an instruction that
   clobbers them.
-* **Promoting memory.** Loads and stores are not renamed and no pass yet lifts
-  them into values. Variables are virtual registers already, so this is about
-  memory reached through a pointer.
-* **No consumer.** Selection still reads the module rather than the form. The
-  form is built and verified on every compile, so it has every program the tests
-  compile as evidence, but the passes that read it — constant propagation, CSE,
-  dead value elimination — come next.
+* **Promoting memory.** Loads and stores are not renamed and no pass lifts them
+  into values. Variables are virtual registers already, so this is about memory
+  reached through a pointer, and it is what would let a value stored and loaded
+  again be recognised as the same value.
+* **An inline block that says what it reads.** Until it can, a module containing
+  one is optimised conservatively (§4, §7). That is the missing half of
+  {@code docs/ir.md} §9.
+* **The rest of the pass list.** Copy propagation, value numbering, load
+  elimination, loop-invariant code motion and branch simplification are named in
+  `README.md` and not written. Reassociating an {@code expr}, folding a
+  comparison, and the identities ({@code x + 0}, {@code x * 1}) are all waiting on
+  the same thing: a pass has to be able to ask what the flags of an operation are
+  worth, and today it can only ask whether anybody reads them.

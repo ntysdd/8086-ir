@@ -793,6 +793,11 @@ Collected for greppability; each is marked **[open]** at its point of use above.
       restore, or use other registers — is the callee's own code, and in a no-spill
       function (§8.2) it is the difference between using a register and not being
       allowed to touch it.
+14. What a shift by the width of its operand, or more, does. The 8086 answers it —
+    the count is taken modulo 32 — and the surface does not say whether that *is*
+    the meaning or whether it is one of the things a program may not do. So the
+    optimiser folds no such shift and refuses none either: the machine's answer is
+    what the program gets, which is the honest thing while the question is open.
 
 ## 13. Non-goals for v1
 

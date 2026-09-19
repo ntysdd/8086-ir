@@ -7,7 +7,9 @@ import i8086.ir.IrVerifier;
 import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
+import i8086.pass.Pipeline;
 import i8086.regalloc.RegisterAllocator;
+import i8086.ssa.OutOfSsa;
 import i8086.ssa.SsaBuilder;
 import i8086.ssa.SsaForm;
 import i8086.ssa.SsaPrinter;
@@ -24,19 +26,15 @@ import i8086.target.Targets;
  * thin").
  *
  * <p>The order is the pipeline of {@code README.md}: parse, verify, build SSA,
- * verify the SSA, select instructions, allocate registers, emit. A stage that
- * rewrites what it was given runs on verified input and has its output verified
- * in turn, which is the first invariant — and the reason the verifications are
- * named here rather than hidden inside the stages that produce what they check.
+ * optimize, leave SSA, verify again, select instructions, allocate registers, emit.
+ * A stage that rewrites what it was given runs on verified input and has its output
+ * verified in turn, which is the first invariant — and the reason the verifications
+ * are named here rather than hidden inside the stages that produce what they check.
+ * The pass list itself is in {@link Pipeline}, which verifies around each pass.
  *
- * <p>SSA construction is on this path even though no pass consumes its result
- * yet, and deliberately: a module this compiler accepts is one that survives
- * being renamed, so the renaming and the SSA verifier between them have every
- * program the tests compile as evidence. The passes that read the form come next.
- *
- * <p>Nothing here is target-specific. The SSA form is built and checked in the
- * IR's own vocabulary; selection and allocation are the only stages that ask a
- * target anything ({@code AGENTS.md}, invariant 2).
+ * <p>Nothing here is target-specific. The SSA form, the passes and leaving SSA again
+ * are all in the IR's own vocabulary; selection and allocation are the only stages
+ * that ask a target anything ({@code AGENTS.md}, invariant 2).
  */
 public final class Compiler {
 
@@ -84,16 +82,20 @@ public final class Compiler {
     public static String compile(String file, String source, Stage stage) {
         Module module = IrParser.parse(file, source);
         SsaForm form = verify(module);
-        if (stage == Stage.IR) {
-            return IrPrinter.print(module);
-        }
         if (stage == Stage.SSA) {
-            return SsaPrinter.print(form);
+            return SsaPrinter.print(Pipeline.run(form));
+        }
+        Module lowered = OutOfSsa.module(Pipeline.run(form));
+        // Leaving SSA is a transformation like any other, so its output is checked
+        // like any input: the surface's own rules, on the module the passes left.
+        IrVerifier.verify(lowered, targetOf(module));
+        if (stage == Stage.IR) {
+            return IrPrinter.print(lowered);
         }
         Target target = targetOf(module);
-        Selection selected = InstructionSelector.select(module, target);
+        Selection selected = InstructionSelector.select(lowered, target);
         Selection allocated = RegisterAllocator.allocate(selected, target);
-        return AsmEmitter.emit(module, allocated);
+        return AsmEmitter.emit(lowered, allocated);
     }
 
     /**
@@ -123,9 +125,7 @@ public final class Compiler {
     private static SsaForm verify(Module module) {
         Target target = targetOf(module);
         IrVerifier.verify(module, target);
-        SsaForm form = SsaBuilder.build(module);
-        SsaVerifier.verify(form);
-        return form;
+        return SsaBuilder.build(module);
     }
 
     /** The target a module names, which the parser has already checked it names. */

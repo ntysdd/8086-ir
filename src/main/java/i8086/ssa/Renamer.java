@@ -19,10 +19,13 @@ import java.util.List;
  * operand needs no special case: {@code [p]} is rewritten because {@code p} is a
  * variable, and {@code [msg]} is not because {@code msg} is not.
  *
- * <p>What an item <em>writes</em> is the exception. {@code x = x + 1} reads the
- * old version on the right and defines a new one on the left, so the place is
- * named by the caller once the version exists rather than looked up in the
- * versions in force.
+ * <p>The <em>version</em> a name is replaced by is whatever the caller says it is,
+ * which is what lets one renamer serve both directions. Building SSA asks for the
+ * version in force at that point; tearing it down asks for the variable the
+ * version belongs to, and gets the mutable name back. The one place they differ is
+ * the place an item writes: for a definition the version in force is not the one
+ * being written, so SSA construction names that place itself once the version
+ * exists, with {@link #define}.
  */
 final class Renamer {
 
@@ -54,12 +57,14 @@ final class Renamer {
                 assign.value());
     }
 
-    private static Place rename(Place place, Versions versions) {
+    static Place rename(Place place, Versions versions) {
         if (place instanceof Place.Memory) {
             return new Place.Memory(place.position(),
                     rename(((Place.Memory) place).operand(), versions));
         }
-        return place;
+        Place.Name named = (Place.Name) place;
+        String version = versions.of(named.name());
+        return version == null ? place : new Place.Name(named.position(), version);
     }
 
     private static Value rename(Value value, Versions versions) {
