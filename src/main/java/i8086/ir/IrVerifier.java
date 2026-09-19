@@ -118,31 +118,105 @@ public final class IrVerifier {
     private void checkItems() {
         boolean flagsDefined = false;
         for (Item item : module.items()) {
-            if (item instanceof Item.Assign) {
-                // A move does not touch the flags, so they survive it (§4.2).
-                checkAssign((Item.Assign) item);
-            } else if (item instanceof Item.Compare) {
-                checkCompare((Item.Compare) item);
-                flagsDefined = true;
-            } else if (item instanceof Item.InlineAsm) {
-                checkInlineAsm((Item.InlineAsm) item);
-                if (((Item.InlineAsm) item).clobbers().contains(FLAGS)) {
-                    flagsDefined = false;
-                }
-            } else if (item instanceof Item.Jump) {
-                checkLabelTarget(((Item.Jump) item).target(), item.position());
-            } else if (item instanceof Item.Branch) {
-                Item.Branch branch = (Item.Branch) item;
-                checkLabelTarget(branch.target(), item.position());
-                require(flagsDefined, branch.position(),
-                        "this branch reads the flags, but nothing on the way here defines them; "
-                                + "only 'cmp' and 'test' do so far, and a label clears them, "
-                                + "because another path may arrive there (docs/ir.md §4.3)");
-            }
+            flagsDefined = checkItem(item, flagsDefined);
             if (namesSomething(item)) {
                 flagsDefined = false;
             }
         }
+    }
+
+    /**
+     * Checks one item, and answers with whether the flags are defined after it.
+     *
+     * <p>Which is the whole of the flags rule for now: what defines them, what
+     * throws them away, and what leaves them alone. A move leaves them alone
+     * (§4.2), {@code eval} defines them, {@code expr} gives them up (§5.2), and a
+     * conversion is assumed to disturb them (§3.5).
+     */
+    private boolean checkItem(Item item, boolean flagsDefined) {
+        if (item instanceof Item.Assign) {
+            Item.Assign assign = (Item.Assign) item;
+            checkAssign(assign);
+            return flagsAfterValue(assign.value(), flagsDefined);
+        }
+        if (item instanceof Item.Eval) {
+            Expression expression = ((Item.Eval) item).expression();
+            widthOfExpression(expression, null, ExpressionForm.EVAL);
+            requireCarryIsDefined(expressionReadsFlags(expression), flagsDefined, item.position());
+            return true;
+        }
+        if (item instanceof Item.Compare) {
+            Item.Compare compare = (Item.Compare) item;
+            checkCompare(compare);
+            requireCarryIsDefined(
+                    expressionReadsFlagsOf(compare.left()) || expressionReadsFlagsOf(compare.right()),
+                    flagsDefined, item.position());
+            return true;
+        }
+        if (item instanceof Item.InlineAsm) {
+            Item.InlineAsm block = (Item.InlineAsm) item;
+            checkInlineAsm(block);
+            return block.clobbers().contains(FLAGS) ? false : flagsDefined;
+        }
+        if (item instanceof Item.Jump) {
+            checkLabelTarget(((Item.Jump) item).target(), item.position());
+            return flagsDefined;
+        }
+        if (item instanceof Item.Branch) {
+            Item.Branch branch = (Item.Branch) item;
+            checkLabelTarget(branch.target(), item.position());
+            require(flagsDefined, branch.position(),
+                    "this branch reads the flags, but nothing on the way here defines them; "
+                            + "only 'cmp' and 'test' do so far, and a label clears them, "
+                            + "because another path may arrive there (docs/ir.md §4.3)");
+        }
+        return flagsDefined;
+    }
+
+    /** Whether an operation needs the flags to be defined before it runs. */
+    private void requireCarryIsDefined(boolean readsFlags, boolean flagsDefined, SourcePos where) {
+        require(!readsFlags || flagsDefined, where,
+                "this operation reads the carry flag, so something has to define the flags "
+                        + "before it; only 'cmp' and 'test' do so far (docs/ir.md §4.3)");
+    }
+
+    /** Whether the flags are defined after a value has been computed. */
+    private boolean flagsAfterValue(Value value, boolean flagsDefined) {
+        if (value instanceof Value.Eval) {
+            Expression expression = ((Value.Eval) value).expression();
+            requireCarryIsDefined(expressionReadsFlags(expression), flagsDefined, value.position());
+            return true;
+        }
+        if (value instanceof Value.Expr) {
+            return false;
+        }
+        if (value instanceof Value.Convert) {
+            // Assume the worst: on this machine widening is an instruction that
+            // touches the flags. Which it is, is the target's to say (§4.2), and
+            // until it does, the safe answer is the one that refuses more.
+            return false;
+        }
+        return flagsDefined;
+    }
+
+    private static boolean expressionReadsFlagsOf(Value value) {
+        if (value instanceof Value.Eval) {
+            return expressionReadsFlags(((Value.Eval) value).expression());
+        }
+        return false;
+    }
+
+    private static boolean expressionReadsFlags(Expression expression) {
+        if (expression instanceof Expression.Apply) {
+            Expression.Apply apply = (Expression.Apply) expression;
+            return apply.operator().readsFlags()
+                    || expressionReadsFlags(apply.left())
+                    || expressionReadsFlags(apply.right());
+        }
+        if (expression instanceof Expression.Complement) {
+            return expressionReadsFlags(((Expression.Complement) expression).operand());
+        }
+        return expressionReadsFlagsOf(((Expression.Leaf) expression).value());
     }
 
     /** Whether an item leads with a name, and so can be branched to. */
@@ -152,15 +226,19 @@ public final class IrVerifier {
     }
 
     private void checkCompare(Item.Compare compare) {
-        checkValue(compare.left());
-        checkValue(compare.right());
-        Integer left = widthOf(compare.left());
-        Integer right = widthOf(compare.right());
-        if (left != null && right != null) {
-            require(left.equals(right), compare.right().position(),
-                    "a " + left + "-byte value cannot be compared with a " + right
-                            + "-byte one; both sides of a comparison have one width");
+        Integer left = widthOf(compare.left(), null);
+        Integer right = widthOf(compare.right(), left);
+        if (left == null) {
+            left = widthOf(compare.left(), right);
         }
+        if (left == null) {
+            throw new CompileError(compare.position(),
+                    "cannot tell how wide this comparison is; a comparison of two literals has "
+                            + "no width to take");
+        }
+        require(right == null || left.equals(right), compare.right().position(),
+                "a " + left + "-byte value cannot be compared with a " + right
+                        + "-byte one; both sides of a comparison have one width");
     }
 
     private void checkLabelTarget(String target, SourcePos where) {
@@ -173,15 +251,12 @@ public final class IrVerifier {
                 "the branch target '" + target + "' is never defined as a label");
     }
 
-    /** Checks a name that is read, whether it is a variable or a label. */
-    private void checkValue(Value value) {
-        widthOf(value);
-    }
-
     private void checkAssign(Item.Assign assign) {
         Integer placeBytes = widthOf(assign.place());
-        Integer valueBytes = widthOf(assign.value());
-
+        Integer valueBytes = widthOf(assign.value(), placeBytes);
+        if (placeBytes == null) {
+            placeBytes = valueBytes;
+        }
         if (placeBytes != null && valueBytes != null) {
             require(placeBytes.equals(valueBytes), assign.value().position(),
                     "a " + placeBytes + "-byte place cannot take a " + valueBytes
@@ -223,10 +298,179 @@ public final class IrVerifier {
         return operand.size() == null ? null : Integer.valueOf(operand.size().bytes());
     }
 
-    /** How many bytes a value occupies, or null when the text does not say. */
-    private Integer widthOf(Value value) {
+    /**
+     * How a value's width is worked out, and what the two forms promise.
+     *
+     * <p>The difference is the whole point of having two of them: {@code eval}
+     * may touch memory and may read the flags, {@code expr} may do neither, and
+     * that is what buys it the freedom to be reassociated and shared
+     * ({@code docs/ir.md} §5).
+     */
+    private enum ExpressionForm {
+        EVAL,
+        EXPR
+    }
+
+    /**
+     * The width of an expression, or null when nothing has said yet.
+     *
+     * <p>Every operand in one expression has the same width, so the first one
+     * that states a width settles it for the rest: a literal and an anonymous
+     * memory operand take that width, and a value that states a different one is
+     * refused. This is where "no implicit promotion" is actually enforced
+     * (§3.2), and where the two forms' rules about memory and flags are checked.
+     */
+    private Integer widthOfExpression(Expression expression, Integer implied, ExpressionForm form) {
+        if (expression instanceof Expression.Leaf) {
+            return widthOfLeaf(((Expression.Leaf) expression).value(), implied, form);
+        }
+        if (expression instanceof Expression.Complement) {
+            return widthOfExpression(((Expression.Complement) expression).operand(), implied, form);
+        }
+        Expression.Apply apply = (Expression.Apply) expression;
+        checkOperator(apply, form);
+        Integer left = widthOfExpression(apply.left(), implied, form);
+        Integer right = widthOfExpression(apply.right(), left == null ? implied : left, form);
+        if (left == null) {
+            left = widthOfExpression(apply.left(), right, form);
+        }
+        if (left != null && right != null) {
+            require(left.equals(right), apply.right().position(),
+                    "a " + left + "-byte operand cannot meet a " + right + "-byte one in one "
+                            + "expression; every operand in an expression has the same width "
+                            + "(docs/ir.md §3.2)");
+        }
+        return left != null ? left : right;
+    }
+
+    /**
+     * What signedness an expression speaks for, or null when nothing says.
+     *
+     * <p>A variable's type says; a literal, a load and a label do not, because
+     * bits are bits until an operation reads them a particular way (§3.2). A
+     * mnemonic that states the signedness settles it for everything above it,
+     * which is what the mnemonic forms are for (§5.5).
+     */
+    private Boolean signednessOf(Expression expression) {
+        if (expression instanceof Expression.Leaf) {
+            Value value = ((Expression.Leaf) expression).value();
+            if (value instanceof Value.Name) {
+                Type type = variables.get(((Value.Name) value).name());
+                return type == null ? null : Boolean.valueOf(type.isSigned());
+            }
+            return null;
+        }
+        if (expression instanceof Expression.Complement) {
+            return signednessOf(((Expression.Complement) expression).operand());
+        }
+        Expression.Apply apply = (Expression.Apply) expression;
+        switch (apply.operator()) {
+            case DIVIDE_UNSIGNED:
+            case MULTIPLY_UNSIGNED:
+            case SHIFT_RIGHT:
+                return Boolean.FALSE;
+            case DIVIDE_SIGNED:
+            case MULTIPLY_SIGNED:
+            case SHIFT_ARITHMETIC:
+                return Boolean.TRUE;
+            default:
+                Boolean left = signednessOf(apply.left());
+                return left != null ? left : signednessOf(apply.right());
+        }
+    }
+
+    /** What an operator may do in this form, and the signedness its operands may mix. */
+    private void checkOperator(Expression.Apply apply, ExpressionForm form) {
+        Operator operator = apply.operator();
+        if (operator.readsFlags()) {
+            require(form == ExpressionForm.EVAL, apply.position(),
+                    "'" + operator.spelling() + "' reads the carry flag, so it belongs in eval "
+                            + "and not in expr, which reads no flags at all (docs/ir.md §5.5)");
+        }
+        if (operator.divides()) {
+            Integer width = widthOfExpression(apply.left(), null, form);
+            if (width == null) {
+                width = widthOfExpression(apply.right(), null, form);
+            }
+            if (width != null) {
+                require(width.intValue() == 2, apply.position(),
+                        "division is 16 bits in v1, and this is " + width + " bytes; a wider "
+                                + "division is written out by hand (docs/ir.md §6.2)");
+            }
+        }
+        if (!operator.statesSignedness()) {
+            Boolean left = signednessOf(apply.left());
+            Boolean right = signednessOf(apply.right());
+            require(left == null || right == null || left.equals(right), apply.position(),
+                    "'" + operator.spelling() + "' has one operand signed and one unsigned, and "
+                            + "written as a symbol it does not say which it means; use the "
+                            + "mnemonic form, or let one value live in a variable of the other "
+                            + "type, which costs nothing (docs/ir.md §5.5)");
+        }
+    }
+
+    /** A leaf of an expression: what it may be, and how wide it is. */
+    private Integer widthOfLeaf(Value value, Integer implied, ExpressionForm form) {
+        if (form == ExpressionForm.EXPR && value instanceof Value.Memory) {
+            throw new CompileError(value.position(),
+                    "expr works on values that are already in registers, so it cannot contain a "
+                            + "load; put the load in a variable first (docs/ir.md §5.2)");
+        }
+        if (form == ExpressionForm.EXPR && value instanceof Value.Name
+                && !variables.containsKey(((Value.Name) value).name())) {
+            require(!labels.contains(((Value.Name) value).name()), value.position(),
+                    "expr works on variables, and '" + ((Value.Name) value).name()
+                            + "' is a label, which is an address; put it in a variable first "
+                            + "(docs/ir.md §5.2)");
+        }
+        return widthOf(value, implied);
+    }
+
+    /**
+     * The width of a conversion, which is the width of whatever it is going into
+     * unless the conversion names one of its own ({@code docs/ir.md} §3.5).
+     */
+    private Integer widthOfConversion(Value.Convert convert, Integer implied) {
+        Conversion conversion = convert.conversion();
+        Integer source = widthOf(convert.operand(), null);
+        require(source != null, convert.operand().position(),
+                "the value being converted has to say how wide it is; give the memory operand a "
+                        + "prefix, or convert a variable");
+
+        if (conversion.direction() == Conversion.Direction.WIDEN) {
+            require(implied != null, convert.position(),
+                    "'" + conversion.spelling() + "' widens, so something has to say how wide the "
+                            + "result is: put it somewhere of the width you want");
+            require(implied.intValue() > source.intValue(), convert.position(),
+                    "'" + conversion.spelling() + "' widens, and turning a " + source
+                            + "-byte value into a " + implied + "-byte one is not widening");
+            return implied;
+        }
+
+        int result = conversion.resultBytes();
+        if (implied != null) {
+            require(result == implied.intValue(), convert.position(),
+                    "'" + conversion.spelling() + "' gives a " + result + "-byte value, which "
+                            + "does not fit where it is going; narrowing and then widening needs "
+                            + "two conversions, and the surface writes them one at a time");
+        }
+        require(source.intValue() > result, convert.position(),
+                "'" + conversion.spelling() + "' narrows, and the value is already " + source
+                        + " bytes");
+        return Integer.valueOf(result);
+    }
+
+    /**
+     * How wide a value is, or null when nothing has said yet.
+     *
+     * <p>{@code implied} is the width the context asks for, which is what a
+     * literal and an anonymous memory operand take: {@code x: u16 = [p]} is a
+     * two-byte load because {@code x} is two bytes, not because anything else
+     * said so ({@code docs/ir.md} §3.4).
+     */
+    private Integer widthOf(Value value, Integer implied) {
         if (value instanceof Value.Number) {
-            return null; // a literal takes its width from wherever it goes
+            return implied;
         }
         if (value instanceof Value.Name) {
             Value.Name named = (Value.Name) value;
@@ -237,9 +481,18 @@ public final class IrVerifier {
                     "unknown name '" + named.name() + "': no variable or label has that name");
             return Integer.valueOf(POINTER_BYTES);
         }
-        MemoryOperand operand = ((Value.Memory) value).operand();
-        checkAddress(operand);
-        return operand.size() == null ? null : Integer.valueOf(operand.size().bytes());
+        if (value instanceof Value.Memory) {
+            MemoryOperand operand = ((Value.Memory) value).operand();
+            checkAddress(operand);
+            return operand.size() == null ? implied : Integer.valueOf(operand.size().bytes());
+        }
+        if (value instanceof Value.Convert) {
+            return widthOfConversion((Value.Convert) value, implied);
+        }
+        Value.Eval eval = value instanceof Value.Eval ? (Value.Eval) value : null;
+        Expression expression = eval != null ? eval.expression() : ((Value.Expr) value).expression();
+        return widthOfExpression(expression, implied,
+                eval == null ? ExpressionForm.EXPR : ExpressionForm.EVAL);
     }
 
     private void checkAddress(MemoryOperand operand) {

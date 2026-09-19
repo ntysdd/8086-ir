@@ -53,6 +53,8 @@ public final class IrPrinter {
             printVar(text, (Item.Var) item);
         } else if (item instanceof Item.Assign) {
             printAssign(text, (Item.Assign) item);
+        } else if (item instanceof Item.Eval) {
+            printEvalStatement(text, (Item.Eval) item);
         } else if (item instanceof Item.Compare) {
             printCompare(text, (Item.Compare) item);
         } else if (item instanceof Item.Jump) {
@@ -82,6 +84,11 @@ public final class IrPrinter {
                 .append(printValue(assign.value())).append('\n');
     }
 
+    private static void printEvalStatement(StringBuilder text, Item.Eval item) {
+        text.append(INDENT).append("eval(").append(printExpression(item.expression(), 0, false))
+                .append(")\n");
+    }
+
     private static String printPlace(Place place) {
         return place instanceof Place.Name
                 ? ((Place.Name) place).name()
@@ -95,7 +102,45 @@ public final class IrPrinter {
         if (value instanceof Value.Number) {
             return Numbers.spelling(((Value.Number) value).value());
         }
-        return printMemoryOperand(((Value.Memory) value).operand());
+        if (value instanceof Value.Memory) {
+            return printMemoryOperand(((Value.Memory) value).operand());
+        }
+        if (value instanceof Value.Eval) {
+            return "eval(" + printExpression(((Value.Eval) value).expression(), 0, false) + ")";
+        }
+        if (value instanceof Value.Expr) {
+            return "expr(" + printExpression(((Value.Expr) value).expression(), 0, false) + ")";
+        }
+        Value.Convert convert = (Value.Convert) value;
+        return convert.conversion().spelling() + " " + printValue(convert.operand());
+    }
+
+    /**
+     * Prints an expression with exactly the brackets the tree needs and no more,
+     * so that parsing the result gives the tree back ({@code AGENTS.md},
+     * invariant 5).
+     *
+     * <p>A child needs brackets when it binds looser than its parent, and when it
+     * binds equally tightly on the right of a left-associative operator, because
+     * that is where the tree would otherwise change shape.
+     */
+    private static String printExpression(Expression expression, int parentPrecedence,
+                                          boolean rightOperand) {
+        if (expression instanceof Expression.Leaf) {
+            return printValue(((Expression.Leaf) expression).value());
+        }
+        if (expression instanceof Expression.Complement) {
+            Expression operand = ((Expression.Complement) expression).operand();
+            return "~" + printExpression(operand, Operator.COMPLEMENT.precedence(), true);
+        }
+        Expression.Apply apply = (Expression.Apply) expression;
+        int precedence = apply.operator().precedence();
+        String text = printExpression(apply.left(), precedence, false)
+                + " " + apply.operator().spelling() + " "
+                + printExpression(apply.right(), precedence, true);
+        boolean needsBrackets = precedence < parentPrecedence
+                || (precedence == parentPrecedence && rightOperand);
+        return needsBrackets ? "(" + text + ")" : text;
     }
 
     /**

@@ -78,4 +78,73 @@ public abstract class Value {
             return operand;
         }
     }
+
+    /**
+     * {@code eval(...)}: do it as written.
+     *
+     * <p>The flags it leaves are the ones the written sequence of instructions
+     * would leave, and any width change or operand shape is worked out on the
+     * way ({@code docs/ir.md} §5.1).
+     */
+    public static final class Eval extends Value {
+
+        private final Expression expression;
+
+        public Eval(SourcePos position, Expression expression) {
+            super(position);
+            this.expression = expression;
+        }
+
+        public Expression expression() {
+            return expression;
+        }
+    }
+
+    /**
+     * {@code expr(...)}: a value, and the optimiser's business.
+     *
+     * <p>It reads no flags and leaves them undefined, which is what lets it be
+     * reassociated, shared, duplicated and strength-reduced
+     * ({@code docs/ir.md} §5.2).
+     */
+    public static final class Expr extends Value {
+
+        private final Expression expression;
+
+        public Expr(SourcePos position, Expression expression) {
+            super(position);
+            this.expression = expression;
+        }
+
+        public Expression expression() {
+            return expression;
+        }
+    }
+
+    /**
+     * A conversion: {@code movzx y}, {@code byte y}.
+     *
+     * <p>Its result has the width the destination asks for, except when the
+     * conversion names one of its own — {@code byte} is one byte and nothing
+     * else ({@code docs/ir.md} §3.5).
+     */
+    public static final class Convert extends Value {
+
+        private final Conversion conversion;
+        private final Value operand;
+
+        public Convert(SourcePos position, Conversion conversion, Value operand) {
+            super(position);
+            this.conversion = conversion;
+            this.operand = operand;
+        }
+
+        public Conversion conversion() {
+            return conversion;
+        }
+
+        public Value operand() {
+            return operand;
+        }
+    }
 }

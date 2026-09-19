@@ -68,6 +68,16 @@ public final class IrParserTest {
         suite.add("Ir parser refuses an unterminated statement", IrParserTest::refusesTrailingToken);
         suite.add("Ir parser names the constructs it does not implement yet",
                 IrParserTest::namesUnimplemented);
+        suite.add("Ir parser respects operator precedence", IrParserTest::readsExpressions);
+        suite.add("Ir parser lets brackets change the tree", IrParserTest::bracketsChangeTheTree);
+        suite.add("Ir parser reads mnemonic operators and conversions",
+                IrParserTest::readsMnemonicOperatorsAndConversions);
+        suite.add("Ir printer round-trips expressions", IrParserTest::roundTripsExpressions);
+        suite.add("Ir parser refuses nested eval and expr", IrParserTest::refusesNestedForms);
+        suite.add("Ir parser refuses arithmetic without a form",
+                IrParserTest::refusesArithmeticWithoutAForm);
+        suite.add("Ir parser refuses a negated literal", IrParserTest::refusesNegatedLiteral);
+        suite.add("Ir parser refuses converting a form", IrParserTest::refusesConversionOfAForm);
         suite.add("Ir parser reads comparisons and branches",
                 IrParserTest::readsComparisonsAndBranches);
         suite.add("Ir parser normalises condition aliases",
@@ -344,15 +354,125 @@ public final class IrParserTest {
     }
 
     private static void namesUnimplemented() {
-        CompileError arithmetic = Assert.assertRefused("test.ir:4:9",
-                () -> parse("target 8086\norg 0\nentry a\n    x = eval(a + b)\n"));
-        Assert.assertTrue(arithmetic.getMessage().startsWith("not implemented yet:"),
-                "arithmetic says so: " + arithmetic.getMessage());
-
         CompileError sugar = Assert.assertRefused("test.ir:4:1",
                 () -> parse("target 8086\norg 0\nentry a\n.if 1\n"));
+        Assert.assertTrue(sugar.getMessage().startsWith("not implemented yet:"),
+                "the sugar says so: " + sugar.getMessage());
         Assert.assertTrue(sugar.getMessage().contains("docs/ir.md"),
-                "and points at the section that specifies it: " + sugar.getMessage());
+                "and points at the section that specifies it");
+
+        CompileError setcc = Assert.assertRefused("test.ir:4:1",
+                () -> parse("target 8086\norg 0\nentry a\nsetc x\n"));
+        Assert.assertTrue(setcc.getMessage().contains("setcc family"),
+                "and so does the setcc family: " + setcc.getMessage());
+    }
+
+    private static void readsExpressions() {
+        Module module = parse(program());
+        Item.Assign assign = (Item.Assign) module.items().get(4);
+        Expression.Apply sum = (Expression.Apply) ((Value.Eval) assign.value()).expression();
+        Assert.assertEquals(Operator.ADD, sum.operator());
+        Assert.assertEquals("a", ((Value.Name) ((Expression.Leaf) sum.left()).value()).name());
+
+        Expression.Apply product = (Expression.Apply) sum.right();
+        Assert.assertEquals(Operator.MULTIPLY, product.operator());
+        Assert.assertEquals("b", ((Value.Name) ((Expression.Leaf) product.left()).value()).name());
+        Assert.assertEquals("c", ((Value.Name) ((Expression.Leaf) product.right()).value()).name());
+    }
+
+    private static void bracketsChangeTheTree() {
+        Module module = parse(program().replace("a + b * c", "(a + b) * c"));
+        Item.Assign assign = (Item.Assign) module.items().get(4);
+        Expression.Apply product = (Expression.Apply) ((Value.Eval) assign.value()).expression();
+        Assert.assertEquals(Operator.MULTIPLY, product.operator());
+        Assert.assertEquals(Operator.ADD,
+                ((Expression.Apply) product.left()).operator());
+    }
+
+    private static void readsMnemonicOperatorsAndConversions() {
+        Module module = parse("target 8086\norg 0\nentry main\n"
+                + "main:\n"
+                + "    var a: u16\n"
+                + "    a = eval(a shl 2)\n"
+                + "    a = eval(a adc a)\n"
+                + "    a = eval(a idiv a)\n"
+                + "    a = expr(a shl a)\n"
+                + "    a = movzx a\n"
+                + "    a = byte a\n");
+        Assert.assertEquals(Operator.SHIFT_LEFT, operatorOf(module, 2));
+        Assert.assertEquals(Operator.ADD_WITH_CARRY, operatorOf(module, 3));
+        Assert.assertEquals(Operator.DIVIDE_SIGNED, operatorOf(module, 4));
+        Assert.assertEquals(Operator.SHIFT_LEFT, operatorOf(module, 5));
+
+        Value.Convert widen = (Value.Convert) ((Item.Assign) module.items().get(6)).value();
+        Assert.assertEquals(Conversion.ZERO_EXTEND, widen.conversion());
+        Value.Convert narrow = (Value.Convert) ((Item.Assign) module.items().get(7)).value();
+        Assert.assertEquals(Conversion.LOW_BYTE, narrow.conversion());
+    }
+
+    private static Operator operatorOf(Module module, int index) {
+        Value value = ((Item.Assign) module.items().get(index)).value();
+        Expression expression = value instanceof Value.Eval
+                ? ((Value.Eval) value).expression()
+                : ((Value.Expr) value).expression();
+        return ((Expression.Apply) expression).operator();
+    }
+
+    private static void roundTripsExpressions() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry main\n"
+                + "\n"
+                + "main:\n"
+                + "    var a: u16\n"
+                + "    var b: u16\n"
+                + "    var small: u8\n"
+                + "    a = eval(a + b * a)\n"
+                + "    a = eval((a + b) * a)\n"
+                + "    a = eval(a + b + a)\n"
+                + "    a = eval(a - (b - a))\n"
+                + "    a = expr(~a + a & a ^ a | a)\n"
+                + "    a = eval(a shl 1 adc b)\n"
+                + "    a = movzx byte [a]\n"
+                + "    small = byte a\n"
+                + "    eval(a * b)\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+    }
+
+    private static void refusesNestedForms() {
+        Assert.assertRefused("test.ir:6:14",
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                        + "    a = eval(expr(a) + 1)\n"));
+    }
+
+    private static void refusesArithmeticWithoutAForm() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n    a = a + 1\n"));
+        Assert.assertEquals("test.ir:6:11", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("eval(...) or expr(...)"),
+                "the message says where arithmetic goes: " + refused.getMessage());
+    }
+
+    private static void refusesNegatedLiteral() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n    a = -1\n"));
+        Assert.assertEquals("test.ir:6:9", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("0xFFFF"), refused.getMessage());
+    }
+
+    private static void refusesConversionOfAForm() {
+        Assert.assertRefused("test.ir:6:15",
+                () -> parse("target 8086\norg 0\nentry main\nmain:\n    var a: u16\n"
+                        + "    a = movzx eval(a + a)\n"));
+    }
+
+    private static String program() {
+        return "target 8086\norg 0x100\nentry main\n"
+                + "main:\n"
+                + "    var a: u16\n"
+                + "    var b: u16\n"
+                + "    var c: u16\n"
+                + "    a = eval(a + b * c)\n";
     }
 
     private static void readsComparisonsAndBranches() {

@@ -97,6 +97,9 @@ construction renames them.
 * **Literals are untyped.** The `1` in `eval(a + 1)` takes its width from
   context, the way an assembler immediate does. Literals are not a second type
   and do not violate the same-width rule.
+* **[open]** a literal cannot be written negative: `-1` is refused, and the bit
+  pattern has to be written as `0xFFFF`. There is no unary minus in the surface,
+  and whether there should be is not decided.
 
 ### 3.3 Pointers — [decided]
 
@@ -141,6 +144,12 @@ x = word y       ; narrow to the low word
 t = x            ; same width, other signedness: a free reinterpretation
 ```
 
+`byte` and `word` are the same two words as the size prefixes of a memory
+operand (§3.4), and the bracket after them is what says which of the two is
+meant: `byte [p]` loads one byte, `byte y` takes the low byte of a value.
+`dword` is only ever a prefix, because nothing is wider than a double word, so
+there is nothing to narrow from.
+
 * **An assignment's two sides must have the same width.** A width change is
   always spelled as one of the conversions above; there is no implicit widening
   or narrowing anywhere.
@@ -159,6 +168,11 @@ t = x            ; same width, other signedness: a free reinterpretation
   low byte of x".
 * On the 8086 both extensions are **expansions** in the sense of `AGENTS.md`:
   `MOVZX` and `MOVSX` only arrived with the 386.
+* **[open]** what a conversion does to the flags. On this machine widening is an
+  instruction that touches them, so the compiler currently assumes a conversion
+  disturbs them, which refuses more than it has to. Which it is, is the target's
+to say (§4.2), and the answer belongs behind the target's flag effects rather
+  than in the IR.
 
 ## 4. Flags
 
@@ -191,6 +205,44 @@ matters:
 `expr(...)` leaves `flags` undefined, and the IR must be able to say so.
 **Reading a flag whose value is undefined is a hard error** carrying a source
 position. It is never a silent branch in an arbitrary direction.
+
+There are two ways for that to happen, and they are not the same thing:
+
+* the writer **gave the flags up**, by computing a value with `expr` (§5.2), and
+  the fix is to write `eval` instead or not to read them here;
+* the compiler **cannot prove they are defined**, because a path arrived without
+  defining them. The fix is a redundant `cmp`/`test`, and the message must say
+  that this is the compiler's limitation rather than a mistake — there is a
+  difference between "you did not define this" and "I could not show that you
+  did", and confusing the two is how a compiler earns a reputation for being
+  obnoxious.
+
+Today the check is a single pass in source order that is **sound but
+incomplete**: it never accepts a program that reads an undefined flag, and it
+refuses some programs that are in fact correct. It is sound because every jump
+and branch lands on a label (checked, §7.1), a label clears the state, and the
+entry point is a label, so an accepted branch can only have been reached by
+falling through the sequence the check just walked. It is incomplete because the
+flags at a label are really a question about a graph, and this is a flat walk of
+a list.
+
+That is temporary, and the shape of the fix is fixed: once a control flow graph
+and SSA exist, `flags` is an ordinary value, the question becomes reaching
+definitions over it, and a join that needs the flags materialises them. Two
+consequences are worth stating now, because they belong to the compiler's
+behaviour rather than to this document:
+
+* **Precision may only ever grow.** A program this compiler accepts is accepted
+  by every later version; a check may not become stricter without changing this
+document first. Users put a compiler in a build, and a build that stops
+  working on an upgrade is a broken promise.
+* The check belongs behind one interface. The verifier turns a negative answer
+  into a hard error with a position; it does not own the analysis, or there will
+  be two implementations of one question.
+
+**[open]** how fine the granularity is. The flags are six independent bits and a
+`jc` reads only `CF`, so the precise question is per bit; today the check is per
+whole flag set, which is coarser than it needs to be.
 
 ### 4.4 Condition mnemonics state the condition — [decided]
 
@@ -279,7 +331,24 @@ x = volatile [p]  ; volatile LOAD, a statement of its own
 
 `expr` and `eval` never nest inside one another.
 
-### 5.5 Operator set — [decided]
+### 5.5 Operators and precedence — [decided]
+
+An expression is a tree, and brackets say what binds to what. Where they are not
+written, the precedence everyone already has in their fingers decides: every
+operator is left-associative, and, tightest first,
+
+| binds | operators |
+|---|---|
+| 1 | `~` (prefix) |
+| 2 | `* / % mul imul div idiv` |
+| 3 | `+ - adc sbb` |
+| 4 | `shl shr sar rol ror rcl rcr` |
+| 5 | `&` |
+| 6 | `^` |
+| 7 | `\|` |
+
+A writer who would rather not remember that writes brackets, which change
+nothing else and cost nothing.
 
 * In `expr`: `+ - * / % & | ^ ~`, and the shifts and rotates that do not read
   the carry (`shl shr sar rol ror`). Comparisons are **not** value expressions;
@@ -310,11 +379,18 @@ x = volatile [p]  ; volatile LOAD, a statement of its own
   this is not a house style, it is the hardware.
 * Where the instruction really does depend on signedness, the **mnemonic form
   overrides what the operands imply**: `shr`/`sar` already do this, and
-  `div`/`idiv` and `mul`/`imul` belong to the same family. An operator written
-  as a symbol, applied to operands of mixed signedness at the same width, is a
-  **hard error** — say what you mean, with a mnemonic or by copying the value
-  into a variable of the type you mean (§3.5). `[proposed]` the exact spelling
-  of the mnemonic operators.
+  `div`/`idiv` and `mul`/`imul` belong to the same family. They are written
+  infix, like every other operator: `a shl 1`, `a adc b`, `a idiv b`.
+
+  An operator written as a **symbol**, applied to operands of mixed signedness
+  at the same width, is a **hard error** — say what you mean, with a mnemonic or
+  by letting one value live in a variable of the type you mean, which costs
+  nothing and emits nothing (§3.5). It is stricter than it has to be: addition
+  and multiplication give the same bits either way. It is strict because a
+  symbol that means two things is a symbol a reader has to stop and decode.
+
+* `expr` works on values that are already in registers: its operands are
+  variables and literals, and a load or a label is refused there (§5.2).
 
 ### 5.6 8086 costs worth knowing — [decided]
 
@@ -525,12 +601,18 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 
 1. Spelling for naming an older flag value, and the flag capture form (§4.4).
 2. How much of `lahf`/`sahf`/`pushf` is exposed directly (§4.4).
-3. The spelling of the mnemonic operators `div`/`idiv`/`mul`/`imul` (§5.5).
-4. The no-spill marker's spelling (§8.2).
-5. Inline assembly operand binding for variables, and inputs/outputs (§9).
-6. Whether string operations and `jcxz` get a surface (§11).
-7. The repeat spelling for zero-filled space, and whether anything beyond the
+3. The no-spill marker's spelling (§8.2).
+4. Inline assembly operand binding for variables, and inputs/outputs (§9).
+5. Whether string operations and `jcxz` get a surface (§11).
+6. The repeat spelling for zero-filled space, and whether anything beyond the
    image is ever offered (§10); plus which other details of §10 survive review.
+7. What a conversion does to the flags (§3.5), which the target's flag effects
+   will answer.
+8. Whether `expr` may take a label, which is a constant and not a load, but is
+   not a variable either (§5.2).
+9. Whether a literal may be written negative (§3.2).
+10. How fine the flags check's granularity is: per bit, or per whole flag set
+    (§4.3).
 
 ## 13. Non-goals for v1
 

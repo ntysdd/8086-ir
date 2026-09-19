@@ -33,16 +33,19 @@ public final class IrParser {
 
     private static final int MAX_ORIGIN = 0xFFFF;
 
+    /** Below every operator, so that parsing starts at the loosest level. */
+    private static final int LOWEST_PRECEDENCE = 0;
+
     /**
      * Words the surface already uses for something else, which therefore cannot
-     * name anything. The list is the IR's own vocabulary; the conditions and the
-     * type prefixes come from the target and from {@link Size}, because those are
-     * not this file's facts to know.
+     * name anything. The list is the IR's own vocabulary; the conditions, the
+     * type prefixes and the operator words come from the target, from
+     * {@link Size} and from {@link Operator}, because those are not this file's
+     * facts to know.
      */
     private static final Set<String> STATEMENT_WORDS = new LinkedHashSet<String>(Arrays.asList(
             "var", "ret", "asm", "jmp", "cmp", "test",
-            "target", "org", "entry",
-            "eval", "expr", "movzx", "movsx"));
+            "target", "org", "entry"));
 
     private final String file;
     private final List<Token> tokens;
@@ -165,6 +168,12 @@ public final class IrParser {
         if (first.isName("cmp") || first.isName("test")) {
             return parseCompare();
         }
+        if (first.isName("eval")) {
+            Token keyword = next();
+            Expression expression = parseParenthesisedExpression();
+            endOfLine();
+            return new Item.Eval(keyword.position(), expression);
+        }
         if (first.is(TokenKind.IDENT) && target.condition(first.name()) != null) {
             next();
             String where = expect(TokenKind.IDENT, "a label to branch to").name();
@@ -205,16 +214,19 @@ public final class IrParser {
     }
 
     /**
-     * Refuses a name that is a word of the syntax rather than a name.
+     * Refuses a name that is a word of the surface rather than a name.
      *
      * <p>{@code byte} and {@code db} mean something wherever they appear before
-     * an operand, so a declaration using one would produce a program whose
-     * meaning depends on where you look. Better to say so at the declaration.
+     * an operand, and so do {@code jmp}, {@code cmp} and the conditions. A
+     * declaration using one would produce a program whose meaning depends on
+     * where you look. Better to say so at the declaration.
      */
     private void requireNameable(Token name) {
         boolean reserved = Size.named(name.name()) != null
                 || Size.fromDirective(name.name()) != null
                 || STATEMENT_WORDS.contains(name.name())
+                || Operator.named(name.name()) != null
+                || Conversion.named(name.name()) != null
                 || target.condition(name.name()) != null;
         require(!reserved, name.position(),
                 "'" + name.text() + "' is a word of the surface, so it cannot name anything");
@@ -236,8 +248,31 @@ public final class IrParser {
         if (startsMemoryOperand()) {
             return new Value.Memory(first.position(), parseMemoryOperand());
         }
-        if (first.is(TokenKind.IDENT) && isUnimplementedValueWord(first.name())) {
-            throw notImplemented(first, statementDescription(first));
+        if (first.isName("eval")) {
+            next();
+            return new Value.Eval(first.position(), parseParenthesisedExpression());
+        }
+        if (first.isName("expr")) {
+            next();
+            return new Value.Expr(first.position(), parseParenthesisedExpression());
+        }
+        if (first.is(TokenKind.IDENT) && Conversion.named(first.name()) != null) {
+            Conversion conversion = Conversion.named(first.name());
+            next();
+            return new Value.Convert(first.position(), conversion,
+                    parseConversionOperand(conversion));
+        }
+        if (first.is(TokenKind.IDENT) && Size.named(first.name()) != null) {
+            throw new CompileError(first.position(),
+                    "'" + first.text() + "' says how wide a memory access is, so it needs a "
+                            + "bracket after it; to narrow a value, 'byte' and 'word' take the low "
+                            + "byte or the low word, and there is nothing wider than a 'dword' "
+                            + "to narrow (docs/ir.md §3.5)");
+        }
+        if (first.is(TokenKind.IDENT) && isOperatorWord(first.name())) {
+            throw new CompileError(first.position(),
+                    "'" + first.text() + "' is an operator, so it needs an expression: "
+                            + "write eval(...) or expr(...) around it (docs/ir.md §5)");
         }
         if (first.is(TokenKind.NUMBER)) {
             next();
@@ -247,18 +282,137 @@ public final class IrParser {
             next();
             return new Value.Name(first.position(), first.name());
         }
+        if (first.is("-") || first.is("+")) {
+            throw new CompileError(first.position(),
+                    "a value cannot be negated where it is written: '-1' is the bit pattern "
+                            + "0xFFFF, and '0 - x' subtracts");
+        }
         throw new CompileError(first.position(),
                 "expected a value, but found " + first.describe());
     }
 
     /**
-     * Whether a memory operand begins here. The size prefix and the segment
-     * override come before the bracket, so seeing either is enough to know that
-     * a bracket is coming ({@code docs/ir.md} §3.4).
+     * The value a conversion applies to. It is a value and not an expression,
+     * because an expression already has one width throughout and converting it
+     * would have nothing to say ({@code docs/ir.md} §3.5).
+     */
+    private Value parseConversionOperand(Conversion conversion) {
+        Token at = peek();
+        boolean anotherConversion = Conversion.named(at.name()) != null && !startsMemoryOperand();
+        if (at.isName("eval") || at.isName("expr") || anotherConversion) {
+            throw new CompileError(at.position(),
+                    "'" + conversion.spelling() + "' takes a value with one width, not "
+                            + at.describe() + "; one conversion changes one width, which is what "
+                            + "an operand with a 'byte' or 'word' prefix is already doing "
+                            + "(docs/ir.md §3.5)");
+        }
+        return parseValue();
+    }
+
+    private Expression parseParenthesisedExpression() {
+        expectPunct("(");
+        Expression expression = parseExpression();
+        expectPunct(")");
+        return expression;
+    }
+
+    private Expression parseExpression() {
+        return parseExpression(LOWEST_PRECEDENCE);
+    }
+
+    /**
+     * Precedence climbing: an operator binds tighter than the one that called it,
+     * and every operator is left-associative, so the right operand is parsed one
+     * level above.
+     */
+    private Expression parseExpression(int minimumPrecedence) {
+        Expression left = parseUnaryExpression();
+        while (true) {
+            Operator operator = operatorHere();
+            if (operator == null || operator.arity() != 2
+                    || operator.precedence() < minimumPrecedence) {
+                return left;
+            }
+            Token at = next();
+            Expression right = parseExpression(operator.precedence() + 1);
+            left = new Expression.Apply(at.position(), operator, left, right);
+        }
+    }
+
+    private Expression parseUnaryExpression() {
+        Token at = peek();
+        if (operatorHere() == Operator.COMPLEMENT) {
+            next();
+            return new Expression.Complement(at.position(), parseUnaryExpression());
+        }
+        if (at.is("(")) {
+            // Brackets are syntax, not a node: the tree already says what binds to
+            // what, and the printer puts the brackets back where they are needed.
+            next();
+            Expression inner = parseExpression();
+            expectPunct(")");
+            return inner;
+        }
+        return new Expression.Leaf(at.position(), parseExpressionLeaf());
+    }
+
+    /** The operator that begins here, or null when an operand does. */
+    private Operator operatorHere() {
+        Token token = peek();
+        if (token.is(TokenKind.PUNCT)) {
+            return Operator.named(token.text());
+        }
+        if (token.is(TokenKind.IDENT)) {
+            return Operator.named(token.name());
+        }
+        return null;
+    }
+
+    private static boolean isOperatorWord(String name) {
+        Operator operator = Operator.named(name);
+        return operator != null && operator.arity() == 2 && operator.spelling().length() > 1;
+    }
+
+    /** A value inside an expression: a variable, a literal, or a load. */
+    private Value parseExpressionLeaf() {
+        Token at = peek();
+        if (startsMemoryOperand()) {
+            return new Value.Memory(at.position(), parseMemoryOperand());
+        }
+        if (at.is(TokenKind.NUMBER)) {
+            next();
+            return new Value.Number(at.position(), at.value(), at.text());
+        }
+        if (at.is(TokenKind.IDENT)) {
+            if (at.isName("eval") || at.isName("expr")) {
+                throw new CompileError(at.position(),
+                        "'eval' and 'expr' do not nest inside one another (docs/ir.md §5.4)");
+            }
+            if (Operator.named(at.name()) != null || Conversion.named(at.name()) != null) {
+                throw new CompileError(at.position(),
+                        "'" + at.text() + "' cannot appear inside an expression here: "
+                                + "an expression has one width and one set of flags "
+                                + "(docs/ir.md §5.5, §3.5)");
+            }
+            next();
+            return new Value.Name(at.position(), at.name());
+        }
+        if (at.is("-") || at.is("+") || at.is("~")) {
+            throw new CompileError(at.position(),
+                    "'" + at.text() + "' here would negate a value, which the surface does not "
+                            + "write: '-1' is the bit pattern 0xFFFF, and '0 - x' subtracts");
+        }
+        throw new CompileError(at.position(),
+                "expected a value in the expression, but found " + at.describe());
+    }
+
+    /**
+     * Whether a memory operand begins here.
      *
-     * <p>The segment override is the one that needs care: {@code es:[p]} begins
-     * with the same two tokens as a label, {@code es:}, and only the bracket
-     * after them tells the two apart.
+     * <p>A size prefix or a segment override comes before the bracket, so seeing
+     * one is almost enough — almost, because {@code byte a} is a conversion and
+     * {@code es:} can be a label, and only the bracket after them says which of
+     * the two it is ({@code docs/ir.md} §3.4, §3.5).
      */
     private boolean startsMemoryOperand() {
         Token token = peek();
@@ -266,7 +420,10 @@ public final class IrParser {
             return true;
         }
         if (token.is(TokenKind.IDENT) && Size.named(token.name()) != null) {
-            return true;
+            if (tokenAt(1).is("[")) {
+                return true;
+            }
+            return tokenAt(1).is(TokenKind.IDENT) && tokenAt(2).is(":") && tokenAt(3).is("[");
         }
         return token.is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, ":")
                 && tokenAt(2).is("[");
@@ -314,27 +471,11 @@ public final class IrParser {
         return new MemoryOperand(start.position(), size, segment, base, displacement);
     }
 
-    /**
-     * Words that begin a value and are specified but not built yet. Naming the
-     * construct is more use than "expected a value", because the writer wrote
-     * something the language has and the compiler cannot do yet.
-     */
-    private static boolean isUnimplementedValueWord(String name) {
-        return name.equals("eval") || name.equals("expr")
-                || name.equals("movzx") || name.equals("movsx")
-                || name.equals("byte") || name.equals("word") || name.equals("dword");
-    }
-
     private static String statementDescription(Token first) {
         String name = first.name();
-        if (name.equals("eval") || name.equals("expr")) {
-            return "'" + name + "' (docs/ir.md §5)";
-        }
-        if (name.equals("movzx") || name.equals("movsx")) {
-            return "the conversion '" + name + "' (docs/ir.md §3.5)";
-        }
-        if (Size.named(name) != null) {
-            return "a size prefix inside a value, which is not a value (docs/ir.md §3.5)";
+        if (name.equals("expr")) {
+            return "'expr' as a statement: its value is the point, and its flags are undefined "
+                    + "afterwards, so nothing would be left (docs/ir.md §5.2)";
         }
         if (name.startsWith("set")) {
             return "the setcc family (docs/ir.md §4.4)";
@@ -343,7 +484,7 @@ public final class IrParser {
                 || name.startsWith(".end") || name.startsWith(".while")) {
             return "control flow sugar (docs/ir.md §7.2)";
         }
-        return "an assignment or a statement beginning with '" + first.text() + "'";
+        return "a statement beginning with '" + first.text() + "'";
     }
 
     /** What follows a label on its own line: a data definition, or nothing. */
@@ -579,6 +720,12 @@ public final class IrParser {
         }
         if (token.isEof()) {
             return;
+        }
+        if (operatorHere() != null || token.is("(") || token.is(")")) {
+            throw new CompileError(token.position(),
+                    "arithmetic is written inside eval(...) or expr(...), and an assignment is "
+                            + "not an expression of its own; found " + token.describe()
+                            + " here (docs/ir.md §5)");
         }
         throw new CompileError(token.position(),
                 "expected the end of the line, but found " + token.describe());

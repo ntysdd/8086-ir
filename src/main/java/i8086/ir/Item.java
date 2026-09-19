@@ -221,8 +221,7 @@ public abstract class Item {
         }
     }
 
-    /** {@code jmp label}: go there, whatever the flags say. */
-    public static final class Jump extends Item {
+    /** {@code jmp label}: go there, whatever the flags say. */    public static final class Jump extends Item {
 
         private final String target;
 
@@ -260,6 +259,28 @@ public abstract class Item {
 
         public String target() {
             return target;
+        }
+    }
+
+    /**
+     * {@code eval(...)} used as a statement: compute it, throw the value away,
+     * and leave the flags defined.
+     *
+     * <p>It is the arithmetic counterpart of a comparison on a line of its own,
+     * which is a statement a writer of assembly already expects to have an
+     * effect ({@code docs/ir.md} §5.1).
+     */
+    public static final class Eval extends Item {
+
+        private final Expression expression;
+
+        public Eval(SourcePos position, Expression expression) {
+            super(position);
+            this.expression = expression;
+        }
+
+        public Expression expression() {
+            return expression;
         }
     }
 

@@ -66,6 +66,30 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesCompareWidths);
         suite.add("Ir verifier refuses a comparison against nothing",
                 IrVerifierTest::refusesCompareUnknown);
+        suite.add("Ir verifier accepts arithmetic and conversions",
+                IrVerifierTest::acceptsArithmeticAndConversions);
+        suite.add("Ir verifier accepts a carry add after a comparison",
+                IrVerifierTest::acceptsCarryAddAfterCompare);
+        suite.add("Ir verifier refuses a load inside expr", IrVerifierTest::refusesLoadInExpr);
+        suite.add("Ir verifier refuses a label inside expr", IrVerifierTest::refusesLabelInExpr);
+        suite.add("Ir verifier refuses a carry operation inside expr",
+                IrVerifierTest::refusesCarryInExpr);
+        suite.add("Ir verifier refuses a wide division", IrVerifierTest::refusesWideDivision);
+        suite.add("Ir verifier refuses mixed signedness in a symbol operator",
+                IrVerifierTest::refusesMixedSignedness);
+        suite.add("Ir verifier refuses mixed widths in one expression",
+                IrVerifierTest::refusesMixedWidths);
+        suite.add("Ir verifier refuses a widening that does not widen",
+                IrVerifierTest::refusesPointlessWidening);
+        suite.add("Ir verifier refuses a narrowing of something already narrow",
+                IrVerifierTest::refusesPointlessNarrowing);
+        suite.add("Ir verifier refuses converting a literal", IrVerifierTest::refusesConversionOfLiteral);
+        suite.add("Ir verifier refuses a widening with nowhere to widen to",
+                IrVerifierTest::refusesWideningWithNoDestination);
+        suite.add("Ir verifier refuses a carry operation with nothing behind it",
+                IrVerifierTest::refusesCarryWithNothingBehindIt);
+        suite.add("Ir verifier refuses a branch after expr gave the flags up",
+                IrVerifierTest::refusesBranchAfterExpr);
     }
 
     private static void verify(String body) {
@@ -205,5 +229,65 @@ public final class IrVerifierTest {
 
     private static void refusesCompareUnknown() {
         refuses("test.ir:6:9", "    cmp nothing, 0\n");
+    }
+
+    // --- expressions and conversions (§3.5, §5) ----------------------------\n
+    private static void acceptsArithmeticAndConversions() {
+        verify("    var a: u16\n    var b: u16\n    var small: u8\n    var p: u16\n"
+                + "    a = eval(a + b)\n    eval(a * b)\n    a = expr(a + b * a)\n"
+                + "    small = byte a\n    a = movzx small\n    a = movsx small\n"
+                + "    a = movzx byte [p]\n    a = eval(a / b)\n    a = eval(a % b)\n");
+    }
+
+    private static void acceptsCarryAddAfterCompare() {
+        verify("    var a: u16\n    var b: u16\n    cmp a, 0\n    a = eval(a adc b)\n");
+    }
+
+    private static void refusesLoadInExpr() {
+        refuses("test.ir:8:14", "    var a: u16\n    var p: u16\n    a = expr([p] + a)\n");
+    }
+
+    private static void refusesLabelInExpr() {
+        refuses("test.ir:7:14", "    var a: u16\n    a = expr(msg + a)\nmsg: db 0\n");
+    }
+
+    private static void refusesCarryInExpr() {
+        refuses("test.ir:7:16", "    var a: u16\n    a = expr(a adc a)\n");
+    }
+
+    private static void refusesWideDivision() {
+        refuses("test.ir:7:16", "    var a: u32\n    a = eval(a / a)\n");
+    }
+
+    private static void refusesMixedSignedness() {
+        refuses("test.ir:8:16", "    var u: u16\n    var i: i16\n    u = eval(u + i)\n");
+    }
+
+    private static void refusesMixedWidths() {
+        refuses("test.ir:8:18", "    var a: u16\n    var b: u8\n    a = eval(b + a)\n");
+    }
+
+    private static void refusesPointlessWidening() {
+        refuses("test.ir:7:9", "    var a: u8\n    a = movzx a\n");
+    }
+
+    private static void refusesPointlessNarrowing() {
+        refuses("test.ir:8:13", "    var small: u8\n    var tiny: u8\n    small = byte tiny\n");
+    }
+
+    private static void refusesConversionOfLiteral() {
+        refuses("test.ir:7:15", "    var a: u16\n    a = movzx 5\n");
+    }
+
+    private static void refusesWideningWithNoDestination() {
+        refuses("test.ir:7:9", "    var a: u8\n    cmp movzx a, 0\n");
+    }
+
+    private static void refusesCarryWithNothingBehindIt() {
+        refuses("test.ir:7:9", "    var a: u16\n    a = eval(a adc a)\n");
+    }
+
+    private static void refusesBranchAfterExpr() {
+        refuses("test.ir:8:5", "    var a: u16\n    a = expr(a + a)\n    jz main\n");
     }
 }
