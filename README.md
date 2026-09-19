@@ -289,11 +289,16 @@ Working today:
   output verified in turn, and leaving SSA is a transformation whose output the
   surface's own verifier checks before anything selects from it.
   `optimize --emit ir` prints what the passes left.
-* **Data, and padding that reaches a layout**: `db`/`dw`/`dd` inline where they sit,
-  and `pad N [, fill]` / `pad to N [, fill]` for bytes that exist in the image and
-  mean nothing — a reserved buffer, a NOP sled, and the 510 bytes before a boot
+* **Data, and padding that reaches a layout**: `db`/`dw`/`dd` inline where they sit
+  — including a `dw` list of labels, which is a jump or vector table — and
+  `pad N [, fill]` / `pad to N [, fill]` for bytes that exist in the image and
+  mean nothing: a reserved buffer, a NOP sled, and the 510 bytes before a boot
   sector's `dw 0xAA55` (`docs/ir.md` §10.2, §10.3). `pad to` is resolved by the
   assembler, which is the only thing that knows how long the code before it is.
+* **An inline assembly block** that declares the registers it destroys, may name
+  labels of its own for a retry loop, and may end in a far jump —
+  `jmp 0x0000:0x7E00` — which is how a boot loader hands control to a kernel
+  (`docs/ir.md` §9, `docs/asm.md` §3, §4).
 * **Instruction selection and register allocation**, enough to compile arithmetic
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, 16-bit loads and stores, and `*`, `/` and `%` signed and

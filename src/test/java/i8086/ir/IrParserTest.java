@@ -38,6 +38,7 @@ public final class IrParserTest {
     public static void register(Suite suite) {
         suite.add("Ir parser reads the module header", IrParserTest::readsHeader);
         suite.add("Ir parser reads an inline assembly block", IrParserTest::readsInlineAsm);
+        suite.add("Ir parser reads a label inside a block", IrParserTest::readsBlockLabel);
         suite.add("Ir parser reads data definitions", IrParserTest::readsData);
         suite.add("Ir parser reads memory operands", IrParserTest::readsMemoryOperands);
         suite.add("Ir parser reads variable declarations and assignments",
@@ -120,6 +121,32 @@ public final class IrParserTest {
         Assert.assertEquals("int", block.body().get(2).mnemonic());
         Assert.assertTrue(block.body().get(1).operands().get(1) instanceof Operand.Offset,
                 "the second operand of the second instruction is 'offset msg'");
+    }
+
+    /**
+     * A label of a block's own, which is a line of its own where a mnemonic would be
+     * ({@code docs/ir.md} §9). The colon is what says so, so nothing else has to.
+     */
+    private static void readsBlockLabel() {
+        String block = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    asm clobbers(ax, flags) {\n        mov ax, 1\n    retry:\n"
+                + "        dec ax\n        jnz retry\n    }\n    ret\n";
+        Item.InlineAsm parsed = (Item.InlineAsm) parse(block).items().get(1);
+        Assert.assertEquals(4L, parsed.body().size());
+        Assert.assertTrue(parsed.body().get(1).isLabel(), "the second line is a label");
+        Assert.assertEquals("retry", parsed.body().get(1).mnemonic());
+        Assert.assertEquals("jnz", parsed.body().get(3).mnemonic());
+        // And it prints back at the block's own margin, colon and all.
+        Assert.assertEquals("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    asm clobbers(ax, flags) {\n        mov ax, 1\n        retry:\n"
+                        + "        dec ax\n        jnz retry\n    }\n    ret\n",
+                IrPrinter.print(parse(block)));
+        // A register cannot be one: 'ax:' at the start of a line would be read as a
+        // label, and a register is not a place.
+        CompileError refused = Assert.assertThrows(CompileError.class, () -> parse(
+                "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    asm clobbers(ax, flags) {\n    ax:\n        dec ax\n    }\n    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("register"), refused.getMessage());
     }
 
     private static void readsData() {

@@ -51,6 +51,8 @@ public final class AsmEmitterTest {
     public static void register(Suite suite) {
         suite.add("Asm emitter writes the whole program", AsmEmitterTest::writesWholeProgram);
         suite.add("Asm emitter writes a far jump", AsmEmitterTest::writesAFarJump);
+        suite.add("Asm emitter writes a label inside a block",
+                AsmEmitterTest::writesALabelInABlock);
         suite.add("Asm emitter writes arithmetic", AsmEmitterTest::writesArithmetic);
         suite.add("Asm emitter writes a loop",
                 AsmEmitterTest::writesALoop);
@@ -177,6 +179,22 @@ public final class AsmEmitterTest {
         String printed = i8086.ir.IrPrinter.print(IrParser.parse("test.ir", source));
         Assert.assertTrue(printed.contains("        jmp 0:0x7e00\n"), printed);
         Assert.assertTrue(printed.contains("        mov si, offset text\n"), printed);
+    }
+
+    /**
+     * A label inside a block is a line of its own, and a branch in the same block can
+     * reach it: a retry loop that would otherwise have to be spelled out with jumps
+     * to the module ({@code docs/ir.md} §9).
+     */
+    private static void writesALabelInABlock() {
+        String source = "target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+                + "    asm clobbers(ax, flags) {\n        mov ax, 0x0201\n    retry:\n"
+                + "        int 0x13\n        jc retry\n    }\n    ret\n";
+        String assembly = emit(source);
+        Assert.assertTrue(assembly.contains("\nretry:\n    int 0x13\n    jc retry\n"), assembly);
+        // The label stands at the margin and the instructions do not: the text is read
+        // by people, and a label is a place in the file rather than something done.
+        Assert.assertFalse(assembly.contains("    retry:"), assembly);
     }
 
     /**

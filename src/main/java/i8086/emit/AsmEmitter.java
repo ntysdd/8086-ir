@@ -69,8 +69,10 @@ public final class AsmEmitter {
             return;
         }
         for (Instruction instruction : piece.instructions()) {
-            text.append(INDENT).append(InstructionPrinter.print(instruction, DIALECT))
-                    .append('\n');
+            // A label stands at the margin: it is a place in the file rather than
+            // something the machine does, and the text reads better for saying so.
+            text.append(instruction.isLabel() ? "" : INDENT)
+                    .append(InstructionPrinter.print(instruction, DIALECT)).append('\n');
         }
     }
 

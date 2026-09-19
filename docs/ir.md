@@ -864,6 +864,30 @@ this is also what defines "address taken" in §5.2.
 filled by the allocator, or forcing the variable into memory — and whether
 inputs and outputs are part of the syntax or only clobbers are.
 
+**A block may have labels of its own**, on a line of their own:
+
+```
+asm clobbers(ax, flags) {
+    mov ax, 0x0201
+retry:
+    int 0x13
+    jc retry
+}
+```
+
+That is what a retry loop needs, and there was no way to write one: a block could
+only branch to labels of the module, so the loop's tail had to be outside the
+block it belonged to. The label is reachable from the block and nowhere else — an
+IR branch cannot see it — but its *name* is a name in the image, because the
+emitted text is one flat file. Two blocks may not both call a label `again`, and
+the compiler refuses that rather than letting the assembler report it
+({@code docs/asm.md} §3).
+
+**[open]** a branch inside a block is not checked against anything: `jmp nowhere`
+inside a block is a name like any other operand, and the assembler is what
+notices. Checking it here would refuse programs this compiler accepts today, since
+a block may name a label of the module as well as one of its own.
+
 **A block goes on to the next item as far as the compiler is concerned.** A block
 ending in `hlt`, or in the far jump that hands control to a kernel, goes nowhere,
 and treating it as falling through is conservative rather than wrong: the extra

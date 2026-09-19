@@ -291,6 +291,11 @@ public final class RegisterAllocator {
                 operands.add(operand);
             }
         }
+        if (instruction.isLabel()) {
+            // A label inside a block has no operands and no registers to decide, and
+            // rebuilding it would drop the one thing it carries (docs/ir.md §9).
+            return instruction;
+        }
         return new Instruction(instruction.position(), instruction.mnemonic(), operands);
     }
 

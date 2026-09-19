@@ -1201,6 +1201,21 @@ public final class IrParser {
     }
 
     private Instruction parseInstruction() {
+        Token first = peek();
+        // A name with a colon where a mnemonic would be is a label of this block, the
+        // place a branch inside it can reach (docs/ir.md §9). A segment override is
+        // never written at the start of a line, so there is nothing to tell apart.
+        if (first.is(TokenKind.IDENT) && !first.forced()
+                && tokenAt(1).is(TokenKind.PUNCT) && tokenAt(1).text().equals(":")) {
+            next();
+            next();
+            require(!target.isRegister(first.name()) && !target.isSegmentRegister(first.name()),
+                    first.position(),
+                    "'" + first.text() + "' is a register, so it cannot label anything inside a "
+                            + "block (docs/asm.md §3)");
+            endOfLine();
+            return Instruction.label(first.position(), first.name());
+        }
         Token mnemonic = expect(TokenKind.IDENT, "a mnemonic");
         List<Operand> operands = new ArrayList<Operand>();
         if (!peek().is(TokenKind.NEWLINE) && !peek().isEof() && !peek().is("}")) {

@@ -105,6 +105,14 @@ block is a straight sequence of instructions.
   `Mov` are the same mnemonic, and `Counter` and `counter` are the same label.
   The emitter always writes lowercase, so the output does not depend on how the
   input was typed.
+* **A label is a line of its own**, wherever it appears: in the module it names an
+  item, and inside an inline assembly block it names a place that a branch in the
+  same block can reach ({@code docs/ir.md} §9). A label and an instruction are
+  never on one line, so nothing has to decide where the name stops.
+  A block's labels are **local in what can read them and not in what they are
+  called**: the emitted text is one flat assembly file, so two of anything cannot
+  share a name, and the compiler checks that rather than leaving it to the
+  assembler.
 * Two prefixes are the compiler's and the author's, and they are the same two the
   IR surface has (`docs/ir.md` §3.1.1), taken from NASM: `..@` begins a name the
   compiler generated, and `$` in front of a name is the author saying "this is

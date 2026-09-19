@@ -2,8 +2,12 @@ package i8086.ir;
 
 import i8086.CompileError;
 import i8086.SourcePos;
+import i8086.asm.Instruction;
 import i8086.asm.Size;
 import i8086.target.Target;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Checks that a parsed module means something, before anything acts on it.
@@ -48,6 +52,9 @@ public final class IrVerifier {
     private final Module module;
     private final Target target;
     private final Names names;
+
+    /** Every label named inside a block, so that two of them cannot collide. */
+    private final Set<String> blockLabels = new LinkedHashSet<String>();
 
     private IrVerifier(Module module, Target target) {
         this.module = module;
@@ -281,6 +288,23 @@ public final class IrVerifier {
         for (String clobber : block.clobbers()) {
             require(target.isRegister(clobber) || clobber.equals(Names.FLAGS), block.position(),
                     "'" + clobber + "' is neither a register nor '" + Names.FLAGS + "'");
+        }
+        for (Instruction instruction : block.body()) {
+            if (!instruction.isLabel()) {
+                continue;
+            }
+            String name = instruction.mnemonic();
+            // Block-local in what it can be read by, but a name in the image all the
+            // same: the emitted text is one flat assembly file, so two of anything
+            // cannot share a name (docs/asm.md §3).
+            require(!names.isVariable(name), instruction.position(),
+                    "'" + name + "' is a variable, so it cannot label a place in a block");
+            require(!names.isLabel(name), instruction.position(),
+                    "'" + name + "' is already a label, and a label inside a block shares the "
+                            + "image's names (docs/ir.md §9)");
+            require(blockLabels.add(name), instruction.position(),
+                    "'" + name + "' is already a label inside a block; block labels are local in "
+                            + "what can read them, not in what they are called (docs/ir.md §9)");
         }
     }
 

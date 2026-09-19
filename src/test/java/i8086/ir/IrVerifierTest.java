@@ -1,5 +1,6 @@
 package i8086.ir;
 
+import i8086.CompileError;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
 import i8086.target.Targets;
@@ -91,6 +92,37 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesCarryWithNothingBehindIt);
         suite.add("Ir verifier refuses a branch after expr gave the flags up",
                 IrVerifierTest::refusesBranchAfterExpr);
+        suite.add("Ir verifier refuses two block labels with one name",
+                IrVerifierTest::refusesRepeatedBlockLabel);
+        suite.add("Ir verifier refuses a block label that is already a name",
+                IrVerifierTest::refusesBlockLabelClash);
+    }
+
+    /**
+     * A label inside a block is local in what can read it and not in what it is
+     * called: the emitted text is one flat assembly file, so two of anything cannot
+     * share a name ({@code docs/ir.md} §9, {@code docs/asm.md} §3).
+     */
+    private static void refusesRepeatedBlockLabel() {
+        String twice = "    asm clobbers(ax, flags) {\n    again:\n        dec ax\n"
+                + "        jnz again\n    again:\n        ret\n    }\n    ret\n";
+        Assert.assertTrue(Assert.assertThrows(CompileError.class, () -> verify(twice))
+                .getMessage().contains("already a label inside a block"), "one block, twice");
+        String twoBlocks = "    asm clobbers(ax, flags) {\n    again:\n        dec ax\n    }\n"
+                + "    asm clobbers(ax, flags) {\n    again:\n        inc ax\n    }\n    ret\n";
+        Assert.assertTrue(Assert.assertThrows(CompileError.class, () -> verify(twoBlocks))
+                .getMessage().contains("already a label inside a block"), "two blocks");
+    }
+
+    private static void refusesBlockLabelClash() {
+        String withLabel = "    asm clobbers(ax, flags) {\n    same:\n        dec ax\n    }\n"
+                + "    ret\nsame:\n    ret\n";
+        Assert.assertTrue(Assert.assertThrows(CompileError.class, () -> verify(withLabel))
+                .getMessage().contains("already a label"), "a module label");
+        String withVariable = "    var again: i16\n"
+                + "    asm clobbers(ax, flags) {\n    again:\n        dec ax\n    }\n    ret\n";
+        Assert.assertTrue(Assert.assertThrows(CompileError.class, () -> verify(withVariable))
+                .getMessage().contains("variable"), "a variable");
     }
 
     private static void verify(String body) {

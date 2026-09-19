@@ -26,6 +26,9 @@ public final class InstructionPrinter {
     }
 
     public static String print(Instruction instruction, Dialect dialect) {
+        if (instruction.isLabel()) {
+            return instruction.mnemonic() + ":";
+        }
         StringBuilder text = new StringBuilder();
         text.append(instruction.mnemonic());
         List<Operand> operands = instruction.operands();
