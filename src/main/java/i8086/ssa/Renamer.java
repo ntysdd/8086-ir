@@ -57,7 +57,34 @@ final class Renamer {
             return Item.MovReg.fromValue(item.position(), movreg.name(),
                     rename(movreg.value(), versions));
         }
+        if (item instanceof Item.Machine) {
+            // A statement's clause reads values, so they are renamed like any other read
+            // ({@code docs/ir.md} §11).
+            Item.Machine machine = (Item.Machine) item;
+            return new Item.Machine(item.position(), machine.mnemonic(), machine.operands(),
+                    machine.clobbers(), rename(machine.arguments(), versions));
+        }
+        if (item instanceof Item.FarJump) {
+            Item.FarJump far = (Item.FarJump) item;
+            return new Item.FarJump(item.position(), far.segment(), far.offset(),
+                    rename(far.arguments(), versions));
+        }
+        if (item instanceof Item.InlineAsm) {
+            Item.InlineAsm block = (Item.InlineAsm) item;
+            return new Item.InlineAsm(item.position(), block.clobbers(), block.body(),
+                    rename(block.arguments(), versions));
+        }
         return item;
+    }
+
+    /** The arguments of a clause, with the values in them renamed. */
+    private static List<Item.Argument> rename(List<Item.Argument> arguments, Versions versions) {
+        List<Item.Argument> renamed = new ArrayList<Item.Argument>();
+        for (Item.Argument argument : arguments) {
+            renamed.add(new Item.Argument(argument.position(), argument.register(),
+                    rename(argument.value(), versions)));
+        }
+        return renamed;
     }
 
     /** Names the place an assignment writes, now that its version is known. */

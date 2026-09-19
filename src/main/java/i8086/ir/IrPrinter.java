@@ -105,7 +105,9 @@ public final class IrPrinter {
         } else if (item instanceof Item.FarJump) {
             Item.FarJump far = (Item.FarJump) item;
             text.append(INDENT).append("jmp ").append(Numbers.spelling(far.segment()))
-                    .append(':').append(Numbers.spelling(far.offset())).append('\n');
+                    .append(':').append(Numbers.spelling(far.offset()));
+            printArguments(text, far.arguments(), target);
+            text.append('\n');
         } else if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
             text.append(INDENT).append(machine.mnemonic());
@@ -122,6 +124,7 @@ public final class IrPrinter {
             if (!machine.clobbers().isEmpty()) {
                 text.append(')');
             }
+            printArguments(text, machine.arguments(), target);
             text.append('\n');
         } else if (item instanceof Item.Branch) {
             Item.Branch branch = (Item.Branch) item;
@@ -153,6 +156,31 @@ public final class IrPrinter {
             }
         }
         text.append('\n');
+    }
+
+    /**
+     * The {@code with} clause of a statement that is an interface, and nothing when it has none
+     * ({@code docs/ir.md} §11).
+     *
+     * <p>The registers are the machine's names and are written bare, like everything else in this
+     * surface that belongs to the machine; a value on the right is written the way a value is
+     * written anywhere. Both are in the canonical order the clause was written in, so reading it
+     * back gives the same statement.
+     */
+    private static void printArguments(StringBuilder text, List<Item.Argument> arguments,
+                                       Target target) {
+        if (arguments.isEmpty()) {
+            return;
+        }
+        text.append(" with ");
+        for (int i = 0; i < arguments.size(); i++) {
+            Item.Argument argument = arguments.get(i);
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(argument.register()).append(" = ")
+                    .append(printValue(argument.value(), target));
+        }
     }
 
     /**
@@ -344,7 +372,9 @@ public final class IrPrinter {
             }
             text.append(block.clobbers().get(i));
         }
-        text.append(") {\n");
+        text.append(")");
+        printArguments(text, block.arguments(), target);
+        text.append(" {\n");
         for (Instruction instruction : block.body()) {
             text.append(INDENT).append(INDENT)
                     .append(InstructionPrinter.print(instruction, Dialect.CANONICAL, target))

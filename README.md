@@ -319,6 +319,10 @@ Working today:
   opaque and these are not: an interrupt with a declared clobber list leaves the
   rest of the module optimisable, and a value may live across it
   (`docs/ir.md` §11).
+* **A statement that is an interface can be given its registers**, with a `with` clause:
+  `int 0x13 clobbers(ax, bx, cx, dx) with ah = 0x42, dl = 0x80, si = $dap` becomes the four
+  instructions an assembly author would write, inside one item — so nothing is pinned and the
+  statement stays as optimisable as any other (`docs/ir.md` §11).
 * **The machine's own registers**: `movreg ds, 0`, `movreg ss, 0`,
   `movreg sp, 0x7C00`, `movreg ds, cs`, `movreg bp, 0x1000` — the registers a value cannot
   live in, which is what makes a standalone write to one safe, in the sequence the machine
@@ -361,12 +365,10 @@ Working today:
   register is taken, a value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
-Not built yet, and refused with a reason rather than guessed at: the `with` clause that
-would give a statement the registers it is an interface through (`docs/ir.md` §11), and
-`movreg`'s other direction, reading a register into a value — which is how a boot loader
-would get the drive number the BIOS hands it in `dl` (§8.1). A widening into a value wider
-than a register (the answer is two of them, and nothing in the back end can name a pair),
-`setcc`,
+Not built yet, and refused with a reason rather than guessed at: `movreg`'s other direction,
+reading a register into a value — which is how a boot loader would get the drive number the
+BIOS hands it in `dl` (§8.1). A widening into a value wider than a register (the answer is
+two of them, and nothing in the back end can name a pair), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
 refused until every definition writes those bytes — a wrong answer nobody is told about

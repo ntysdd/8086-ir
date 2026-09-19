@@ -50,8 +50,8 @@ public final class IrParserTest {
                 IrParserTest::roundTripsSegmentMoves);
         suite.add("Ir parser refuses a name movreg cannot write",
                 IrParserTest::refusesStateMovsegCannotWrite);
-        suite.add("Ir parser names the 'with' clause it does not implement",
-                IrParserTest::refusesTheWithClause);
+        suite.add("Ir parser reads a 'with' clause and prints it back",
+                IrParserTest::roundTripsTheWithClause);
         suite.add("Ir parser refuses a mode with no home to apply to",
                 IrParserTest::refusesWritethroughAlone);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
@@ -375,22 +375,52 @@ public final class IrParserTest {
     }
 
     /**
-     * The clause that gives a statement the registers it is an interface through is specified and
-     * not built ({@code docs/ir.md} §11), so it is refused by name and with its section — at the
-     * three statements that could take one, and everywhere the clause has a position.
+     * The {@code with} clause in the three positions it belongs to — a machine statement, a far jump,
+     * an inline block — printed back the way it was written. The registers are the machine's names
+     * and are written bare, and a value on the right is written like any other value.
      */
-    private static void refusesTheWithClause() {
-        Assert.assertRefused("test.ir:4:10",
-                () -> parse("target 8086\norg 0\nentry a\nint 0x13 with ah = 2\n"));
-        Assert.assertRefused("test.ir:4:14",
-                () -> parse("target 8086\norg 0\nentry a\njmp 0:0x7E00 with dl = 1\n"));
-        CompileError refused = Assert.assertRefused("test.ir:4:18",
-                () -> parse("target 8086\norg 0\nentry a\nasm clobbers(ax) with al = 1 {\n"
-                        + "    int 0x10\n}\n"));
-        Assert.assertTrue(refused.getMessage().startsWith("not implemented yet: the 'with' clause"),
+    private static void roundTripsTheWithClause() {
+        String program = "target 8086\n"
+                + "org 0x7c00\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    int 0x13 clobbers(ax, bx, cx, dx) with ah = 0x42, si = $dap\n"
+                + "    jmp 0:0x7e00 with dl = 0\n"
+                + "    asm clobbers(ax) with al = 1 {\n"
+                + "        int 0x10\n"
+                + "    }\n"
+                + "    ret\n"
+                + "\n"
+                + "$dap: pad 0x10\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+
+        Module module = parse(program);
+        Item.Machine machine = (Item.Machine) module.items().get(1);
+        Assert.assertEquals(2L, machine.arguments().size());
+        Assert.assertEquals("ah", machine.arguments().get(0).register());
+        Assert.assertEquals(0x42L, ((Value.Number) machine.arguments().get(0).value()).value());
+        Assert.assertEquals("si", machine.arguments().get(1).register());
+        Assert.assertEquals("dap", ((Value.Name) machine.arguments().get(1).value()).name());
+        Assert.assertEquals("dl",
+                ((Item.FarJump) module.items().get(2)).arguments().get(0).register());
+        Assert.assertEquals("al",
+                ((Item.InlineAsm) module.items().get(3)).arguments().get(0).register());
+        // And no clause is the same thing as an empty one, which the last items have.
+        Item.Machine none = (Item.Machine) parse("target 8086\norg 0\nentry a\nint 0x10\n")
+                .items().get(0);
+        Assert.assertEquals(0L, none.arguments().size());
+    }
+
+    /**
+     * A name in the register position is the machine's, so a name the machine does not have is
+     * refused there and not read as a variable ({@code docs/ir.md} §3.1.1, §11).
+     */
+    private static void refusesANonRegisterInAClause() {
+        CompileError refused = Assert.assertRefused("test.ir:4:20",
+                () -> parse("target 8086\norg 0\nentry a\nint 0x13 with zz = 1\n"));
+        Assert.assertTrue(refused.getMessage().contains("is not a register of this target"),
                 refused.getMessage());
-        Assert.assertTrue(refused.getMessage().contains("docs/ir.md §11"),
-                "and points at the section that specifies it: " + refused.getMessage());
     }
 
     /** A name that is not a register this statement can write, refused where it is written. */

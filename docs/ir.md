@@ -1533,8 +1533,8 @@ code is still not spellable, and that is §12 item 12.
   statement's, and afterwards they hold whatever it left there — for `int 0x13`, the BIOS's
   answer. Reading one back into a value is `movreg`'s other direction (§8.1).
 
-**Not built**, and refused as such rather than mis-parsed: a clause is a shape this compiler
-recognises and does not implement yet.
+**Not built** is the other direction of §8.1: reading a register into a value, which is what a
+clip-board call's *result* needs when the answer is not a flag. The clause itself is built.
 
 ### 11.1 What to do when a value has to live across a call — [decided]
 

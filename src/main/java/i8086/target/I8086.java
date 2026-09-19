@@ -638,6 +638,14 @@ public final class I8086 implements Target {
     }
 
     @Override
+    public int registerBytes(String register) {
+        if (HALVES.containsKey(register)) {
+            return 1; // an eight-bit half: al, ah, and their neighbours
+        }
+        return REGISTERS.contains(register) ? 2 : 0;
+    }
+
+    @Override
     public List<Form> loadForms() {
         return LOAD_FORMS;
     }

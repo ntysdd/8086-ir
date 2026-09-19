@@ -234,6 +234,15 @@ public interface Target {
      */
     String byteRegister(String register);
 
+    /**
+     * How many bytes a register is, or zero when the name is not one of this target's registers.
+     *
+     * <p>What a {@code with} clause is checked against: the value put into a register has to fit it,
+     * which is the rule the two sides of an assignment follow too ({@code docs/ir.md} §3.2). A byte
+     * half is one byte; every other register this machine has is two.
+     */
+    int registerBytes(String register);
+
     /** The forms that read a value out of memory into a register. */
     List<Form> loadForms();
 

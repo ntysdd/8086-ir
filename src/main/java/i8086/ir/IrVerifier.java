@@ -172,6 +172,7 @@ public final class IrVerifier {
         if (item instanceof Item.InlineAsm) {
             Item.InlineAsm block = (Item.InlineAsm) item;
             checkInlineAsm(block);
+            checkArguments(block.arguments());
             return block.clobbers().contains(Names.FLAGS) ? false : flagsDefined;
         }
         if (item instanceof Item.Pad) {
@@ -188,6 +189,7 @@ public final class IrVerifier {
                     "a segment is one word wide, so it reaches 0xFFFF at most");
             require(far.offset() <= 0xFFFF, item.position(),
                     "an offset is one word wide, so it reaches 0xFFFF at most");
+            checkArguments(far.arguments());
             // Nothing after this runs on the way out of the image, and the scan goes on
             // to the next item regardless.
             return false;
@@ -202,6 +204,7 @@ public final class IrVerifier {
                         item.position(),
                         "'" + destroyed + "' is neither a register nor '" + Names.FLAGS + "'");
             }
+            checkArguments(machine.arguments());
             // The flags are the one thing a machine statement may leave standing: 'cli'
             // does not touch the arithmetic flags, and a comparison may be read after it.
             return !machine.clobbers().contains(Names.FLAGS);
@@ -493,6 +496,26 @@ public final class IrVerifier {
                                 + "and nothing honours a home yet, so this program would compile "
                                 + "as if those bytes were never written (docs/ir.md §3.1.2)");
             }
+        }
+    }
+
+    /**
+     * The {@code with} clause: the registers a statement is given, and what goes into them
+     * ({@code docs/ir.md} §11).
+     *
+     * <p>Any register the target has may be named, because the write and the statement's read are
+     * one item and nothing has to be pinned for it (§8.1). What goes in has to fit, which is the
+     * rule both sides of an assignment follow: a literal takes the width of the register, and
+     * anything else states its own ({@code docs/ir.md} §3.2).
+     */
+    private void checkArguments(List<Item.Argument> arguments) {
+        for (Item.Argument argument : arguments) {
+            int bytes = target.registerBytes(argument.register());
+            Integer valueBytes = widthOf(argument.value(), Integer.valueOf(bytes));
+            require(valueBytes == null || valueBytes.intValue() == bytes,
+                    argument.value().position(),
+                    "a " + valueBytes + "-byte value does not fit '" + argument.register()
+                            + "', which is " + bytes + " byte(s) wide (docs/ir.md §11)");
         }
     }
 

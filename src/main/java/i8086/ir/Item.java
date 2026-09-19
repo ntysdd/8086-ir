@@ -458,6 +458,45 @@ public abstract class Item {
     }
 
     /**
+     * One register a statement is given, and what goes into it: {@code ah = 0x42} in a
+     * {@code with} clause ({@code docs/ir.md} §11).
+     *
+     * <p>It is an argument of a statement that is an interface — a machine statement, a far jump,
+     * an inline block — and what it means is a sequence: the operand goes into the register and then
+     * the statement runs. Nothing is pinned by it, because both happen inside one item: no value can
+     * be allocated in the middle, so nothing else can be in the register when the statement reads
+     * it. A register a value <em>can</em> live in therefore appears here and nowhere else
+     * ({@code docs/ir.md} §8.1).
+     */
+    public static final class Argument {
+
+        private final SourcePos position;
+        private final String register;
+        private final Value value;
+
+        public Argument(SourcePos position, String register, Value value) {
+            this.position = position;
+            this.register = register;
+            this.value = value;
+        }
+
+        /** Where the register was written, so that a refusal can point at it. */
+        public SourcePos position() {
+            return position;
+        }
+
+        /** The register written, which is a register of the target and nothing else. */
+        public String register() {
+            return register;
+        }
+
+        /** What goes into it: a value, a literal, a variable, or a label's address. */
+        public Value value() {
+            return value;
+        }
+    }
+
+    /**
      * One machine instruction as a statement: {@code int 9}, {@code hlt}, {@code cli}
      * ({@code docs/ir.md} §11).
      *
@@ -474,13 +513,20 @@ public abstract class Item {
         private final String mnemonic;
         private final List<Long> operands;
         private final List<String> clobbers;
+        private final List<Argument> arguments;
 
         public Machine(SourcePos position, String mnemonic, List<Long> operands,
                        List<String> clobbers) {
+            this(position, mnemonic, operands, clobbers, Collections.<Argument>emptyList());
+        }
+
+        public Machine(SourcePos position, String mnemonic, List<Long> operands,
+                       List<String> clobbers, List<Argument> arguments) {
             super(position);
             this.mnemonic = mnemonic;
             this.operands = Collections.unmodifiableList(new ArrayList<Long>(operands));
             this.clobbers = Collections.unmodifiableList(new ArrayList<String>(clobbers));
+            this.arguments = Collections.unmodifiableList(new ArrayList<Argument>(arguments));
         }
 
         public String mnemonic() {
@@ -495,6 +541,11 @@ public abstract class Item {
         /** The registers and flags it destroys, which is what the optimiser believes. */
         public List<String> clobbers() {
             return clobbers;
+        }
+
+        /** The registers it is given, from its {@code with} clause ({@code docs/ir.md} §11). */
+        public List<Argument> arguments() {
+            return arguments;
         }
     }
 
@@ -515,11 +566,22 @@ public abstract class Item {
 
         private final long segment;
         private final long offset;
+        private final List<Argument> arguments;
 
         public FarJump(SourcePos position, long segment, long offset) {
+            this(position, segment, offset, Collections.<Argument>emptyList());
+        }
+
+        public FarJump(SourcePos position, long segment, long offset, List<Argument> arguments) {
             super(position);
             this.segment = segment;
             this.offset = offset;
+            this.arguments = Collections.unmodifiableList(new ArrayList<Argument>(arguments));
+        }
+
+        /** The registers it is handed over with, from its {@code with} clause. */
+        public List<Argument> arguments() {
+            return arguments;
         }
 
         public long segment() {
@@ -597,11 +659,23 @@ public abstract class Item {
 
         private final List<String> clobbers;
         private final List<Instruction> body;
+        private final List<Argument> arguments;
 
         public InlineAsm(SourcePos position, List<String> clobbers, List<Instruction> body) {
+            this(position, clobbers, body, Collections.<Argument>emptyList());
+        }
+
+        public InlineAsm(SourcePos position, List<String> clobbers, List<Instruction> body,
+                         List<Argument> arguments) {
             super(position);
             this.clobbers = Collections.unmodifiableList(new ArrayList<String>(clobbers));
             this.body = Collections.unmodifiableList(new ArrayList<Instruction>(body));
+            this.arguments = Collections.unmodifiableList(new ArrayList<Argument>(arguments));
+        }
+
+        /** The registers the block is given, from its {@code with} clause. */
+        public List<Argument> arguments() {
+            return arguments;
         }
 
         public List<String> clobbers() {

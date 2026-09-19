@@ -697,12 +697,13 @@ public final class IrParser {
         require(offset.is(TokenKind.NUMBER), offset.position(),
                 "expected an offset after the colon, but found " + offset.describe());
         next();
+        List<Item.Argument> arguments = parseWithClause();
         endOfLine();
         require(segment.value() <= 0xFFFF, segment.position(),
                 "a segment is one word wide, so it reaches 0xFFFF at most");
         require(offset.value() <= 0xFFFF, offset.position(),
                 "an offset is one word wide, so it reaches 0xFFFF at most");
-        return new Item.FarJump(segment.position(), segment.value(), offset.value());
+        return new Item.FarJump(segment.position(), segment.value(), offset.value(), arguments);
     }
 
     /**
@@ -730,23 +731,40 @@ public final class IrParser {
         } else {
             clobbers = target.machineClobbers(keyword.name());
         }
+        List<Item.Argument> arguments = parseWithClause();
         endOfLine();
-        return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers);
+        return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers,
+                arguments);
     }
 
     /**
-     * The {@code with} clause of a statement that is an interface, refused as the construct it is.
+     * The {@code with} clause: the registers a statement that is an interface is given
+     * ({@code docs/ir.md} §11).
      *
-     * <p>It is specified and not built ({@code docs/ir.md} §11), so it is refused by name with the
-     * section rather than left to become a syntax error somewhere further along. Only the statements
-     * that talk to an outside world take one — a machine statement, a far jump and an inline block,
-     * which are where this is asked — and anywhere else a {@code with} is a name like any other.
+     * <p>A list of {@code register = operand}, and nothing at all when the word is not there. The
+     * register position is one of the two places in this surface where a bare name is the machine's:
+     * {@code with ah = 1} writes the register, and a variable of that name is written {@code $ah}
+     * (§3.1.1). Any register the target has is accepted, because the write and the statement's read
+     * happen inside one item — which is exactly what keeps a clause from being a pin (§8.1).
      */
-    private void refuseWithClause() {
-        if (isWord(peek(), "with")) {
-            throw new CompileError(peek().position(), "not implemented yet: the 'with' clause, "
-                    + "which gives a statement the registers it is an interface through "
-                    + "(docs/ir.md §11)");
+    private List<Item.Argument> parseWithClause() {
+        List<Item.Argument> arguments = new ArrayList<Item.Argument>();
+        if (!isWord(peek(), "with")) {
+            return arguments;
+        }
+        next();
+        while (true) {
+            Token register = expect(TokenKind.IDENT, "a register and the value to put in it");
+            require(!register.forced() && target.isRegister(register.name()), register.position(),
+                    "'" + register.text() + "' is not a register of this target; a clause gives a "
+                            + "statement the registers it is an interface through "
+                            + "(docs/ir.md §11)");
+            expectPunct("=");
+            arguments.add(new Item.Argument(register.position(), register.name(), parseValue()));
+            if (!peek().is(",")) {
+                return arguments;
+            }
+            next();
         }
     }
 
@@ -1359,7 +1377,7 @@ public final class IrParser {
     private Item.InlineAsm parseInlineAsm() {
         Token keyword = expectName("asm");
         List<String> clobbers = parseClobbers();
-        refuseWithClause();
+        List<Item.Argument> arguments = parseWithClause();
         expectPunct("{");
         skipNewlines();
         List<Instruction> body = new ArrayList<Instruction>();
@@ -1372,7 +1390,7 @@ public final class IrParser {
         }
         expectPunct("}");
         endOfLine();
-        return new Item.InlineAsm(keyword.position(), clobbers, body);
+        return new Item.InlineAsm(keyword.position(), clobbers, body, arguments);
     }
 
     private List<String> parseClobbers() {

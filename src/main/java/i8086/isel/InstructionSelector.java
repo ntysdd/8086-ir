@@ -215,7 +215,9 @@ public final class InstructionSelector {
         }
         if (item instanceof Item.InlineAsm) {
             // Already instructions, and already decided: an inline block names
-            // its registers itself, which is the whole point of it.
+            // its registers itself, which is the whole point of it. What its clause gives
+            // it is put in place first.
+            emitArguments(((Item.InlineAsm) item).arguments());
             out.addAll(((Item.InlineAsm) item).body());
             return;
         }
@@ -234,8 +236,10 @@ public final class InstructionSelector {
         }
         if (item instanceof Item.Machine) {
             // One instruction, with what it is given: an interrupt vector is a number,
-            // and a number needs no deciding (docs/ir.md §11).
+            // and a number needs no deciding (docs/ir.md §11). What its clause gives it
+            // goes into the registers first, in the same item.
             Item.Machine machine = (Item.Machine) item;
+            emitArguments(machine.arguments());
             List<Operand> given = new ArrayList<Operand>();
             for (long operand : machine.operands()) {
                 given.add(new Operand.Number(item.position(), operand,
@@ -244,14 +248,16 @@ public final class InstructionSelector {
             out.add(new Instruction(item.position(), machine.mnemonic(), given));
             return;
         }
-        if (item instanceof Item.MovReg) {
-            emitMovReg((Item.MovReg) item);
+        if (item instanceof Item.MovReg) {            emitMovReg((Item.MovReg) item);
             return;
         }
         if (item instanceof Item.FarJump) {
             // One instruction, and the operand shape is what makes it far: the machine
-            // has the immediate far pointer for exactly this (docs/ir.md §7.1).
+            // has the immediate far pointer for exactly this (docs/ir.md §7.1). What the
+            // clause hands over goes into the registers first, which is how a loader gives
+            // the next stage its state.
             Item.FarJump far = (Item.FarJump) item;
+            emitArguments(far.arguments());
             out.add(new Instruction(item.position(), target.jumpMnemonic(), operands(
                     new Operand.Far(item.position(), far.segment(), far.offset()))));
             return;
@@ -429,6 +435,26 @@ public final class InstructionSelector {
                     + "(docs/ir.md §3.5)");
         }
         out.addAll(sequence.instructions());
+    }
+
+    /**
+     * The {@code with} clause of a statement: its operands into its registers, in that order
+     * ({@code docs/ir.md} §11).
+     *
+     * <p>Each one is a move, which is the whole of what a clause means on this machine: nothing
+     * here pins a value to a register, it copies one into place and then the statement runs. A
+     * label is an address like anywhere else, so it goes in as an offset — {@code bx = buffer} is
+     * how a call is told where to put something.
+     */
+    private void emitArguments(List<Item.Argument> arguments) {
+        for (Item.Argument argument : arguments) {
+            SourcePos where = argument.position();
+            Operand value = isLabel(argument.value())
+                    ? new Operand.Offset(where, ((Value.Name) argument.value()).name())
+                    : operandOf(argument.value());
+            out.add(new Instruction(where, "mov",
+                    operands(new Operand.Name(where, argument.register()), value)));
+        }
     }
 
     /** {@code p = msg}: the address of a label, as an immediate. */

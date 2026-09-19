@@ -77,6 +77,9 @@ public final class CompilerTest {
                 CompilerTest::setsSegmentsUp);
         suite.add("Compiler writes the base pointer like any other register",
                 CompilerTest::writesTheBasePointer);
+        suite.add("Compiler gives a BIOS call its registers", CompilerTest::givesABiosCallItsRegisters);
+        suite.add("Compiler hands the next stage its registers",
+                CompilerTest::handsTheNextStageItsRegisters);
         suite.add("Compiler keeps a value out of the register a segment move uses",
                 CompilerTest::keepsValuesOutOfTheSegmentScratch);
         suite.add("Compiler keeps a segment set up that nothing reads",
@@ -1134,6 +1137,57 @@ public final class CompilerTest {
                 + "    ret\n");
         Assert.assertTrue(assembly.contains("    mul "),
                 "a multiply whose flags are read is ordinary: " + assembly);
+    }
+
+    /**
+     * The reason the {@code with} clause exists: a BIOS call wants its arguments in registers the
+     * machine names, and the surface says so on the call itself. What comes out is a sequence — the
+     * arguments, then the statement — which is exactly what an assembly author would write, and the
+     * whole statement stays one item, so nothing is pinned ({@code docs/ir.md} §11).
+     */
+    private static void givesABiosCallItsRegisters() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$dap: times 0x10 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ah, 0x42\n"
+                        + "    mov dl, 0x80\n"
+                        + "    mov si, $dap\n"
+                        + "    int 0x13\n"
+                        + "    jc $failed\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$failed:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$dap: pad 16\n\n$main:\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx) with ah = 0x42, dl = 0x80, si = $dap\n"
+                        + "    jc failed\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$failed:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A clause operand may be a value, and then it is read where the statement is — which means it
+     * is alive across everything between the two, and the copy into the register the clause names is
+     * the compiler's to make ({@code docs/ir.md} §11).
+     */
+    private static void handsTheNextStageItsRegisters() {
+        Assert.assertEquals("org 0x100\n\n$main:\n"
+                        + "    mov di, word [0x40]\n"
+                        + "    int 0x10\n"
+                        + "    mov word [0x42], di\n"
+                        + "    mov si, di\n"
+                        + "    jmp 0:0x7e00\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var count: u16\n"
+                        + "    count = word [0x40]\n"
+                        + "    int 0x10 clobbers(ax, bx, cx, dx)\n"
+                        + "    word [0x42] = count\n"
+                        + "    jmp 0:0x7e00 with si = count\n"));
     }
 
     /**

@@ -10,6 +10,7 @@ import i8086.ir.Place;
 import i8086.ir.Value;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -159,7 +160,26 @@ public final class Effects {
                 valueNames(movreg.value(), found);
             }
         }
+        for (Item.Argument argument : argumentsOf(item)) {
+            // A clause reads what it puts into the registers, which is what keeps the value
+            // alive across the statement that is going to use it (docs/ir.md §11).
+            valueNames(argument.value(), found);
+        }
         return found;
+    }
+
+    /** The {@code with} clause of an item, or nothing when it has none. */
+    public static List<Item.Argument> argumentsOf(Item item) {
+        if (item instanceof Item.Machine) {
+            return ((Item.Machine) item).arguments();
+        }
+        if (item instanceof Item.InlineAsm) {
+            return ((Item.InlineAsm) item).arguments();
+        }
+        if (item instanceof Item.FarJump) {
+            return ((Item.FarJump) item).arguments();
+        }
+        return Collections.emptyList();
     }
 
     /**
