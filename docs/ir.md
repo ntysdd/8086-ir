@@ -320,19 +320,21 @@ declared to be:
   with `writethrough`.
 
   When the cell is declared by exactly one variable there is no warning, and there is no
-  guarantee either: what can replace the saved bytes there is that one variable's own
-  value — written there because the allocator put it there, which is what the declaration
-  was for. A program whose saved bytes have to stay what it wrote has the same two ways
-  out, and they do not depend on how many variables asked for the cell.
+  guarantee either. The only thing that can replace the saved bytes is that variable's own
+  value, and the allocator writes it there because the declaration asked it to: letting the
+  variable live in those bytes is what the declaration is for. A program whose saved bytes
+  must stay what it wrote therefore has the same two ways out as before, and neither of them
+  depends on how many variables asked for the cell.
 
-The shared case is the one a boot loader's author will meet without meaning to, and the
-warning is what makes it survivable: they are expected to read and test the assembly their
-program became, and a warning that says those bytes are another variable's as well is the
-thing to read it with.
+A boot loader's author is likely to meet this case by accident. The warning is what makes
+it survivable, because they are expected to read and test the assembly their program
+became: the warning points at the line that has to be read.
 
-In one sentence: **a save into a cell no variable declares is kept, a `writethrough` cell
-holds the variable's value by construction, and anything else is the allocator's cell** —
-written, warned about when more than one variable asked for it, and never promised.
+In one sentence: **a cell no variable declares belongs to the program, a `writethrough`
+cell belongs to its variable, and every other cell is shared with the allocator.** A save
+into the first kind stays. A save into the second kind lasts until that variable is
+assigned again. A save into the third kind is written, is not promised to stay, and is
+warned about when more than one variable asked for that cell.
 
 The other direction needs the opposite rule, and it is the allocator's to keep: a value
 **living** in a home does not survive a write of something else to those bytes, so
