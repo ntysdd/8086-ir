@@ -269,20 +269,27 @@ Working today:
   read marked volatile happens even when nothing uses the value, while a plain read
   nobody uses is removed. A byte or double-word access is refused, because a value
   lives in a whole register and nothing here can name half of one.
+* **The target says what its instructions destroy**, and the allocator believes it:
+  `mov cl, n` writes a register no value was given, `mul` leaves half its answer in
+  `dx`, writing `cl` counts as writing `cx`, and a value still to be read across any
+  of that is refused the register. A shift by a constant of three or more goes
+  through `cl` for that reason — four bytes whatever the count, against two per
+  single step — and a value living across the shift is kept out of `cx`.
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
 Not built yet, and refused with a reason rather than guessed at: conversions,
-`setcc`, an instruction whose operands are implicit (`mul`, `div`, a shift by a
-count in a register), accesses narrower or wider than a register, and the
-assembler — so the assembly this compiler writes cannot be turned into bytes yet,
-which makes it a listing rather than a program. SSA construction does not yet
-materialise a flag value that has to survive an instruction defining those flags,
-because the target does not state its flag effects per flag yet — and nothing asks
-it to. The optimiser is three passes and not the ten the pipeline describes; while
-a module contains an inline assembly block nothing in it may be removed, because a
-block cannot say what it reads yet; and no load is reusable, because nothing yet
-says when two accesses are the same memory ([`docs/ir.md`](docs/ir.md) §3.4).
+`setcc`, `mul` and `div` (the machine multiplies what is in `ax` and takes no
+operand saying so, and pinning an operand to a register is not expressible yet),
+an access narrower or wider than a register, and the assembler — so the assembly
+this compiler writes cannot be turned into bytes yet, which makes it a listing
+rather than a program. SSA construction does not yet materialise a flag value that
+has to survive an instruction defining those flags, because the target does not
+state its flag effects per flag yet — and nothing asks it to. The optimiser is
+three passes and not the ten the pipeline describes; while a module contains an
+inline assembly block nothing in it may be removed, because a block cannot say
+what it reads yet; and no load is reusable, because nothing yet says when two
+accesses are the same memory ([`docs/ir.md`](docs/ir.md) §3.4).
 
 Planned milestones:
 

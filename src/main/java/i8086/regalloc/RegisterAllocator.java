@@ -186,46 +186,60 @@ public final class RegisterAllocator {
     }
 
     /**
-     * Keeps a value out of the registers an inline block destroys while it lives.
+     * Keeps a value out of the registers something destroys while it lives.
      *
-     * <p>A clobber list is a promise that those registers are the ones the block
-     * destroys and no others. Keeping it means a value that is still to be read
-     * after the block may not be living in one of them, so every register named by
-     * any block the value lives across is struck off its list of candidates
-     * ({@code docs/ir.md} §9).
+     * <p>Two things destroy registers without a value being written there. An inline
+     * assembly block declares the registers it destroys and nothing else, because the
+     * compiler cannot see inside it. And an instruction can destroy one itself —
+     * {@code mov cl, 4} writes a register no value was given, {@code mul} leaves half
+     * its answer in {@code dx} — which is the target's to say and nobody else's to
+     * guess.
      *
-     * <p>A value written after the block is not affected, and neither is one whose
-     * last read is before it: a block cannot destroy what is not there. What this
-     * cannot see is a value the block <em>reads</em>, because a block does not
-     * declare its inputs yet, and that is why the conservative reading in
-     * {@code docs/ir.md} §2.3 exists.
+     * <p>A value is affected when the destruction happens inside its life: written
+     * before it and read after it. A value written afterwards is not there yet, and
+     * one whose last read is before is gone already — a block cannot destroy what is
+     * not there, which is why this is not simply "no value may live in these
+     * registers".
+     *
+     * <p>What this cannot see is a value the instruction <em>reads</em>, because an
+     * operand that has to be in a particular register is not expressible yet: that is
+     * the other half of {@code docs/ir.md} §12 item 12, and it is what {@code mul}
+     * still needs before it can be selected at all.
      */
     private void keepClobbersOffLiveValues(Selection selection) {
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
-            int at = index;
-            index += piece.instructions().size();
-            if (!(piece.item() instanceof Item.InlineAsm) || piece.instructions().isEmpty()) {
-                continue;
-            }
-            for (String destroyed : ((Item.InlineAsm) piece.item()).clobbers()) {
-                if (!target.isRegister(destroyed)) {
-                    // 'flags' is destroyed by the block too, and is not a value
-                    // register, so there is no candidate to strike off.
-                    continue;
-                }
-                for (Map.Entry<String, Integer> entry : firstSeen.entrySet()) {
-                    String name = entry.getKey();
-                    if (entry.getValue().intValue() <= at
-                            && at <= lastSeen.get(name).intValue()) {
-                        Set<String> forbidden = keepOut.get(name);
-                        if (forbidden == null) {
-                            forbidden = new LinkedHashSet<String>();
-                            keepOut.put(name, forbidden);
-                        }
-                        forbidden.add(destroyed);
+            boolean opaque = piece.item() instanceof Item.InlineAsm;
+            Set<String> declared = new LinkedHashSet<String>();
+            if (opaque) {
+                for (String destroyed : ((Item.InlineAsm) piece.item()).clobbers()) {
+                    if (target.isRegister(destroyed)) {
+                        declared.add(destroyed);
                     }
                 }
+            }
+            for (Instruction instruction : piece.instructions()) {
+                Set<String> destroyed = new LinkedHashSet<String>(declared);
+                destroyed.addAll(target.clobbers(instruction));
+                if (!destroyed.isEmpty()) {
+                    keepValuesOff(destroyed, index);
+                }
+                index++;
+            }
+        }
+    }
+
+    /** Stops every value alive at this instruction from living in one of these registers. */
+    private void keepValuesOff(Set<String> destroyed, int index) {
+        for (Map.Entry<String, Integer> entry : firstSeen.entrySet()) {
+            String name = entry.getKey();
+            if (entry.getValue().intValue() <= index && index <= lastSeen.get(name).intValue()) {
+                Set<String> forbidden = keepOut.get(name);
+                if (forbidden == null) {
+                    forbidden = new LinkedHashSet<String>();
+                    keepOut.put(name, forbidden);
+                }
+                forbidden.addAll(destroyed);
             }
         }
     }

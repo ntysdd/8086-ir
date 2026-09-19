@@ -1,12 +1,15 @@
 package i8086.target;
 
 import i8086.SourcePos;
+import i8086.asm.Instruction;
 import i8086.asm.Operand;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
 import i8086.ir.Operator;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 /**
  * What the rest of the compiler is allowed to know about a machine.
@@ -137,6 +140,41 @@ public interface Target {
 
     /** The forms that write a literal into memory. */
     List<Form> storeLiteralForms();
+
+    /**
+     * The registers this instruction destroys, beyond the value it writes for the
+     * program.
+     *
+     * <p>This is the other half of an operand: an instruction's operands say what it
+     * is given and what it leaves, and this says what it takes away that nobody
+     * wrote down. Three ways that happens, and all three are the machine's business:
+     *
+     * <ul>
+     *   <li>an instruction writes its first operand, and the selector wrote a
+     *       <em>register</em> there rather than a value — {@code mov cl, 4} writes
+     *       part of {@code cx}, and a value living in {@code cx} is gone;
+     *   <li>an instruction has a result with no operand saying so — {@code mul r}
+     *       leaves its product in {@code dx:ax};
+     *   <li>part of a register counts as the whole register, because nothing here
+     *       can name half of one, so writing {@code cl} destroys {@code cx}.
+     * </ul>
+     *
+     * <p>The allocator is the caller, and the person it is protecting is the
+     * program: a value that is still to be read after this instruction may not be
+     * given a register the instruction destroys. Asking the target is what keeps
+     * that reasoning out of the allocator ({@code AGENTS.md}, invariant 2).
+     *
+     * <p>The names are {@link #valueRegisters()} names, so that an eight-bit
+     * register answers with the sixteen-bit register that holds it.
+     *
+     * <p>What this does <em>not</em> say is the other direction: an operand that has
+     * to <em>be</em> in a particular register, which is what {@code mul} and
+     * {@code div} need for their first operand and what pinning a value would
+     * provide ({@code docs/ir.md} §12, item 12).
+     */
+    default Set<String> clobbers(Instruction instruction) {
+        return Collections.emptySet();
+    }
 
     /**
      * The forms that do this operator, smallest first is not promised — the

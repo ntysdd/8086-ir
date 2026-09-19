@@ -136,6 +136,131 @@ public final class I8086 implements Target {
     private static final List<Form> STORE_LITERAL_FORMS = Collections.unmodifiableList(
             Arrays.asList(new Form("mov", shapes(Shape.MEMORY, Shape.IMMEDIATE), 4)));
 
+    /**
+     * What this machine takes away behind the allocator's back.
+     *
+     * <p>{@code mul} and {@code div} leave part of their answer in {@code DX} whether
+     * anybody asked or not, and an instruction whose first operand is a register the
+     * selector wrote by hand — {@code mov cl, 4} — writes a register no value was
+     * given. Both are clobbers, and both are facts about this processor.
+     */
+    @Override
+    public Set<String> clobbers(Instruction instruction) {
+        Set<String> destroyed = new LinkedHashSet<String>();
+        Set<String> implicit = IMPLICIT_CLOBBERS.get(instruction.mnemonic());
+        if (implicit != null) {
+            destroyed.addAll(implicit);
+        }
+        if (instruction.operands().isEmpty() || !writesFirstOperand(instruction.mnemonic())) {
+            return destroyed;
+        }
+        Operand first = instruction.operands().get(0);
+        if (first instanceof Operand.Name) {
+            // A name the selector wrote itself: a register, and one the allocator
+            // never handed out. A label is a name too, and the register that holds
+            // it is none, which is what the null says.
+            String register = valueRegisterOf(((Operand.Name) first).name());
+            if (register != null) {
+                destroyed.add(register);
+            }
+        }
+        return destroyed;
+    }
+
+    /**
+     * Whether the first operand is where the answer goes.
+     *
+     * <p>On this machine that is the rule and the exceptions are the interesting
+     * part: a comparison answers with the flags and writes nothing, a jump and a
+     * {@code ret} answer with where they went, and {@code push} reads its operand
+     * rather than writing it.
+     */
+    private static boolean writesFirstOperand(String mnemonic) {
+        return !READS_FIRST_OPERAND.contains(mnemonic) && !BRANCHES.contains(mnemonic);
+    }
+
+    /**
+     * The sixteen-bit register an eight-bit name is half of.
+     *
+     * <p>Nothing here can name half a register, so writing {@code cl} destroys
+     * {@code cx} as far as anything outside this class is concerned. A name that is
+     * not a register at all — a label — has no register holding it.
+     */
+    private static String valueRegisterOf(String name) {
+        if (VALUE_REGISTERS.contains(name)) {
+            return name;
+        }
+        // Null for anything that is not a register at all — a label — and for the
+        // registers no value is ever given: the segment registers and the stack.
+        return HALVES.get(name);
+    }
+
+    /** Instructions that write no register at all, or only read the operand written first. */
+    private static final Set<String> READS_FIRST_OPERAND = names(
+            "cmp", "test", "push");
+
+    /** Instructions that go somewhere, and so write nothing. */
+    private static final Set<String> BRANCHES = names("jmp", "ret", "hlt", "nop", "cli", "sti",
+            "iret", "int", "into");
+
+    /**
+     * What an instruction destroys with no operand saying so.
+     *
+     * <p>{@code mul} and {@code div} are the reason this table exists: the product
+     * or the quotient arrives in {@code AX}, the high half or the remainder in
+     * {@code DX}, and neither is an operand of the instruction the writer wrote.
+     */
+    private static final Map<String, Set<String>> IMPLICIT_CLOBBERS = implicitClobbers();
+
+    private static Map<String, Set<String>> implicitClobbers() {
+        Map<String, Set<String>> table = new LinkedHashMap<String, Set<String>>();
+        table.put("mul", names("ax", "dx"));
+        table.put("imul", names("ax", "dx"));
+        table.put("div", names("ax", "dx"));
+        table.put("idiv", names("ax", "dx"));
+        // The string operations move the index registers as they go.
+        table.put("lodsb", names("ax", "si"));
+        table.put("lodsw", names("ax", "si"));
+        table.put("stosb", names("di"));
+        table.put("stosw", names("di"));
+        table.put("movsb", names("si", "di"));
+        table.put("movsw", names("si", "di"));
+        return Collections.unmodifiableMap(table);
+    }
+
+    /**
+     * Which sixteen-bit register holds each eight-bit name.
+     *
+     * <p>The mapping is one-way on purpose: a value lives in a whole register here,
+     * and the only thing worth knowing about {@code cl} is that {@code cx} holds it.
+     */
+    private static final Map<String, String> HALVES = halves();
+
+    private static Map<String, String> halves() {
+        Map<String, String> table = new LinkedHashMap<String, String>();
+        halve(table, "ax", "al", "ah");
+        halve(table, "cx", "cl", "ch");
+        halve(table, "dx", "dl", "dh");
+        halve(table, "bx", "bl", "bh");
+        return Collections.unmodifiableMap(table);
+    }
+
+    private static void halve(Map<String, String> table, String register, String low, String high) {
+        table.put(low, register);
+        table.put(high, register);
+    }
+
+    /**
+     * How many single shifts are worth replacing with {@code mov cl, n; shl r, cl}.
+     *
+     * <p>Four bytes buys any count: two for the count and two for the shift. Three
+     * single shifts cost six, so three is where the trade starts to pay. What it
+     * costs beyond bytes is that {@code cx} is destroyed, which the allocator may
+     * have to work around — a cost this cannot see, and the reason the threshold is
+     * where the bytes alone decide it.
+     */
+    private static final int COUNT_FROM_REGISTER = 3;
+
     private static Set<String> names(String... names) {
         return Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(names)));
     }
@@ -355,7 +480,28 @@ public final class I8086 implements Target {
         for (long remaining = factor; remaining > 1; remaining >>= 1) {
             steps++;
         }
-        return repeatedShift(where, "shl", destination, source, steps, false);
+        // Shifts by a count, not the multiply's flags: a multiply leaves flags this
+        // sequence does not, however many times it is repeated.
+        return shiftSequence(where, "shl", destination, source, steps, false);
+    }
+
+    /**
+     * A shift by a count, however the count is written: once for each step, or once
+     * with the count in {@code cl}.
+     *
+     * <p>The choice is made on bytes alone. Four bytes buys any count — two for the
+     * count in {@code cl} and two for the shift — and three single shifts cost six,
+     * so that is where it starts to pay. What the counted form costs beyond bytes is
+     * that {@code cx} is destroyed, which the allocator may have to work around: a
+     * cost this cannot see, and the reason the threshold is where the bytes alone
+     * decide it.
+     */
+    private static Expansion shiftSequence(SourcePos where, String mnemonic, Operand destination,
+                                           Operand source, int steps, boolean keepsFlags) {
+        if (steps >= COUNT_FROM_REGISTER) {
+            return countedShift(where, mnemonic, destination, source, steps, keepsFlags);
+        }
+        return repeatedShift(where, mnemonic, destination, source, steps, keepsFlags);
     }
 
     @Override
@@ -364,10 +510,38 @@ public final class I8086 implements Target {
         if (count < 1 || count > 16) {
             return null; // a sixteen-bit value has nothing left after sixteen shifts
         }
+        if (count >= COUNT_FROM_REGISTER) {
+            return countedShift(where, mnemonic, destination, source, (int) count, count == 1);
+        }
         // One shift is the operation itself; more than one is not, because the
         // flags after the last shift are not the flags after a single shift by
         // that count.
         return repeatedShift(where, mnemonic, destination, source, (int) count, count == 1);
+    }
+
+    /**
+     * {@code mov cl, n; shl r, cl} — the count in the one register the machine will
+     * take it from.
+     *
+     * <p>This is what the flags have to be checked against: the flags after a shift
+     * by {@code cl} are the flags after shifting that many times one at a time, so
+     * this expansion keeps the operation's flags exactly when a single shift does.
+     *
+     * <p>{@code cx} is destroyed by the {@code mov}, and nothing here says so: the
+     * allocator asks {@link #clobbers}, which reads the instruction and finds a
+     * register written where a value could have been.
+     */
+    private static Expansion countedShift(SourcePos where, String mnemonic, Operand destination,
+                                          Operand source, int count, boolean keepsFlags) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        if (!sameRegister(destination, source)) {
+            instructions.add(instruction(where, "mov", destination, source));
+        }
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "cl"),
+                new Operand.Number(where, count, Integer.toString(count))));
+        instructions.add(instruction(where, mnemonic, destination,
+                new Operand.Name(where, "cl")));
+        return new Expansion(instructions, keepsFlags);
     }
 
     private static Expansion repeatedShift(SourcePos where, String mnemonic, Operand destination,

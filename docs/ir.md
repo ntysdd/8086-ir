@@ -799,6 +799,15 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     cannot be spilled (§8.2). Whether it extends to *reading* a register the
     compiler never put anything in is the harder half of the question, and is
     probably a different construct.
+
+    **Half of this now exists, and it turns out to be the other half.** An
+    instruction can say what it destroys, and the allocator keeps a value that is
+    still to be read out of those registers: `mov cl, 8` writes a register no value
+    was given, `mul` leaves half its answer in `dx`, and a value living in `cx` or
+    `dx` across either one is refused that register. What is still missing is the
+    direction the two cannot express between them — an operand that must *be* in a
+    register — which is what `mul` and `div` need for their first operand, since the
+    machine multiplies what is in `ax` and takes no operand saying so.
 13. A **calling convention**: how a call is written at all, where the arguments
     go, what a callee preserves, and who tidies up afterwards. None of it exists —
     the surface has no call, so a module's only interfaces are its entry point and

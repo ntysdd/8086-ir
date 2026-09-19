@@ -62,6 +62,10 @@ public final class CompilerTest {
                 CompilerTest::addressesLiveInAddressRegisters);
         suite.add("Compiler keeps a volatile read nobody uses", CompilerTest::keepsVolatileReads);
         suite.add("Compiler refuses a byte access", CompilerTest::refusesNarrowAccess);
+        suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
+        suite.add("Compiler keeps a small shift to single steps", CompilerTest::repeatsSmallShifts);
+        suite.add("Compiler keeps a value out of the register a shift destroys",
+                CompilerTest::keepsValuesOffShiftCounts);
         suite.add("Compiler refuses a store of a computed value",
                 CompilerTest::refusesComputedStore);
         suite.add("Compiler reads the signedness of a comparison",
@@ -409,6 +413,57 @@ public final class CompilerTest {
                         + "    ret\n"
                         + "\n"
                         + "msg: dw 0x1234\n"));
+    }
+
+    /**
+     * A count too big to repeat: {@code mov cl, n; shl r, cl} is four bytes whatever
+     * the count, and three single shifts cost six.
+     */
+    private static void countsLargeShifts() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var v: u16\n    var w: u16\n"
+                + "    w = eval(v shl 8)\n"
+                + "    volatile [0x40] = w\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    mov cl, 8\n    shl ax, cl\n"),
+                "the count goes through cl rather than eight shifts: " + assembly);
+    }
+
+    /** And two shifts stay two shifts: the count register would cost more than it saves. */
+    private static void repeatsSmallShifts() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var v: u16\n    var w: u16\n"
+                + "    w = expr(v shl 2)\n"
+                + "    volatile [0x40] = w\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    shl ax, 1\n    shl ax, 1\n"),
+                "two single shifts: " + assembly);
+        Assert.assertFalse(assembly.contains("cl"),
+                "and no count register at all: " + assembly);
+    }
+
+    /**
+     * The whole point of knowing what an instruction destroys: {@code mov cl, 8}
+     * writes a register no value was given, so a value that is still to be read after
+     * it may not be living in {@code cx}.
+     *
+     * <p>{@code b} is live across the shift and would otherwise be the second value
+     * allocated — {@code ax} is taken and {@code cx} is next — so without this rule
+     * the shift would destroy the value it was computing from. What the test pins is
+     * that it went somewhere the instruction does not touch.
+     */
+    private static void keepsValuesOffShiftCounts() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var a: u16\n    var b: u16\n    var u: u16\n    var s: u16\n"
+                + "    a = eval(u + 1)\n"
+                + "    b = eval(u shl 8)\n"
+                + "    s = eval(a + b)\n"
+                + "    volatile [0x40] = s\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    mov cl, 8\n    shl dx, cl\n"),
+                "the shifted value is not in the register the count arrives in: " + assembly);
+        Assert.assertFalse(assembly.contains("shl cx, cl"),
+                "and nothing shifts the value that was destroyed: " + assembly);
     }
 
     /**
