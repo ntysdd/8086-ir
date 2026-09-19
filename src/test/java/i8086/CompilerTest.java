@@ -28,7 +28,7 @@ public final class CompilerTest {
                     + "\n"
                     + "main:\n"
                     + "    mov ah, 9\n"
-                    + "    mov dx, offset msg\n"
+                    + "    mov dx, msg\n"
                     + "    int 0x21\n"
                     + "    ret\n"
                     + "\n"
@@ -424,7 +424,7 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "main:\n"
-                        + "    mov bx, offset msg\n"
+                        + "    mov bx, msg\n"
                         + "    mov ax, [bx]\n"
                         + "    mov [msg], ax\n"
                         + "    ret\n"
@@ -454,9 +454,9 @@ public final class CompilerTest {
                 + "    ret\n"
                 + "\n"
                 + "msg: dw 0x1234\n");
-        Assert.assertTrue(assembly.contains("    mov bx, offset msg\n"),
+        Assert.assertTrue(assembly.contains("    mov bx, msg\n"),
                 "the address went into an address register: " + assembly);
-        Assert.assertFalse(assembly.contains("mov ax, offset msg"),
+        Assert.assertFalse(assembly.contains("mov ax, msg"),
                 "and not into one it cannot live in: " + assembly);
     }
 
@@ -807,7 +807,7 @@ public final class CompilerTest {
         Run run = run("optimize", "--emit", "bake", "examples/hello.ir");
         Assert.assertEquals(2L, run.status);
         Assert.assertTrue(run.err.contains("unknown --emit 'bake'"), run.err);
-        Assert.assertTrue(run.err.contains("expected ir, ssa or asm"), run.err);
+        Assert.assertTrue(run.err.contains("expected ir, ssa or nasm"), run.err);
     }
 
     private static void saysAssembleIsMissing() {

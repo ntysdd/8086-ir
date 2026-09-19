@@ -1,18 +1,33 @@
 # The assembly text
 
-Status: **draft, and in force for the text the emitter writes**. This document is
-the description of record for the assembly text: the form the emitter writes, the
-form the bundled `asm` assembler will read, and the form an inline assembly block
-contains. [`docs/ir.md`](ir.md) is the description of record for the IR surface,
-`README.md` says what the project is and what exists, and `AGENTS.md` says how to
-work on it.
+Status: **draft, and in force for what an inline block contains**. This document is
+the description of record for the assembly text of this project: the form an inline
+assembly block contains, and the form an assembler of our own would one day read.
+[`docs/ir.md`](ir.md) is the description of record for the IR surface, `README.md`
+says what the project is and what exists, and `AGENTS.md` says how to work on it.
 
-**The assembler does not exist yet.** The emitter writes this text — which means
-what is exercised today is the writing half: the syntax below, the mnemonics and
-operand shapes the target lists, and the size prefixes. Everything about reading
-it back — encodings, the shortest-encoding rule, label relaxation — is decided and
-untested, and belongs to a component that has not been written. What the compiler
-produces today is a listing, not a program (`README.md`, *Status*).
+The text the compiler **writes out** is a different matter: it is written in NASM's
+dialect, because the pieces of a flat binary are an assembler's business and NASM is
+the assembler (`nasm -f bin`). The two dialects differ in four places, each for a
+reason, and those four are the whole of the translation (`i8086.asm.Dialect`):
+
+| this document | NASM | why |
+|---|---|---|
+| `mov dx, offset msg` | `mov dx, msg` | NASM has no `offset`: a bare symbol is already the address there, and a bracketed one is what it points at |
+| `mov es:[bx], al` | `mov [es:bx], al` | NASM puts a segment override inside the brackets |
+| `pad 32, 0x90` | `times 32 db 0x90` | `pad` is this project's word for bytes in the image |
+| `pad to 510` | `times 510-($-$$) db 0` | only the assembler knows how long the code before it is |
+
+Our own grammar does not change to suit a tool, and the tool does not have to read
+a grammar nobody else speaks. `pad to` has no spelling that is both NASM's and free
+of NASM's expression language, which is exactly why there are two dialects and not
+one.
+
+**The assembler this document is ultimately for is not written yet.** What is
+exercised today is the writing half: the syntax below, the mnemonics and operand
+shapes the target lists, and the size prefixes. Everything about reading it back —
+encodings, the shortest-encoding rule, label relaxation — is decided and untested,
+and belongs to a component that has not been written.
 
 Marks mean the same as in `docs/ir.md`: **[decided]**, **[proposed]**,
 **[open]** — and a construct is proposed and approved here before it is
@@ -25,7 +40,8 @@ implemented.
 The assembly text is a contract between three things:
 
 * the emitter, which writes it;
-* the bundled assembler, which reads it back, encodes it and places it;
+* the assembler that reads it back, encodes it and places it — NASM today, and one
+  of our own if that is ever worth writing;
 * the promise in `README.md` that the output is *ordinary, readable 8086
   assembly — the kind of code you would otherwise write by hand*.
 
@@ -187,10 +203,10 @@ db   "Hello, world!$"       a string, one byte per character
 
 `[decided]` the repeat form for space in the image is `pad`, spelled the same as
 the IR's (`docs/ir.md` §10.2, §10.3): `pad 32`, `pad 400, 0x90`, and `pad to 510`
-to reach a fixed length. This is the layer that finally knows how many bytes each
-instruction took, so `pad to` is resolved here and nowhere else — which is also
-why `pad to 510` and not something a person works out. Handed to another
-assembler, the two forms are `times 32 db 0` and `times 510-($-$$) db 0`.
+to reach a fixed length. In NASM's dialect — which is what the emitter writes —
+these are `times 32 db 0` and `times 510-($-$$) db 0`. Whichever dialect, the
+layer that finally knows how many bytes each instruction took is the one that
+resolves `pad to`, and that is the assembler.
 
 `[open]` `align`, which reaches a multiple rather than a length, and is a different
 construct from either form above.

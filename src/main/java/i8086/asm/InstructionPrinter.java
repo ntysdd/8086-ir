@@ -12,7 +12,9 @@ import java.util.List;
  * the same module twice gives the same text (invariant 6).
  *
  * <p>This is shared by the IR printer, which writes inline blocks inside an IR
- * module, and the assembly emitter, which writes them as the program.
+ * module, and the assembly emitter, which writes them as the program. Those two
+ * want different spellings of two things, which is what {@link Dialect} is for: the
+ * IR printer writes our own dialect, and the emitter writes the one NASM reads.
  */
 public final class InstructionPrinter {
 
@@ -20,17 +22,25 @@ public final class InstructionPrinter {
     }
 
     public static String print(Instruction instruction) {
+        return print(instruction, Dialect.CANONICAL);
+    }
+
+    public static String print(Instruction instruction, Dialect dialect) {
         StringBuilder text = new StringBuilder();
         text.append(instruction.mnemonic());
         List<Operand> operands = instruction.operands();
         for (int i = 0; i < operands.size(); i++) {
             text.append(i == 0 ? " " : ", ");
-            text.append(print(operands.get(i)));
+            text.append(print(operands.get(i), dialect));
         }
         return text.toString();
     }
 
     public static String print(Operand operand) {
+        return print(operand, Dialect.CANONICAL);
+    }
+
+    public static String print(Operand operand, Dialect dialect) {
         if (operand instanceof Operand.Name) {
             return ((Operand.Name) operand).name();
         }
@@ -46,20 +56,28 @@ public final class InstructionPrinter {
             return Numbers.spelling(((Operand.Number) operand).value());
         }
         if (operand instanceof Operand.Offset) {
-            return "offset " + ((Operand.Offset) operand).name();
+            // NASM has no 'offset': a bare symbol in an operand is already the
+            // address there, where a bracketed one is what it points at.
+            String name = ((Operand.Offset) operand).name();
+            return dialect == Dialect.NASM ? name : "offset " + name;
         }
-        return printMemory((Operand.Memory) operand);
+        return printMemory((Operand.Memory) operand, dialect);
     }
 
-    private static String printMemory(Operand.Memory memory) {
+    private static String printMemory(Operand.Memory memory, Dialect dialect) {
         StringBuilder text = new StringBuilder();
         if (memory.size() != null) {
             text.append(memory.size().spelling()).append(' ');
         }
-        if (memory.segment() != null) {
+        // The segment override is the one thing whose position differs: NASM puts it
+        // inside the brackets, our dialect in front of them (docs/asm.md §4).
+        if (memory.segment() != null && dialect == Dialect.CANONICAL) {
             text.append(memory.segment()).append(':');
         }
         text.append('[');
+        if (memory.segment() != null && dialect == Dialect.NASM) {
+            text.append(memory.segment()).append(':');
+        }
         List<Operand.Memory.Atom> atoms = memory.atoms();
         for (int i = 0; i < atoms.size(); i++) {
             Operand.Memory.Atom atom = atoms.get(i);

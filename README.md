@@ -4,9 +4,11 @@ A modern, SSA-based optimizer and code generator for the Intel 8086.
 
 `8086-ir` takes a textual, human-writable intermediate representation that
 describes 8086-level computation, optimizes it with a real SSA pipeline, and
-emits 8086 assembly text. It ships with its own miniature assembler so that the
-generated assembly can be turned into a flat binary without depending on an
-external toolchain.
+emits 8086 assembly text. It is built to ship with its own miniature assembler, so
+that the generated assembly can be turned into a flat binary without depending on
+an external toolchain — but that assembler is **not on the critical path**: the text
+it writes is NASM's dialect, so the image comes from `nasm -f bin` today, and
+[`docs/asm.md`](docs/asm.md) §1 lists the four differences between the two dialects.
 
 The whole thing is written in Java 8, with no third-party runtime dependencies.
 
@@ -230,12 +232,12 @@ dependency-free test suite:
 ```
 build.bat                                          # compile everything, run all tests
 build.bat run optimize examples/hello.ir -o hello.asm
-build.bat run optimize --emit ir  examples/hello.ir   # stop after the IR
-build.bat run optimize --emit ssa examples/hello.ir   # stop after the SSA form
-build.bat run assemble hello.asm -o hello.bin
+build.bat run optimize --emit ir   examples/hello.ir   # stop after the IR
+build.bat run optimize --emit ssa  examples/hello.ir   # stop after the SSA form
+nasm -f bin hello.asm -o hello.com                     # the assembler, until we have one
 ```
 
-`optimize` runs the pipeline and stops where `--emit` says — `ir`, `ssa` or `asm`
+`optimize` runs the pipeline and stops where `--emit` says — `ir`, `ssa` or `nasm`
 — and without `-o` it prints what it has instead of writing it. The two dumps are
 the only way to see the middle of the pipeline, and a stage is only reached by way
 of the verifications before it, so what comes out is something the compiler
@@ -305,8 +307,11 @@ Working today:
   is the promise [`docs/ir.md`](docs/ir.md) §8.2 makes — and it drops the copies of a
   register into itself that turn out to be unnecessary.
 * **The assembly text** of [`docs/asm.md`](docs/asm.md), and the emitter that writes
-  it. The bundled assembler that would read it back is planned and not built, so what
-  comes out is a listing rather than a program.
+  it — in the dialect NASM reads, so that `nasm -f bin` turns it into the image. The
+  four differences from our own dialect, which is what an inline block is written
+  in, are the whole of the translation: `pad to 510` comes out as
+  `times 510-($-$$) db 0`. An assembler of our own is still planned and still not
+  written, but nothing waits on it.
 
 Not built yet, and refused with a reason rather than guessed at: conversions and
 byte accesses (there are no sub-registers, so half a register has no name), `setcc`,
@@ -324,8 +329,9 @@ Planned milestones:
 1. IR definition, parser, printer, verifier, and the target description the
    rest of the pipeline reads 8086 facts from. **Done.**
 2. Bundled assembler (encode + label resolution + branch relaxation) for 8086.
-   **Not started**, and the largest piece missing: without it the output cannot be
-   turned into bytes, and nothing can be executed or tested end to end.
+   **Not started, and deliberately not on the critical path**: the emitted text is
+   NASM's dialect and `nasm -f bin` produces the image today, so what is missing is
+   self-containment rather than a working pipeline.
 3. SSA construction and verification. **Done**, apart from the flag
    materialisation that waits on the target's per-flag effects.
 4. Core optimization passes. **Started**: constant propagation, dead value

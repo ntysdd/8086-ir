@@ -137,8 +137,8 @@ public final class PadTest {
                 + "    pad to 510\n"
                 + "    dw 0xAA55\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("pad 0x20, 0x90\n"), assembly);
-        Assert.assertTrue(assembly.contains("pad to 0x1fe\n"), assembly);
+        Assert.assertTrue(assembly.contains("times 0x20 db 0x90\n"), assembly);
+        Assert.assertTrue(assembly.contains("times 0x1fe-($-$$) db 0\n"), assembly);
         Assert.assertFalse(assembly.contains("unused"), assembly);
     }
 

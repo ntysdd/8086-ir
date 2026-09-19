@@ -51,8 +51,13 @@ public final class Compiler {
         IR,
         /** The SSA form, printed. */
         SSA,
-        /** The assembly text. */
-        ASM
+        /**
+         * The assembly text, in the dialect NASM reads. Named after the assembler
+         * rather than after "assembly", because a dump a tool cannot read is a dump
+         * and not a program: what comes out of here is what {@code nasm -f bin} turns
+         * into the image.
+         */
+        NASM
     }
 
     private Compiler() {
@@ -67,7 +72,7 @@ public final class Compiler {
      * @throws CompileError if the input is not something this compiler accepts
      */
     public static String compile(String file, String source) {
-        return compile(file, source, Stage.ASM);
+        return compile(file, source, Stage.NASM);
     }
 
     /**

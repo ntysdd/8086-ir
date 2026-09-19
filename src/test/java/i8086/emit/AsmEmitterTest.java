@@ -27,7 +27,7 @@ public final class AsmEmitterTest {
                     + "main:\n"
                     + "    asm clobbers(ax, dx, flags) {\n"
                     + "        mov ah, 9\n"
-                    + "        mov dx, offset msg\n"
+                    + "        mov dx, msg\n"
                     + "        int 0x21\n"
                     + "    }\n"
                     + "    ret\n"
@@ -39,7 +39,7 @@ public final class AsmEmitterTest {
                     + "\n"
                     + "main:\n"
                     + "    mov ah, 9\n"
-                    + "    mov dx, offset msg\n"
+                    + "    mov dx, msg\n"
                     + "    int 0x21\n"
                     + "    ret\n"
                     + "\n"
@@ -60,6 +60,9 @@ public final class AsmEmitterTest {
         suite.add("Asm emitter spells numbers the same way the IR printer does",
                 AsmEmitterTest::spellsNumbersTheSameWay);
         suite.add("Asm emitter is deterministic", AsmEmitterTest::isDeterministic);
+        suite.add("Asm emitter writes the dialect NASM reads",
+                AsmEmitterTest::writesNasmDialect);
+        suite.add("The IR printer keeps our own dialect", AsmEmitterTest::keepsOurDialect);
     }
 
     private static String emit(String source) {
@@ -113,6 +116,47 @@ public final class AsmEmitterTest {
 
     private static void isDeterministic() {
         Assert.assertEquals(emit(HELLO), emit(HELLO));
+    }
+
+    /**
+     * The four substitutions, each with a reason rather than a preference
+     * ({@link i8086.asm.Dialect}). Nothing else about the text differs, which is the
+     * point of having chosen a NASM-family syntax in the first place.
+     */
+    private static void writesNasmDialect() {
+        // A label used as an address: NASM has no 'offset'.
+        String addressing = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var p: u16\n"
+                + "    asm clobbers(ax, bx) {\n        mov bx, offset msg\n"
+                + "        mov ax, [bx]\n    }\n"
+                + "    p = ax\n    word [0x40] = p\n    ret\n\nmsg: dw 1\n");
+        Assert.assertTrue(addressing.contains("    mov bx, msg\n"), addressing);
+        Assert.assertFalse(addressing.contains("offset "), addressing);
+
+        // A segment override goes inside the brackets, and 'pad' is 'times'.
+        String boot = emit("target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+                + "    asm clobbers(ax, bx, es) {\n        mov ax, 0xB800\n        mov es, ax\n"
+                + "        mov byte es:[bx], 0x41\n    }\n"
+                + "    pad 32, 0x90\n    pad to 510\n    dw 0xAA55\n    ret\n");
+        Assert.assertTrue(boot.contains("mov byte [es:bx], 0x41\n"), boot);
+        Assert.assertTrue(boot.contains("times 0x20 db 0x90\n"), boot);
+        Assert.assertTrue(boot.contains("times 0x1fe-($-$$) db 0\n"), boot);
+        Assert.assertFalse(boot.contains("pad "), boot);
+    }
+
+    /**
+     * And the other direction, which is why the dialect is a parameter rather than a
+     * change to our own grammar: an inline block prints back the way it was written,
+     * so an IR module round-trips in the language its author used.
+     */
+    private static void keepsOurDialect() {
+        String source = "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    asm clobbers(ax, bx) {\n        mov bx, offset msg\n    }\n"
+                + "    pad 32\n    ret\n\nmsg: dw 1\n";
+        Module module = IrParser.parse("test.ir", source);
+        String printed = i8086.ir.IrPrinter.print(module);
+        Assert.assertTrue(printed.contains("        mov bx, offset msg\n"), printed);
+        Assert.assertTrue(printed.contains("pad 0x20\n"), printed);
     }
 
     /**

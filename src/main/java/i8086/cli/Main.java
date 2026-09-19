@@ -62,7 +62,7 @@ public final class Main {
     private static int optimize(String[] args, int from, PrintStream out, PrintStream err) {
         String input = null;
         String output = null;
-        Compiler.Stage stage = Compiler.Stage.ASM;
+        Compiler.Stage stage = Compiler.Stage.NASM;
         for (int i = from; i < args.length; i++) {
             if (args[i].equals("-o")) {
                 if (i + 1 >= args.length) {
@@ -72,12 +72,13 @@ public final class Main {
                 output = args[++i];
             } else if (args[i].equals("--emit")) {
                 if (i + 1 >= args.length) {
-                    err.println("error: '--emit' needs one of ir, ssa or asm after it");
+                    err.println("error: '--emit' needs one of ir, ssa or nasm after it");
                     return EXIT_USAGE;
                 }
                 stage = stage(args[++i]);
                 if (stage == null) {
-                    err.println("error: unknown --emit '" + args[i] + "'; expected ir, ssa or asm");
+                    err.println("error: unknown --emit '" + args[i]
+                            + "'; expected ir, ssa or nasm");
                     return EXIT_USAGE;
                 }
             } else if (input == null) {
@@ -118,8 +119,8 @@ public final class Main {
                 return Compiler.Stage.IR;
             case "ssa":
                 return Compiler.Stage.SSA;
-            case "asm":
-                return Compiler.Stage.ASM;
+            case "nasm":
+                return Compiler.Stage.NASM;
             default:
                 return null;
         }
@@ -151,7 +152,7 @@ public final class Main {
     }
 
     private static void printUsage(PrintStream out) {
-        out.println("usage: 8086-ir optimize INPUT.ir [-o OUTPUT] [--emit ir|ssa|asm]");
+        out.println("usage: 8086-ir optimize INPUT.ir [-o OUTPUT] [--emit ir|ssa|nasm]");
         out.println("       without -o the result goes to standard output");
         out.println("       8086-ir assemble INPUT.asm -o OUTPUT.bin   ; not implemented yet");
     }
