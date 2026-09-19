@@ -9,7 +9,6 @@ import i8086.asm.Size;
 import i8086.ir.Expression;
 import i8086.ir.Item;
 import i8086.ir.MemoryOperand;
-import i8086.ir.Module;
 import i8086.ir.Names;
 import i8086.ir.Operation;
 import i8086.ir.Operator;
@@ -17,6 +16,9 @@ import i8086.ir.Place;
 import i8086.ir.Signedness;
 import i8086.ir.Type;
 import i8086.ir.Value;
+import i8086.ssa.Block;
+import i8086.ssa.SsaForm;
+import i8086.ssa.SsaStatement;
 import i8086.target.Expansion;
 import i8086.target.Form;
 import i8086.target.Shape;
@@ -28,6 +30,13 @@ import java.util.List;
 
 /**
  * Turns the IR into instructions, choosing the form of each operation.
+ *
+ * <p>What it is given is the SSA form, and what it emits keeps the form's names: a
+ * value is written as the version it is, so the instructions say which definition
+ * each use reads. That is what the allocator needs to see, and it is why this asks
+ * the form about a name — whether it is a value, what variable it is a version of,
+ * and what type that variable has — rather than the module's own names, which are
+ * not renamed ({@code docs/ssa.md}).
  *
  * <p>What it does <em>not</em> do is decide where a value lives: every operand
  * that stands for a variable becomes an {@link Operand.Virtual}, and register
@@ -60,31 +69,54 @@ public final class InstructionSelector {
     private static final String TEMP_PREFIX = "$t";
 
     private final Target target;
+    /**
+     * The module's names, for the one question the form cannot answer.
+     *
+     * <p>A label is not renamed — renaming is about values, and a place has no
+     * version — so the labels are still the module's. Everything about a value comes
+     * from the form instead, whose names are versions ({@code docs/ssa.md}).
+     */
     private final Names names;
+    private final SsaForm form;
     private int temps;
     private List<Instruction> out;
     private boolean controlFlow;
 
-    public InstructionSelector(Module module, Target target) {
+    public InstructionSelector(SsaForm form, Target target) {
         this.target = target;
-        this.names = Names.of(module);
+        this.form = form;
+        this.names = Names.of(form.module());
     }
 
-    public static Selection select(Module module, Target target) {
-        return new InstructionSelector(module, target).run(module);
+    public static Selection select(SsaForm form, Target target) {
+        return new InstructionSelector(form, target).run();
     }
 
-    private Selection run(Module module) {
+    /**
+     * Every item of the form, in the order it was written, and the instructions each
+     * became.
+     *
+     * <p>The walk is the form's rather than the module's because the items are the
+     * form's: a block holds the items between its label and the next, in source order,
+     * so walking the blocks in order and their statements in order gives the module's
+     * items back. What is skipped is the φ's: a φ is not an item and not an
+     * instruction, and what it says — that the values reaching it share a register —
+     * is a constraint on the allocator rather than something to emit.
+     */
+    private Selection run() {
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
-        for (Item item : module.items()) {
-            out = new ArrayList<Instruction>();
-            select(item);
-            for (Instruction instruction : out) {
-                if (target.isBranch(instruction.mnemonic())) {
-                    controlFlow = true;
+        for (Block block : form.cfg().blocks()) {
+            for (SsaStatement statement : form.statements(block)) {
+                Item item = statement.item();
+                out = new ArrayList<Instruction>();
+                select(item);
+                for (Instruction instruction : out) {
+                    if (target.isBranch(instruction.mnemonic())) {
+                        controlFlow = true;
+                    }
                 }
+                pieces.add(new Selection.Piece(item, out));
             }
-            pieces.add(new Selection.Piece(item, out));
         }
         return new Selection(pieces, controlFlow);
     }
@@ -249,7 +281,7 @@ public final class InstructionSelector {
             // A base that is a variable is a value waiting for a register; a base
             // that is a label is a name the assembler resolves. The syntax cannot
             // tell them apart, and this is where the answer is known.
-            atoms.add(names.isVariable(operand.base())
+            atoms.add(form.isValue(operand.base())
                     ? Operand.Memory.Atom.ofVirtual(operand.base())
                     : Operand.Memory.Atom.ofName(operand.base()));
         }
@@ -403,7 +435,7 @@ public final class InstructionSelector {
         if (isLiteral(apply.right())) {
             emitExpression(apply.left(), destination);
             emitInPlace(operator, destination, ((Expression.Leaf) apply.right()).value(),
-                    Signedness.of(apply, names), apply.position(), false);
+                    Signedness.of(apply, form::typeOf), apply.position(), false);
             return;
         }
 
@@ -413,7 +445,7 @@ public final class InstructionSelector {
         emitExpression(apply.right(), scratch);
         emitExpression(apply.left(), destination);
         emitInPlace(operator, destination, new Value.Name(apply.right().position(), scratch),
-                Signedness.of(apply, names), apply.position(), false);
+                Signedness.of(apply, form::typeOf), apply.position(), false);
     }
 
     /**
@@ -580,12 +612,12 @@ public final class InstructionSelector {
                 break;
         }
         for (Value operand : operands) {
-            Boolean signed = Signedness.of(operand, names);
+            Boolean signed = Signedness.of(operand, form::typeOf);
             if (signed != null) {
                 return signed;
             }
         }
-        Type type = names.typeOf(destination);
+        Type type = form.typeOf(destination);
         return type == null ? null : Boolean.valueOf(type.isSigned());
     }
 

@@ -1,11 +1,14 @@
 package i8086.emit;
 
 import i8086.CompileError;
+import i8086.Compiler;
 import i8086.ir.IrParser;
 import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
+import i8086.regalloc.MergeVersions;
 import i8086.regalloc.RegisterAllocator;
+import i8086.ssa.SsaForm;
 import i8086.target.Target;
 import i8086.target.Targets;
 import i8086.testing.Assert;
@@ -69,10 +72,14 @@ public final class AsmEmitterTest {
     }
 
     private static String emit(String source) {
-        Module module = IrParser.parse("test.ir", source);
-        Target target = Targets.byName(module.target());
-        Selection selected = InstructionSelector.select(module, target);
-        return AsmEmitter.emit(module, RegisterAllocator.allocate(selected, target));
+        // The same front half the compiler runs, and the same two steps after it:
+        // selection reads the form, and the allocator is told a variable's versions
+        // are one name.
+        SsaForm form = Compiler.ssa("test.ir", source);
+        Target target = Targets.byName(form.module().target());
+        Selection selected = InstructionSelector.select(form, target);
+        Selection merged = MergeVersions.merge(selected, form);
+        return AsmEmitter.emit(form.module(), RegisterAllocator.allocate(merged, target));
     }
 
     private static void writesWholeProgram() {
@@ -127,9 +134,11 @@ public final class AsmEmitterTest {
      * point of having chosen a NASM-family syntax in the first place.
      */
     private static void writesNasmDialect() {
-        // A label used as an address: NASM has no 'offset'.
+        // A label used as an address: NASM has no 'offset'. And a variable called 'ax',
+        // because the surface has no registers (docs/ir.md §3.1) — the block beside it
+        // writes the machine's ax, which is a different word in a different language.
         String addressing = emit("target 8086\norg 0x100\nentry $main\n\n$main:\n"
-                + "    var p: u16\n"
+                + "    var p: u16\n    var ax: u16\n"
                 + "    asm clobbers(ax, bx) {\n        mov bx, offset msg\n"
                 + "        mov ax, [bx]\n    }\n"
                 + "    p = ax\n    word [0x40] = p\n    ret\n\nmsg: dw 1\n");

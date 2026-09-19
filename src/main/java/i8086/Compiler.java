@@ -8,6 +8,7 @@ import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
 import i8086.pass.Pipeline;
+import i8086.regalloc.MergeVersions;
 import i8086.regalloc.RegisterAllocator;
 import i8086.ssa.OutOfSsa;
 import i8086.ssa.SsaBuilder;
@@ -26,15 +27,20 @@ import i8086.target.Targets;
  * thin").
  *
  * <p>The order is the pipeline of {@code README.md}: parse, verify, build SSA,
- * optimize, leave SSA, verify again, select instructions, allocate registers, emit.
- * A stage that rewrites what it was given runs on verified input and has its output
- * verified in turn, which is the first invariant — and the reason the verifications
- * are named here rather than hidden inside the stages that produce what they check.
- * The pass list itself is in {@link Pipeline}, which verifies around each pass.
+ * optimize, select instructions, allocate registers, emit. A stage that rewrites what
+ * it was given runs on verified input and has its output verified in turn, which is
+ * the first invariant — and the reason the verifications are named here rather than
+ * hidden inside the stages that produce what they check. The pass list itself is in
+ * {@link Pipeline}, which verifies around each pass.
  *
- * <p>Nothing here is target-specific. The SSA form, the passes and leaving SSA again
- * are all in the IR's own vocabulary; selection and allocation are the only stages
- * that ask a target anything ({@code AGENTS.md}, invariant 2).
+ * <p>What is not in that order any more is leaving SSA. Selection and allocation read
+ * the form the passes produced, so that the allocator can see which definition each
+ * use reads ({@code docs/ssa.md}); the only thing left of the old step is a renaming
+ * the allocator needs and a dump a person reads.
+ *
+ * <p>Nothing here is target-specific. The SSA form and the passes are all in the IR's
+ * own vocabulary; selection and allocation are the only stages that ask a target
+ * anything ({@code AGENTS.md}, invariant 2).
  */
 public final class Compiler {
 
@@ -86,21 +92,34 @@ public final class Compiler {
      */
     public static String compile(String file, String source, Stage stage) {
         Module module = IrParser.parse(file, source);
-        SsaForm form = verify(module);
+        SsaForm optimized = Pipeline.run(verify(module));
         if (stage == Stage.SSA) {
-            return SsaPrinter.print(Pipeline.run(form));
+            return SsaPrinter.print(optimized);
         }
-        Module lowered = OutOfSsa.module(Pipeline.run(form));
-        // Leaving SSA is a transformation like any other, so its output is checked
-        // like any input: the surface's own rules, on the module the passes left.
-        IrVerifier.verify(lowered, targetOf(module));
         if (stage == Stage.IR) {
-            return IrPrinter.print(lowered);
+            return IrPrinter.print(lowered(optimized, module));
         }
         Target target = targetOf(module);
-        Selection selected = InstructionSelector.select(lowered, target);
-        Selection allocated = RegisterAllocator.allocate(selected, target);
-        return AsmEmitter.emit(lowered, allocated);
+        Selection selected = InstructionSelector.select(optimized, target);
+        Selection merged = MergeVersions.merge(selected, optimized);
+        Selection allocated = RegisterAllocator.allocate(merged, target);
+        return AsmEmitter.emit(optimized.module(), allocated);
+    }
+
+    /**
+     * The form with its versions back to the variables they are versions of, printed
+     * as the surface a person wrote.
+     *
+     * <p>Leaving SSA is a transformation like any other, so what it produces is checked
+     * like any input before anything reads it — which here means before it is printed,
+     * because the back end no longer needs it: allocation reads the form, and what it
+     * has to be told is only that a variable's versions are one name
+     * ({@link MergeVersions}).
+     */
+    private static Module lowered(SsaForm optimized, Module module) {
+        Module lowered = OutOfSsa.module(optimized);
+        IrVerifier.verify(lowered, targetOf(module));
+        return lowered;
     }
 
     /**

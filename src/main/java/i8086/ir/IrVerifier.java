@@ -400,11 +400,11 @@ public final class IrVerifier {
      * which is what the mnemonic forms are for (§5.5).
      */
     private Boolean signednessOf(Value value) {
-        return Signedness.of(value, names);
+        return Signedness.of(value, names::typeOf);
     }
 
     private Boolean signednessOf(Expression expression) {
-        return Signedness.of(expression, names);
+        return Signedness.of(expression, names::typeOf);
     }
 
     /**

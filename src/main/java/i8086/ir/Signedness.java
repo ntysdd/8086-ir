@@ -1,5 +1,7 @@
 package i8086.ir;
 
+import java.util.function.Function;
+
 /**
  * What signedness a value or an expression speaks for, or nothing when it says
  * nothing at all.
@@ -15,28 +17,39 @@ package i8086.ir;
  * and selection has to know which division to emit — {@code div} and {@code idiv}
  * are not two spellings of one instruction. A second copy of this rule would be a
  * second answer to one question ({@code docs/ir.md} §6.1).
+ *
+ * <p>The one thing both callers have to supply is what a name's declared type is,
+ * and that is all this asks for: a symbol table would be more than the question
+ * needs, and the two callers answer it from different tables — the verifier from
+ * the module's names, and selection from the SSA form, whose names are versions
+ * ({@code docs/ssa.md}).
  */
 public final class Signedness {
 
     private Signedness() {
     }
 
-    /** What signedness a value speaks for, or null when it says nothing. */
-    public static Boolean of(Value value, Names names) {
+    /**
+     * What signedness a value speaks for, or null when it says nothing.
+     *
+     * <p>{@code typeOf} is asked for the declared type of a name and answers null when
+     * the name is not one: a label has no width and so no signedness either.
+     */
+    public static Boolean of(Value value, Function<String, Type> typeOf) {
         if (value instanceof Value.Name) {
-            Type type = names.typeOf(((Value.Name) value).name());
+            Type type = typeOf.apply(((Value.Name) value).name());
             return type == null ? null : Boolean.valueOf(type.isSigned());
         }
         return null;
     }
 
     /** What signedness an expression speaks for, or null when it says nothing. */
-    public static Boolean of(Expression expression, Names names) {
+    public static Boolean of(Expression expression, Function<String, Type> typeOf) {
         if (expression instanceof Expression.Leaf) {
-            return of(((Expression.Leaf) expression).value(), names);
+            return of(((Expression.Leaf) expression).value(), typeOf);
         }
         if (expression instanceof Expression.Unary) {
-            return of(((Expression.Unary) expression).operand(), names);
+            return of(((Expression.Unary) expression).operand(), typeOf);
         }
         Expression.Apply apply = (Expression.Apply) expression;
         switch (apply.operator()) {
@@ -49,8 +62,8 @@ public final class Signedness {
             case SHIFT_ARITHMETIC:
                 return Boolean.TRUE;
             default:
-                Boolean left = of(apply.left(), names);
-                return left != null ? left : of(apply.right(), names);
+                Boolean left = of(apply.left(), typeOf);
+                return left != null ? left : of(apply.right(), typeOf);
         }
     }
 }

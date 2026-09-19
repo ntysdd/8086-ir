@@ -225,28 +225,35 @@ properties of the form rather than of any one pass:
 
 ## 8. Leaving SSA — [decided]
 
-What the passes leave is turned back into a module, because the back end works on
-the surface and not on versions ([`OutOfSsa`](../src/main/java/i8086/ssa/OutOfSsa.java)).
-
-In most compilers this step is where the trouble is: φ's become copies, the copies
-on one edge have to happen at once, cycles among them need a temporary, and an edge
-that leaves a block with two ways out has to be split first. None of that is needed
-here, and the reason is one sentence:
+The form is what the back end reads. Selection selects from it, so the instructions it
+emits name versions, and a φ is not an instruction but a constraint on the allocator —
+which is the whole of what a φ has to say here:
 
 > **every operand of a φ is a version of the same variable the φ defines.**
 
-So renaming each version back to the variable it belongs to turns every φ into
-`x = x`. The value the φ would have produced is the value the variable already
-holds on that path — that is what "the version reaching the end of the
-predecessor" means — so the copy is not merely skippable but unnecessary, and an
+In most compilers this step is where the trouble is: φ's become copies, the copies on
+one edge have to happen at once, cycles among them need a temporary, and an edge that
+leaves a block with two ways out has to be split first. None of that is needed here,
+and the sentence above is why. Renaming each version back to the variable it belongs
+to turns every φ into `x = x`: the value the φ would have produced is the value the
+variable already holds on that path — that is what "the version reaching the end of
+the predecessor" means — so the copy is not merely skippable but unnecessary, and an
 edge with two ways out has nothing edge-specific left to place. A φ that carried a
 value *between* variables would need all of that machinery; this IR has no such
 construct, and does not want one.
 
-The price is precision rather than correctness: the variable is one mutable name
-again, so the allocator sees one interval where the form had three. That is the
-shape the input had and the shape the back end was written for
-(`docs/ir.md` §3.1).
+So the versions are merged, and there are two places where that happens, for two
+different readers:
+
+* **For the allocator**, by renaming every version back to its variable
+  ([`MergeVersions`](../src/main/java/i8086/regalloc/MergeVersions.java)). One name is
+  one life, so a variable's versions become one interval even where the value is dead
+  between them. The price is precision rather than correctness, and it is the shape
+  the allocator was written for (`docs/ir.md` §3.1).
+* **For a person**, by [`OutOfSsa`](../src/main/java/i8086/ssa/OutOfSsa.java), which is
+  what `optimize --emit ir` prints.
+
+Both are renaming, and neither inserts an instruction.
 
 ## 9. Not here yet
 

@@ -264,10 +264,11 @@ accepted.
 
 ## Status
 
-The pipeline runs end to end: IR text in, assembly text out, with SSA construction,
-three optimization passes, and the way back out of SSA in the middle. What is
-missing is the assembler that would turn that text into bytes, and the parts of the
-surface and the instruction set listed below.
+The pipeline runs end to end: IR text in, assembly text out, with SSA construction and
+three optimization passes — and the form is what the back end reads, rather than
+something it is turned back into first. What is missing is the assembler that would
+turn that text into bytes, and the parts of the surface and the instruction set
+listed below.
 
 Working today:
 
@@ -284,14 +285,15 @@ Working today:
 * **SSA construction and verification**, described in
   [`docs/ssa.md`](docs/ssa.md): the control flow graph, dominators and the dominance
   frontier, liveness, φ placement, and the renaming walk. Every variable is renamed
-  — the flags included — and every use names the definition that reaches it.
-  Leaving SSA needs no copies at all, for the reason [`docs/ssa.md`](docs/ssa.md) §8
-  gives. `optimize --emit ssa` prints the form.
+  — the flags included — and every use names the definition that reaches it. It does
+  not stop there: instruction selection and register allocation read the form, so the
+  instructions they work on name versions. What happens next is a renaming rather
+  than a transformation with copies in it, for the reason
+  [`docs/ssa.md`](docs/ssa.md) §8 gives. `optimize --emit ssa` prints the form.
 * **An optimiser**: constant propagation, dead value elimination, and giving up
   flags nobody reads, in that order. Every pass runs on a verified form and has its
-  output verified in turn, and leaving SSA is a transformation whose output the
-  surface's own verifier checks before anything selects from it.
-  `optimize --emit ir` prints what the passes left.
+  output verified in turn. `optimize --emit ir` prints what the passes left, in the
+  surface — which is a dump, because the back end no longer needs it.
 * **Data, and padding that reaches a layout**: `db`/`dw`/`dd` inline where they sit
   — including a `dw` list of labels, which is a jump or vector table — and
   `pad N [, fill]` / `pad to N [, fill]` for bytes that exist in the image and
