@@ -475,6 +475,13 @@ nothing else and cost nothing.
   the carry (`shl shr sar rol ror`). Comparisons are **not** value expressions;
   use `cmp` with `setcc`. A tree that needs a load is not written here at all:
   it is written as `eval` of one operation per load, with the rest in `expr`.
+* **[proposed]** a unary minus, `-d`: one operation, the one the machine calls
+  `NEG`. It is not a new meaning — `NEG`'s flags are the flags of subtracting
+  from zero, `CF` included, so `-d`, `0 - d` and the instruction `neg d` are one
+  operation and it is the zero in `d = eval(0 - d)` that carries no information.
+  Two things it settles rather than assumes: which precedence row it belongs in
+  (with `~`, level 1, where a prefix can only be a prefix), and §12's open
+  question about negative literals, since `-1` and `-d` begin the same way.
 * Division **is** in `expr` (`/` and `%`). It reads no flags and touches no
   memory; the fault it can raise is covered by the rule below.
 * Divide-by-zero and quotient overflow are the hardware's contract (`#DE`), no
@@ -668,9 +675,9 @@ familiar spelling, and the meaning would then be a guess. So:
 
 * **Accepted**, because each names one of §5.5's operators and means exactly what
   that operator's `eval` spelling means: `mov` (the bare assignment of §5.3),
-  `add`, `sub`, `and`, `or`, `xor`, `not` (`~`), and the operators already spelled
-  as words — `adc`, `sbb`, `shl`, `shr`, `sar`, `rol`, `ror`, `rcl`, `rcr`,
-  `mul`, `imul`, `div`, `idiv`.
+  `add`, `sub`, `and`, `or`, `xor`, `not` (`~`), `neg`, and the operators already
+  spelled as words — `adc`, `sbb`, `shl`, `shr`, `sar`, `rol`, `ror`, `rcl`,
+  `rcr`, `mul`, `imul`, `div`, `idiv`.
 * **Refused, with the reason**, because the machine's instruction and the surface
   operation it looks like are **not the same operation**:
   * `inc d` / `dec d` — the carry is the difference, and it is exactly the kind a
@@ -679,10 +686,6 @@ familiar spelling, and the meaning would then be a guess. So:
     carry consumer would read a different `CF`. The target description says the
     same thing in its own vocabulary, which is why `inc` is a form of its own
     marked as not keeping the flags (`Form.keepsFlags()`).
-  * `neg d` — the surface has no operation that means it. `d = eval(0 - d)` has
-    the same value and the same flags, but it is different code: `NEG` is one
-    byte on this machine, and that spelling would materialise a zero to subtract
-    from.
   * `mul r` / `imul r` / `div r` / `idiv r` / `cwd` / `cbw` — one operand or
     none, with `ax` and `dx` read and written behind the writer's back. The
     two-operand `mul d, s` is fine, because that one *is* the surface's
@@ -691,12 +694,25 @@ familiar spelling, and the meaning would then be a guess. So:
     string operations — several effects at once, or an addressing form, or a
     target operation of §11 with no surface spelling yet.
 
+`neg d` is in the first list on purpose, and it is worth saying why, because the
+obvious argument cuts the other way. `NEG` **is** subtraction from zero: the
+manual defines its flags as `CF` cleared exactly when the operand is zero and the
+rest from the result, which is what subtracting from zero gives, so
+`neg d`, `d = eval(-d)` and `d = eval(0 - d)` are one operation in three
+spellings and nothing about the program changes between them.
+
 The distinction in that list is **not** "the machine's flags match the surface's
 exactly" — for `~`, `rol` and `ror` they do not, and §4.2's per-flag effects are
 what would fix that. It is that one spelling must mean what the other spelling of
-it means: `not d` and `d = eval(~d)` are one statement written twice, while
-`inc d` and `d = eval(d + 1)` are two different programs. Only the first kind may
-share a name.
+it means: `not d` and `d = eval(~d)` are one statement written twice, and so are
+`neg d` and `d = eval(0 - d)`, while `inc d` and `d = eval(d + 1)` are two
+different programs. Only the first kind may share a name.
+
+One thing this costs, which is a target's business and not the surface's: the
+spelling must not be worse than what it is a spelling of. `d = eval(0 - d)`
+compiles today to a copy, a zero and a subtract — seven bytes where `NEG` is two —
+so accepting `neg d` goes together with the target listing `NEG` as a form of the
+negation (§5.5, §5.6), not before it.
 
 **A register name is not an operand here.** `mov ax, 1` would otherwise name a
 *variable* called `ax` — legal, since a variable is a virtual register whose name
