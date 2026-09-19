@@ -291,37 +291,47 @@ the allocator does with the value. It is for a home that somebody else reads —
 handler, the next stage, or a program that patches the image. It costs a store per
 definition, which is what asking for it means.
 
-**A program may also write a home itself, and that is a save — and a save is kept.**
-`tries = left` stores `left`'s value into those bytes wherever the value happens to be
-living, and it is a store like any other. What is worth stating is what happens
-afterwards, because a home is shared between the program and the allocator, and when
-they disagree **the program's write is the one that stands**:
+**A program may also write a home itself, and that is a save — and whether it is kept
+depends on the cell.** `tries = left` stores `left`'s value into those bytes wherever
+the value happens to be living, and the store happens: it is a half-volatile write like
+any other, so nothing removes it, duplicates it, or moves anything across it. What the
+store does not buy is the bytes *staying* that way, because a home is shared between
+the program and the allocator, and which of the two has the last word is what the cell
+was declared to be:
 
 * **A cell no variable declares as a home is the program's alone.** The compiler has no
   reason to write it and no permission to, so what the program puts there stays until
   the program writes it again.
 * **A `writethrough` home holds that variable's current value**, which is what that mode
-  is, so a value saved there lasts until the variable is next assigned. The cell is the
-  variable's and not the program's, which is the other half of why the mode is exclusive
-  (the rule below).
-* **Any other home is the program's from its first save.** The allocator may put a value
-  in such a cell only where that value's life **contains no write by the program to those
-  bytes** — so a cell the program saves into stops being scratch from that point on, and
-  nothing the allocator does can displace what was saved. What that costs is the
-  allocator's freedom, and the price is paid where it can be seen: a value whose only
-  home is a cell the program writes past, and which cannot be held in a register there,
-  is refused with a message naming the cell and the write — and the fix is a cell the
-  program does not share with a variable in the first place.
+  is: the compiler writes the cell on every definition, and a value saved there lasts
+  until the variable is next assigned. The cell is the variable's and not the allocator's
+  scratch, which is the other half of why that mode is exclusive (the rule below).
+* **Any other home is the allocator's**, and a value the program saves there is **not
+  guaranteed** to survive. The allocator may put any value whose home that cell is into
+  it, so a later read of those bytes may find the allocator's value rather than the saved
+  one. That is not a promise the compiler breaks; it is one it never made, and it says so:
+  **the compiler warns at the write**, because a program that saves into a cell it shares
+  with the allocator is relying on an accident of the allocation. The warning is exact
+  about the accident, too — the cell is shared, and a small change elsewhere, one more
+  simultaneously live value, can be the change that makes the allocator put something else
+  there. The two ways out are to make that variable's home `writethrough`, or to save into
+  a cell no variable declares.
 
-In one sentence: **what the program writes into a home stays there until the program
-writes it again** — except in `writethrough`, where the cell belongs to the variable
-and holds its current value.
+That last case is the one a boot loader's author will meet, and the warning is what makes
+it survivable: they are expected to read and test the assembly their program became, and a
+warning that says those bytes are not theirs is the thing to read it with.
 
-The same rule read the other way round is what keeps the allocator honest: a value
-living in a cell does **not** survive a write of something else to those bytes, so the
-allocator may not have one living there across such a write. It has to be in a register
-there instead, or the program is refused — never a quiet wrong answer, which is the same
-promise §8.2 makes about the stack.
+In one sentence: **a save into a cell no variable declares is kept, a `writethrough` cell
+holds the variable's value by construction, and anything else is the allocator's cell** —
+written, warned about, and not promised.
+
+The other direction needs the opposite rule, and it is the allocator's to keep: a value
+**living** in a shared cell does not survive a write of something else to those bytes, so
+the allocator may not have one living there across a write by the program. It has to be in
+a register there instead, or the program is refused. Never a quiet wrong answer — the same
+promise §8.2 makes about the stack, and the reason this direction cannot be left to a
+warning: a warning is for what the program may rely on and will not get, and a register or
+a refusal is for the value the compiler would otherwise lose.
 
 **A write to a home is half of a volatile write.** That covers the stores
 `writethrough` demands and the ones a program writes itself, `tries = left` among them.
