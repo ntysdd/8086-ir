@@ -113,7 +113,8 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    legal, so a machine-IR instruction is always a combination the target can
    actually encode — a memory+memory `add` is split here, not later.
 3. **Build SSA**: compute dominators, insert φ-nodes, promote memory to
-   registers where safe. SSA is the canonical form for everything downstream.
+   registers where safe. SSA is the canonical form for everything downstream,
+   and what it looks like is specified in [`docs/ssa.md`](docs/ssa.md).
    Flag values are handled here too: a virtual flag register is an ordinary
    value, and when one would have to live across an instruction that defines
    those flags, SSA construction materialises it with the explicit read-flags
@@ -194,6 +195,7 @@ dependency-free test suite:
 ```
 build.bat                                   # compile everything, run all tests
 build.bat run optimize examples/hello.ir -o hello.asm
+build.bat run ssa examples/hello.ir         # the SSA form, on standard output
 build.bat run assemble hello.asm -o hello.bin
 ```
 
@@ -216,8 +218,9 @@ build.bat run assemble hello.asm -o hello.bin
 
 ## Status
 
-The pipeline runs end to end: IR text in, assembly text out. What is missing is
-its middle.
+The pipeline runs end to end: IR text in, assembly text out, with SSA
+construction and verification in the middle. What is missing is the passes that
+would read the form, and the assembler that would turn the output into bytes.
 
 Working today:
 
@@ -225,6 +228,12 @@ Working today:
   verification, so `parse(print(ir)) == ir` and every refusal carries a position.
 * The control-flow sugar of §7.2 — `.if`, `.elseif`, `.else`, `.while` —
   normalised away as it is read, into comparisons, branches and labels.
+* **SSA construction and verification**, described in [`docs/ssa.md`](docs/ssa.md):
+  the control flow graph, dominators and the dominance frontier, liveness, φ
+  placement, and the renaming walk. Every variable is renamed — the flags
+  included — and every use names the definition that reaches it. The form is
+  built and verified on every compile, so every program the tests compile is
+  evidence for both; `8086-ir ssa FILE.ir` prints it. No pass reads it yet.
 * The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it.
 * Instruction selection and register allocation, enough to compile arithmetic on
@@ -236,19 +245,25 @@ Working today:
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
-Not built yet, and refused with a reason rather than guessed at: the SSA middle
-of the pipeline and every optimization pass, instruction selection for loads and
-stores, conversions, `setcc`, an instruction whose operands are implicit
-(`mul`, `div`, a shift by a count in a register), and the assembler.
+Not built yet, and refused with a reason rather than guessed at: every
+optimization pass, instruction selection for loads and stores, conversions,
+`setcc`, an instruction whose operands are implicit (`mul`, `div`, a shift by a
+count in a register), and the assembler. SSA construction does not yet
+materialise a flag value that has to survive an instruction defining those flags,
+because the target does not state its flag effects per flag yet — and nothing
+asks it to.
 
 Planned milestones:
 
 1. IR definition, parser, printer, verifier, and the target description the
-   rest of the pipeline reads 8086 facts from.
+   rest of the pipeline reads 8086 facts from. **Done.**
 2. Bundled assembler (encode + label resolution + branch relaxation) for 8086.
-3. SSA construction and verification.
+3. SSA construction and verification. **Done**, apart from the flag
+   materialisation that waits on the target's per-flag effects.
 4. Core optimization passes.
-5. 8086 instruction selection and register allocation.
+5. 8086 instruction selection and register allocation. **Partly done**: enough
+   for arithmetic, comparisons and control flow; loads, stores and conversions
+   are refused with a reason.
 6. `sim` interpreter, and an end-to-end example that assembles and runs.
 7. A second backend on top of the existing target description, to prove that
    the boundary holds without touching pass code.

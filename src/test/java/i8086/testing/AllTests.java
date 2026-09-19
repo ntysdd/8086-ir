@@ -16,6 +16,10 @@ public final class AllTests {
         i8086.ir.IrParserTest.register(suite);
         i8086.ir.IrSugarTest.register(suite);
         i8086.ir.IrVerifierTest.register(suite);
+        i8086.ssa.CfgTest.register(suite);
+        i8086.ssa.DominatorsTest.register(suite);
+        i8086.ssa.SsaBuilderTest.register(suite);
+        i8086.ssa.SsaVerifierTest.register(suite);
         i8086.emit.AsmEmitterTest.register(suite);
         i8086.CompilerTest.register(suite);
     }

@@ -7,6 +7,10 @@ import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
 import i8086.regalloc.RegisterAllocator;
+import i8086.ssa.SsaBuilder;
+import i8086.ssa.SsaForm;
+import i8086.ssa.SsaPrinter;
+import i8086.ssa.SsaVerifier;
 import i8086.target.Target;
 import i8086.target.Targets;
 
@@ -18,11 +22,20 @@ import i8086.target.Targets;
  * touching the file system ({@code AGENTS.md}, "keep command-line entry points
  * thin").
  *
- * <p>The order is the pipeline of {@code README.md}: parse, verify, select
- * instructions, allocate registers, emit. What is not here yet is the middle of
- * the optimiser — SSA and the passes — which goes between verifying and
- * selecting, and which is why a program can be compiled today but not yet
- * improved.
+ * <p>The order is the pipeline of {@code README.md}: parse, verify, build SSA,
+ * verify the SSA, select instructions, allocate registers, emit. A stage that
+ * rewrites what it was given runs on verified input and has its output verified
+ * in turn, which is the first invariant — and the reason the verifications are
+ * named here rather than hidden inside the stages that produce what they check.
+ *
+ * <p>SSA construction is on this path even though no pass consumes its result
+ * yet, and deliberately: a module this compiler accepts is one that survives
+ * being renamed, so the renaming and the SSA verifier between them have every
+ * program the tests compile as evidence. The passes that read the form come next.
+ *
+ * <p>Nothing here is target-specific. The SSA form is built and checked in the
+ * IR's own vocabulary; selection and allocation are the only stages that ask a
+ * target anything ({@code AGENTS.md}, invariant 2).
  */
 public final class Compiler {
 
@@ -39,13 +52,46 @@ public final class Compiler {
      */
     public static String compile(String file, String source) {
         Module module = IrParser.parse(file, source);
+        verify(module);
         Target target = targetOf(module);
-        IrVerifier.verify(module, target);
         Selection selected = InstructionSelector.select(module, target);
         Selection allocated = RegisterAllocator.allocate(selected, target);
         return AsmEmitter.emit(module, allocated);
     }
 
+    /**
+     * The SSA form of a module, for a dump or for a pass that will read one.
+     *
+     * <p>It is the same module the compiler would compile, and it has survived the
+     * same verifications in the same order before this returns anything.
+     */
+    public static SsaForm ssa(String file, String source) {
+        return verify(IrParser.parse(file, source));
+    }
+
+    /** The SSA form, printed. This is what the {@code ssa} command writes. */
+    public static String printSsa(String file, String source) {
+        return SsaPrinter.print(ssa(file, source));
+    }
+
+    /**
+     * Everything the input has to survive before anything acts on it, and the SSA
+     * form it survived into.
+     *
+     * <p>Both verifications are here, in order, so that one place says what "this
+     * compiler accepts" means: the surface's own rules first, and then the SSA
+     * property of what renaming that produced. The form is handed back rather than
+     * dropped, so that a caller wanting one does not build it twice.
+     */
+    private static SsaForm verify(Module module) {
+        Target target = targetOf(module);
+        IrVerifier.verify(module, target);
+        SsaForm form = SsaBuilder.build(module);
+        SsaVerifier.verify(form);
+        return form;
+    }
+
+    /** The target a module names, which the parser has already checked it names. */
     private static Target targetOf(Module module) {
         Target target = Targets.byName(module.target());
         if (target == null) {

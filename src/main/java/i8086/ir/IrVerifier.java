@@ -5,11 +5,6 @@ import i8086.SourcePos;
 import i8086.asm.Size;
 import i8086.target.Target;
 
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
-
 /**
  * Checks that a parsed module means something, before anything acts on it.
  *
@@ -47,20 +42,17 @@ import java.util.Set;
  */
 public final class IrVerifier {
 
-    /** The flag set: the one name a module uses without declaring it (§4.1). */
-    private static final String FLAGS = "flags";
-
     /** The width of a label used as a value: a near pointer, so two bytes (§3.3). */
     private static final int POINTER_BYTES = 2;
 
     private final Module module;
     private final Target target;
-    private final Map<String, Type> variables = new LinkedHashMap<String, Type>();
-    private final Set<String> labels = new LinkedHashSet<String>();
+    private final Names names;
 
     private IrVerifier(Module module, Target target) {
         this.module = module;
         this.target = target;
+        this.names = Names.of(module);
     }
 
     public static void verify(Module module, Target target) {
@@ -68,48 +60,14 @@ public final class IrVerifier {
     }
 
     private void run() {
-        collectNames();
         checkEntry();
         checkItems();
     }
 
     // --- names -------------------------------------------------------------
 
-    private void collectNames() {
-        for (Item item : module.items()) {
-            if (item instanceof Item.Label) {
-                declareLabel(((Item.Label) item).name(), item.position());
-            } else if (item instanceof Item.Data) {
-                String label = ((Item.Data) item).label();
-                if (label != null) {
-                    declareLabel(label, item.position());
-                }
-            } else if (item instanceof Item.Var) {
-                declareVariable((Item.Var) item);
-            }
-        }
-    }
-
-    private void declareLabel(String name, SourcePos where) {
-        require(!labels.contains(name), where, "the label '" + name + "' is already defined");
-        require(!variables.containsKey(name), where,
-                "'" + name + "' is already a variable, so it cannot also be a label");
-        labels.add(name);
-    }
-
-    private void declareVariable(Item.Var variable) {
-        require(!variable.name().equals(FLAGS), variable.position(),
-                "'" + FLAGS + "' is the flag set, which every module already has, so it cannot "
-                        + "be declared");
-        require(!variables.containsKey(variable.name()), variable.position(),
-                "the variable '" + variable.name() + "' is already declared");
-        require(!labels.contains(variable.name()), variable.position(),
-                "'" + variable.name() + "' is already a label, so it cannot also be a variable");
-        variables.put(variable.name(), variable.type());
-    }
-
     private void checkEntry() {
-        require(labels.contains(module.entry()), module.entryPosition(),
+        require(names.isLabel(module.entry()), module.entryPosition(),
                 "the entry label '" + module.entry() + "' is never defined");
     }
 
@@ -156,7 +114,7 @@ public final class IrVerifier {
         if (item instanceof Item.InlineAsm) {
             Item.InlineAsm block = (Item.InlineAsm) item;
             checkInlineAsm(block);
-            return block.clobbers().contains(FLAGS) ? false : flagsDefined;
+            return block.clobbers().contains(Names.FLAGS) ? false : flagsDefined;
         }
         if (item instanceof Item.Jump) {
             checkLabelTarget(((Item.Jump) item).target(), item.position());
@@ -242,10 +200,10 @@ public final class IrVerifier {
     }
 
     private void checkLabelTarget(String target, SourcePos where) {
-        if (labels.contains(target)) {
+        if (names.isLabel(target)) {
             return;
         }
-        require(!variables.containsKey(target), where,
+        require(!names.isVariable(target), where,
                 "'" + target + "' is a variable, so it names no place to branch to");
         throw new CompileError(where,
                 "the branch target '" + target + "' is never defined as a label");
@@ -280,8 +238,8 @@ public final class IrVerifier {
 
     private void checkInlineAsm(Item.InlineAsm block) {
         for (String clobber : block.clobbers()) {
-            require(target.isRegister(clobber) || clobber.equals(FLAGS), block.position(),
-                    "'" + clobber + "' is neither a register nor '" + FLAGS + "'");
+            require(target.isRegister(clobber) || clobber.equals(Names.FLAGS), block.position(),
+                    "'" + clobber + "' is neither a register nor '" + Names.FLAGS + "'");
         }
     }
 
@@ -353,7 +311,7 @@ public final class IrVerifier {
      */
     private Boolean signednessOf(Value value) {
         if (value instanceof Value.Name) {
-            Type type = variables.get(((Value.Name) value).name());
+            Type type = names.typeOf(((Value.Name) value).name());
             return type == null ? null : Boolean.valueOf(type.isSigned());
         }
         return null;
@@ -431,8 +389,8 @@ public final class IrVerifier {
                             + "load; put the load in a variable first (docs/ir.md §5.2)");
         }
         if (form == ExpressionForm.EXPR && value instanceof Value.Name
-                && !variables.containsKey(((Value.Name) value).name())) {
-            require(!labels.contains(((Value.Name) value).name()), value.position(),
+                && !names.isVariable(((Value.Name) value).name())) {
+            require(!names.isLabel(((Value.Name) value).name()), value.position(),
                     "expr works on variables, and '" + ((Value.Name) value).name()
                             + "' is a label, which is an address; put it in a variable first "
                             + "(docs/ir.md §5.2)");
@@ -488,10 +446,10 @@ public final class IrVerifier {
         }
         if (value instanceof Value.Name) {
             Value.Name named = (Value.Name) value;
-            if (variables.containsKey(named.name())) {
-                return Integer.valueOf(variables.get(named.name()).bytes());
+            if (names.isVariable(named.name())) {
+                return Integer.valueOf(names.typeOf(named.name()).bytes());
             }
-            require(labels.contains(named.name()), named.position(),
+            require(names.isLabel(named.name()), named.position(),
                     "unknown name '" + named.name() + "': no variable or label has that name");
             return Integer.valueOf(POINTER_BYTES);
         }
@@ -548,7 +506,7 @@ public final class IrVerifier {
                     "'" + segment + "' is not a segment register on this target");
         }
         String base = operand.base();
-        if (base == null || variables.containsKey(base) || labels.contains(base)) {
+        if (base == null || names.isVariable(base) || names.isLabel(base)) {
             return;
         }
         throw new CompileError(operand.position(),
@@ -557,11 +515,11 @@ public final class IrVerifier {
 
     /** The type of a variable, complaining usefully when the name is something else. */
     private Type variable(String name, SourcePos where) {
-        Type type = variables.get(name);
+        Type type = names.typeOf(name);
         if (type != null) {
             return type;
         }
-        if (labels.contains(name)) {
+        if (names.isLabel(name)) {
             throw new CompileError(where,
                     "'" + name + "' is a label, and a label is an address, so it cannot be "
                             + "assigned to");

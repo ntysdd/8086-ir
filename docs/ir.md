@@ -82,7 +82,17 @@ This distinction is load-bearing. It is what makes `expr` pure (§5.2), and it i
 what makes `mov dx, offset msg` meaningful inside an inline assembly block.
 
 The input is not SSA. Variables are mutable and are written more than once; SSA
-construction renames them.
+construction renames them, and [`docs/ssa.md`](ssa.md) is where the form it
+produces is described.
+
+* **[open]** reading a variable before anything has written it is **not checked**.
+  Nothing in the surface says a variable has to be assigned first, and nothing in
+  the compiler asks, so `var x: u16` followed by `y = eval(x + 1)` is accepted and
+  reads whatever the register happens to hold. SSA construction has to be able to
+  say "nothing defines this", and says it with the variable's undefined value
+  ([`docs/ssa.md`](ssa.md) §5). Adding the check is a decision rather than an
+  implementation detail, because it would refuse programs this compiler accepts
+  today, and precision may only ever grow (§4.3).
 
 ### 3.2 Widths and signedness — [decided]
 
@@ -700,6 +710,9 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 9. Whether a literal may be written negative (§3.2).
 10. How fine the flags check's granularity is: per bit, or per whole flag set
     (§4.3).
+11. Whether reading a variable before anything has assigned it is refused (§3.1),
+    and therefore whether the undefined value of a variable (§5 of
+    [`docs/ssa.md`](ssa.md)) is a construct the surface keeps.
 
 ## 13. Non-goals for v1
 

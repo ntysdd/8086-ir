@@ -45,12 +45,38 @@ public final class Main {
             err.println("error: 'assemble' is not implemented yet; only the IR can be compiled");
             return EXIT_FAILED;
         }
+        if (command.equals("ssa")) {
+            return dumpSsa(args, first + 1, out, err);
+        }
         if (!command.equals("optimize")) {
             err.println("error: unknown command '" + command + "'");
             printUsage(err);
             return EXIT_USAGE;
         }
         return optimize(args, first + 1, out, err);
+    }
+
+    /**
+     * Writes the SSA form of a module, which is a dump rather than a file to keep:
+     * it goes to standard output and takes no {@code -o}.
+     */
+    private static int dumpSsa(String[] args, int from, PrintStream out, PrintStream err) {
+        if (args.length - from != 1) {
+            err.println("error: expected one input file");
+            return EXIT_USAGE;
+        }
+        String input = args[from];
+        String source = read(input, err);
+        if (source == null) {
+            return EXIT_FAILED;
+        }
+        try {
+            out.print(Compiler.printSsa(input, source));
+            return EXIT_OK;
+        } catch (CompileError refused) {
+            err.println(refused.format());
+            return EXIT_FAILED;
+        }
     }
 
     private static int optimize(String[] args, int from, PrintStream out, PrintStream err) {
@@ -76,11 +102,8 @@ public final class Main {
             return EXIT_USAGE;
         }
 
-        String source;
-        try {
-            source = new String(Files.readAllBytes(new File(input).toPath()), UTF_8);
-        } catch (IOException failure) {
-            err.println("error: cannot read " + input + ": " + failure.getMessage());
+        String source = read(input, err);
+        if (source == null) {
             return EXIT_FAILED;
         }
 
@@ -90,6 +113,16 @@ public final class Main {
         } catch (CompileError refused) {
             err.println(refused.format());
             return EXIT_FAILED;
+        }
+    }
+
+    /** Reads a file, saying what went wrong when it cannot. */
+    private static String read(String input, PrintStream err) {
+        try {
+            return new String(Files.readAllBytes(new File(input).toPath()), UTF_8);
+        } catch (IOException failure) {
+            err.println("error: cannot read " + input + ": " + failure.getMessage());
+            return null;
         }
     }
 
@@ -110,5 +143,6 @@ public final class Main {
 
     private static void printUsage(PrintStream out) {
         out.println("usage: 8086-ir optimize INPUT.ir -o OUTPUT.asm");
+        out.println("       8086-ir ssa INPUT.ir              ; the SSA form, on standard output");
     }
 }

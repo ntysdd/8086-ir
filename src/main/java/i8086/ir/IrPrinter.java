@@ -44,6 +44,19 @@ public final class IrPrinter {
                 || (item instanceof Item.Data && ((Item.Data) item).label() != null);
     }
 
+    /**
+     * Writes one item, in the same syntax the module printer uses for it.
+     *
+     * <p>One item at a time is what a dump of a derived form needs, and it goes
+     * through this printer rather than its own so that the surface has one
+     * spelling and not two.
+     */
+    public static String print(Item item) {
+        StringBuilder text = new StringBuilder();
+        printItem(text, item);
+        return text.toString();
+    }
+
     private static void printItem(StringBuilder text, Item item) {
         if (item instanceof Item.Label) {
             text.append(((Item.Label) item).name()).append(":\n");
