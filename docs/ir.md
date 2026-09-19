@@ -71,6 +71,10 @@ exists.
 memory access. Whether the allocator keeps it in a register or spills it to the
 frame is invisible at this level.
 
+A name may not be a word the surface already uses for something else — a type
+prefix such as `byte`, or a data directive such as `db`. Such a declaration is
+refused, because the meaning of the word would then depend on where you looked.
+
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 
 This distinction is load-bearing. It is what makes `expr` pure (§5.2), and it is
@@ -164,6 +168,9 @@ t = x            ; same width, other signedness: a free reinterpretation
 variable, and materialises it — through a target-declared expansion — when a
 flag value has to survive an instruction that defines those flags. The user
 never writes `LAHF`, `SAHF` or `PUSHF` by hand.
+
+It is **predeclared**: no module declares it, and a module that tries to declare
+that name is refused, because one name cannot be two things.
 
 ### 4.2 Flag effects are three-state and belong to the target — [decided]
 

@@ -40,6 +40,10 @@ public final class IrParserTest {
         suite.add("Ir parser reads an inline assembly block", IrParserTest::readsInlineAsm);
         suite.add("Ir parser reads data definitions", IrParserTest::readsData);
         suite.add("Ir parser reads memory operands", IrParserTest::readsMemoryOperands);
+        suite.add("Ir parser reads variable declarations and assignments",
+                IrParserTest::readsVariablesAndAssignments);
+        suite.add("Ir printer round-trips variables and assignments",
+                IrParserTest::roundTripsVariablesAndAssignments);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
         suite.add("Ir printer reaches a fixed point on loose input", IrParserTest::reachesFixedPoint);
         suite.add("Ir printer is deterministic", IrParserTest::printsDeterministically);
@@ -55,6 +59,12 @@ public final class IrParserTest {
         suite.add("Ir parser refuses a size prefix without a memory operand",
                 IrParserTest::refusesSizeWithoutMemory);
         suite.add("Ir parser refuses an empty bracket", IrParserTest::refusesEmptyBracket);
+        suite.add("Ir parser refuses an unknown type", IrParserTest::refusesUnknownType);
+        suite.add("Ir parser refuses a declaration without a colon", IrParserTest::refusesBareVar);
+        suite.add("Ir parser refuses two names in an address", IrParserTest::refusesTwoNamesInAddress);
+        suite.add("Ir parser refuses a value that is not a value", IrParserTest::refusesBadValue);
+        suite.add("Ir parser refuses a word of the syntax as a name",
+                IrParserTest::refusesKeywordAsName);
         suite.add("Ir parser refuses an unterminated statement", IrParserTest::refusesTrailingToken);
         suite.add("Ir parser names the constructs it does not implement yet",
                 IrParserTest::namesUnimplemented);
@@ -139,6 +149,65 @@ public final class IrParserTest {
         Assert.assertEquals(4L, block.body().size());
     }
 
+    private static void readsVariablesAndAssignments() {
+        Module module = parse("target 8086\norg 0\nentry main\n"
+                + "main:\n"
+                + "    var count: u16\n"
+                + "    var p: u32\n"
+                + "    count = 0\n"
+                + "    p = msg\n"
+                + "    count = word [p + 2]\n"
+                + "    byte [p - 1] = 1\n"
+                + "    es:[0x1234] = count\n");
+
+        Item.Var count = (Item.Var) module.items().get(1);
+        Assert.assertEquals("count", count.name());
+        Assert.assertEquals(Type.U16, count.type());
+        Assert.assertEquals(Type.U32, ((Item.Var) module.items().get(2)).type());
+
+        Item.Assign literal = (Item.Assign) module.items().get(3);
+        Assert.assertEquals("count", ((Place.Name) literal.place()).name());
+        Assert.assertEquals(0L, ((Value.Number) literal.value()).value());
+
+        Item.Assign address = (Item.Assign) module.items().get(4);
+        Assert.assertEquals("msg", ((Value.Name) address.value()).name());
+
+        MemoryOperand load = ((Value.Memory) ((Item.Assign) module.items().get(5)).value())
+                .operand();
+        Assert.assertEquals(Size.WORD, load.size());
+        Assert.assertEquals("p", load.base());
+        Assert.assertEquals(2L, load.displacement());
+
+        MemoryOperand store = ((Place.Memory) ((Item.Assign) module.items().get(6)).place())
+                .operand();
+        Assert.assertEquals(Size.BYTE, store.size());
+        Assert.assertEquals(-1L, store.displacement());
+
+        MemoryOperand overridden = ((Place.Memory) ((Item.Assign) module.items().get(7)).place())
+                .operand();
+        Assert.assertEquals("es", overridden.segment());
+        Assert.assertNull(overridden.base(), "a bare displacement names no base");
+        Assert.assertEquals(0x1234L, overridden.displacement());
+    }
+
+    private static void roundTripsVariablesAndAssignments() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry main\n"
+                + "\n"
+                + "main:\n"
+                + "    var count: u16\n"
+                + "    var p: u16\n"
+                + "    p = msg\n"
+                + "    count = word [p]\n"
+                + "    word [p + 2] = count\n"
+                + "    byte [p] = 1\n"
+                + "    ret\n"
+                + "\n"
+                + "msg: dw 0x1234\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+    }
+
     private static void reproducesCanonical() {
         Assert.assertEquals(HELLO, IrPrinter.print(parse(HELLO)));
     }
@@ -219,16 +288,41 @@ public final class IrParserTest {
                 () -> parse("target 8086\norg 0\nentry a\n    asm clobbers() {\n        mov ax, []\n    }\n"));
     }
 
+    private static void refusesUnknownType() {
+        Assert.assertRefused("test.ir:4:12",
+                () -> parse("target 8086\norg 0\nentry a\n    var x: u64\n"));
+    }
+
+    private static void refusesBareVar() {
+        Assert.assertRefused("test.ir:4:11",
+                () -> parse("target 8086\norg 0\nentry a\n    var x u16\n"));
+    }
+
+    private static void refusesTwoNamesInAddress() {
+        Assert.assertRefused("test.ir:5:14",
+                () -> parse("target 8086\norg 0\nentry a\n    var x: u16\n    x = [p + q]\n"));
+    }
+
+    private static void refusesBadValue() {
+        Assert.assertRefused("test.ir:5:9",
+                () -> parse("target 8086\norg 0\nentry a\n    var x: u16\n    x = +\n"));
+    }
+
+    private static void refusesKeywordAsName() {
+        Assert.assertRefused("test.ir:4:9",
+                () -> parse("target 8086\norg 0\nentry a\n    var byte: u16\n"));
+    }
+
     private static void refusesTrailingToken() {
         Assert.assertRefused("test.ir:4:5",
                 () -> parse("target 8086\norg 0\nentry a\nret 1\n"));
     }
 
     private static void namesUnimplemented() {
-        CompileError variable = Assert.assertRefused("test.ir:4:1",
-                () -> parse("target 8086\norg 0\nentry a\nvar x: u16\n"));
-        Assert.assertTrue(variable.getMessage().startsWith("not implemented yet:"),
-                "a variable declaration says so: " + variable.getMessage());
+        CompileError comparison = Assert.assertRefused("test.ir:4:1",
+                () -> parse("target 8086\norg 0\nentry a\ncmp x, y\n"));
+        Assert.assertTrue(comparison.getMessage().startsWith("not implemented yet:"),
+                "a comparison says so: " + comparison.getMessage());
 
         CompileError sugar = Assert.assertRefused("test.ir:4:1",
                 () -> parse("target 8086\norg 0\nentry a\n.if 1\n"));

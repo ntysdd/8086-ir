@@ -49,9 +49,69 @@ public final class IrPrinter {
             text.append(INDENT).append("ret\n");
         } else if (item instanceof Item.Data) {
             printData(text, (Item.Data) item);
+        } else if (item instanceof Item.Var) {
+            printVar(text, (Item.Var) item);
+        } else if (item instanceof Item.Assign) {
+            printAssign(text, (Item.Assign) item);
         } else {
             printInlineAsm(text, (Item.InlineAsm) item);
         }
+    }
+
+    private static void printVar(StringBuilder text, Item.Var var) {
+        text.append(INDENT).append("var ").append(var.name()).append(": ")
+                .append(var.type().spelling()).append('\n');
+    }
+
+    private static void printAssign(StringBuilder text, Item.Assign assign) {
+        text.append(INDENT).append(printPlace(assign.place())).append(" = ")
+                .append(printValue(assign.value())).append('\n');
+    }
+
+    private static String printPlace(Place place) {
+        return place instanceof Place.Name
+                ? ((Place.Name) place).name()
+                : printMemoryOperand(((Place.Memory) place).operand());
+    }
+
+    private static String printValue(Value value) {
+        if (value instanceof Value.Name) {
+            return ((Value.Name) value).name();
+        }
+        if (value instanceof Value.Number) {
+            return Numbers.spelling(((Value.Number) value).value());
+        }
+        return printMemoryOperand(((Value.Memory) value).operand());
+    }
+
+    /**
+     * Prints a memory operand the way {@code docs/ir.md} §3.4 writes one,
+     * {@code word [p + 2]}, with spaces around the sign.
+     *
+     * <p>The assembly text writes the same shape without them, {@code [bx+si+2]},
+     * as {@code docs/asm.md} §4 shows. They are two surfaces with two spellings,
+     * each canonical for its own, and neither is a mistake for the other.
+     */
+    private static String printMemoryOperand(MemoryOperand operand) {
+        StringBuilder text = new StringBuilder();
+        if (operand.size() != null) {
+            text.append(operand.size().spelling()).append(' ');
+        }
+        if (operand.segment() != null) {
+            text.append(operand.segment()).append(':');
+        }
+        text.append('[');
+        if (operand.base() != null) {
+            text.append(operand.base());
+        }
+        if (operand.base() == null) {
+            text.append(Numbers.spelling(operand.displacement()));
+        } else if (operand.displacement() != 0) {
+            long displacement = operand.displacement();
+            text.append(displacement < 0 ? " - " : " + ");
+            text.append(Numbers.spelling(Math.abs(displacement)));
+        }
+        return text.append(']').toString();
     }
 
     private static void printData(StringBuilder text, Item.Data data) {

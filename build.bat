@@ -28,6 +28,10 @@ set "BUILD=%ROOT%build"
 set "CLASSES=%BUILD%\classes"
 set "TESTCLASSES=%BUILD%\test-classes"
 set "JAVAC_FLAGS=--release 8 -Xlint:all,-options -encoding UTF-8"
+rem Diagnostics in English whatever the machine's locale says, so that a build
+rem log reads the same everywhere and can be grepped and diffed.
+set "JAVAC_FLAGS=%JAVAC_FLAGS% -J-Duser.language=en -J-Duser.country=US"
+set "JAVA_FLAGS=-Duser.language=en -Duser.country=US"
 
 if /i "%~1"=="clean" (
     if exist "%BUILD%" rmdir /s /q "%BUILD%"
@@ -56,7 +60,7 @@ if not exist "%TESTCLASSES%" mkdir "%TESTCLASSES%"
 javac %JAVAC_FLAGS% -cp "%CLASSES%" -d "%TESTCLASSES%" @"%BUILD%\test-sources.txt"
 if errorlevel 1 goto :compile-failed
 
-java -cp "%CLASSES%;%TESTCLASSES%" i8086.testing.TestMain
+java %JAVA_FLAGS% -cp "%CLASSES%;%TESTCLASSES%" i8086.testing.TestMain
 if errorlevel 1 goto :tests-failed
 
 echo build: OK
@@ -67,7 +71,7 @@ rem ---------------------------------------------------------------------------
 rem The whole command line is passed through, leading `run` and all, and
 rem i8086.cli.Main drops that first word: batch cannot rebuild a shifted
 rem argument list without losing the quoting it was given.
-java -cp "%CLASSES%" i8086.cli.Main %*
+java %JAVA_FLAGS% -cp "%CLASSES%" i8086.cli.Main %*
 exit /b %errorlevel%
 
 :collect

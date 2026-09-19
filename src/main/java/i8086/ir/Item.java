@@ -119,6 +119,59 @@ public abstract class Item {
     }
 
     /**
+     * A declaration: {@code var x: u16}.
+     *
+     * <p>It introduces a mutable virtual register, not a memory location. The
+     * input is not SSA; SSA construction renames these away.
+     */
+    public static final class Var extends Item {
+
+        private final String name;
+        private final Type type;
+
+        public Var(SourcePos position, String name, Type type) {
+            super(position);
+            this.name = name;
+            this.type = type;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        public Type type() {
+            return type;
+        }
+    }
+
+    /**
+     * An assignment: {@code x = 5}, {@code [p] = x}, {@code p = msg}.
+     *
+     * <p>The two sides must have the same width. Signedness may differ, because
+     * that changes no bits and emits no instruction; any change of width is
+     * written as a conversion ({@code docs/ir.md} §3.5).
+     */
+    public static final class Assign extends Item {
+
+        private final Place place;
+        private final Value value;
+
+        public Assign(SourcePos position, Place place, Value value) {
+            super(position);
+            this.place = place;
+            this.value = value;
+        }
+
+        public Place place() {
+            return place;
+        }
+
+        public Value value() {
+            return value;
+        }
+    }
+
+    /**
      * An inline assembly block: the escape hatch for register-based interfaces
      * ({@code docs/ir.md} §9).
      *

@@ -8,6 +8,7 @@ import i8086.asm.Size;
 import i8086.asm.Token;
 import i8086.asm.TokenKind;
 import i8086.asm.Tokenizer;
+import i8086.target.Targets;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -26,7 +27,6 @@ import java.util.List;
  */
 public final class IrParser {
 
-    private static final String TARGET_8086 = "8086";
     private static final int MAX_ORIGIN = 0xFFFF;
 
     private final String file;
@@ -46,6 +46,7 @@ public final class IrParser {
         SourcePos start = peek().position();
         String target = null;
         String entry = null;
+        SourcePos entryPosition = null;
         Integer origin = null;
 
         skipNewlines();
@@ -57,6 +58,7 @@ public final class IrParser {
                 origin = expectOrigin(origin == null, keyword);
             } else {
                 entry = expectEntry(entry == null, keyword);
+                entryPosition = keyword.position();
             }
             endOfLine();
             skipNewlines();
@@ -71,7 +73,7 @@ public final class IrParser {
             items.add(parseItem());
             skipNewlines();
         }
-        return new Module(target, origin.intValue(), entry, items);
+        return new Module(target, origin.intValue(), entry, entryPosition, items);
     }
 
     private static boolean isHeaderWord(String name) {
@@ -87,8 +89,9 @@ public final class IrParser {
         require(name.is(TokenKind.IDENT) || name.is(TokenKind.NUMBER), name.position(),
                 "expected a target name after 'target', but found " + name.describe());
         next();
-        require(name.name().equals(TARGET_8086), name.position(),
-                "unsupported target '" + name.text() + "'; the only target is " + TARGET_8086);
+        require(Targets.isKnown(name.name()), name.position(),
+                "unsupported target '" + name.text() + "'; the known targets are "
+                        + Targets.knownNames());
         return name.name();
     }
 
@@ -109,6 +112,13 @@ public final class IrParser {
     private Item parseItem() {
         Token first = peek();
 
+        // Before labels: `es:[p]` starts with the same two tokens as a label,
+        // and only the bracket after them says which one it is.
+        if (startsMemoryOperand()
+                || (first.is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, "=")))
+        {
+            return parseAssignment();
+        }
         if (first.is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, ":")) {
             next();
             next();
@@ -116,6 +126,9 @@ public final class IrParser {
         }
         if (first.is(TokenKind.IDENT) && Size.fromDirective(first.name()) != null) {
             return parseData(next(), null);
+        }
+        if (first.isName("var")) {
+            return parseVar();
         }
         if (first.isName("ret")) {
             next();
@@ -129,14 +142,129 @@ public final class IrParser {
             throw notImplemented(first, statementDescription(first));
         }
         throw new CompileError(first.position(),
-                "expected a label, a data definition, 'ret' or 'asm', but found " + first.describe());
+                "expected a label, a data definition, 'var', an assignment, 'ret' or 'asm', "
+                        + "but found " + first.describe());
+    }
+
+    private Item parseVar() {
+        Token keyword = expectName("var");
+        Token name = expect(TokenKind.IDENT, "a variable name");
+        requireNameable(name);
+        expectPunct(":");
+        Token typeWord = expect(TokenKind.IDENT, "a type after ':'");
+        Type type = Type.named(typeWord.name());
+        require(type != null, typeWord.position(),
+                "unknown type '" + typeWord.text() + "'; the types are u8, u16, u32, i8, i16, i32");
+        endOfLine();
+        return new Item.Var(keyword.position(), name.name(), type);
+    }
+
+    /**
+     * Refuses a name that is a word of the syntax rather than a name.
+     *
+     * <p>{@code byte} and {@code db} mean something wherever they appear before
+     * an operand, so a declaration using one would produce a program whose
+     * meaning depends on where you look. Better to say so at the declaration.
+     */
+    private void requireNameable(Token name) {
+        require(Size.named(name.name()) == null && Size.fromDirective(name.name()) == null,
+                name.position(),
+                "'" + name.text() + "' is a word of the syntax, so it cannot name anything");
+    }
+
+    private Item parseAssignment() {
+        Token start = peek();
+        Place place = startsMemoryOperand()
+                ? new Place.Memory(start.position(), parseMemoryOperand())
+                : new Place.Name(start.position(), expect(TokenKind.IDENT, "a variable name").name());
+        expectPunct("=");
+        Value value = parseValue();
+        endOfLine();
+        return new Item.Assign(start.position(), place, value);
+    }
+
+    private Value parseValue() {
+        Token first = peek();
+        if (startsMemoryOperand()) {
+            return new Value.Memory(first.position(), parseMemoryOperand());
+        }
+        if (first.is(TokenKind.NUMBER)) {
+            next();
+            return new Value.Number(first.position(), first.value(), first.text());
+        }
+        if (first.is(TokenKind.IDENT)) {
+            next();
+            return new Value.Name(first.position(), first.name());
+        }
+        throw new CompileError(first.position(),
+                "expected a value, but found " + first.describe());
+    }
+
+    /**
+     * Whether a memory operand begins here. The size prefix and the segment
+     * override come before the bracket, so seeing either is enough to know that
+     * a bracket is coming ({@code docs/ir.md} §3.4).
+     *
+     * <p>The segment override is the one that needs care: {@code es:[p]} begins
+     * with the same two tokens as a label, {@code es:}, and only the bracket
+     * after them tells the two apart.
+     */
+    private boolean startsMemoryOperand() {
+        Token token = peek();
+        if (token.is("[")) {
+            return true;
+        }
+        if (token.is(TokenKind.IDENT) && Size.named(token.name()) != null) {
+            return true;
+        }
+        return token.is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, ":")
+                && tokenAt(2).is("[");
+    }
+
+    private Token tokenAt(int offset) {
+        int at = index + offset;
+        return at < tokens.size() ? tokens.get(at) : tokens.get(tokens.size() - 1);
+    }
+
+    private MemoryOperand parseMemoryOperand() {
+        Token start = peek();
+        Size size = null;
+        if (start.is(TokenKind.IDENT) && Size.named(start.name()) != null) {
+            size = Size.named(start.name());
+            next();
+        }
+        String segment = null;
+        if (peek().is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, ":")) {
+            segment = next().name();
+            next();
+        }
+        expectPunct("[");
+
+        String base = null;
+        long displacement = 0;
+        Token inside = peek();
+        if (inside.is(TokenKind.IDENT)) {
+            base = next().name();
+        } else if (inside.is(TokenKind.NUMBER)) {
+            displacement = next().value();
+        } else {
+            throw new CompileError(inside.position(),
+                    "expected an address inside the brackets, but found " + inside.describe());
+        }
+
+        if (peek().is("+") || peek().is("-")) {
+            boolean subtract = next().is("-");
+            require(base != null, peek().position(),
+                    "a memory address is a name and a displacement, or a displacement alone");
+            Token number = expect(TokenKind.NUMBER, "a displacement after the sign");
+            displacement = subtract ? -number.value() : number.value();
+        }
+        expectPunct("]");
+        return new MemoryOperand(start.position(), size, segment, base, displacement);
     }
 
     private static String statementDescription(Token first) {
         String name = first.name();
-        if (name.equals("var")) {
-            return "a variable declaration (docs/ir.md §3.2)";
-        }
         if (name.equals("cmp") || name.equals("test")) {
             return "'" + name + "' (docs/ir.md §4.4)";
         }
@@ -155,6 +283,7 @@ public final class IrParser {
 
     /** What follows a label on its own line: a data definition, or nothing. */
     private Item afterLabel(Token label) {
+        requireNameable(label);
         if (peek().is(TokenKind.NEWLINE) || peek().isEof()) {
             return new Item.Label(label.position(), label.name());
         }
@@ -326,7 +455,7 @@ public final class IrParser {
                 break;
             }
         }
-        require(!atoms.isEmpty(), peek().position(), "the brackets are empty");
+        require(!atoms.isEmpty(), position, "the brackets are empty");
         expectPunct("]");
         return new Operand.Memory(position, size, segment, atoms);
     }

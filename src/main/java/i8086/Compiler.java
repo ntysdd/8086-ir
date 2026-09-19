@@ -2,7 +2,10 @@ package i8086;
 
 import i8086.emit.AsmEmitter;
 import i8086.ir.IrParser;
+import i8086.ir.IrVerifier;
 import i8086.ir.Module;
+import i8086.target.Target;
+import i8086.target.Targets;
 
 /**
  * The front door: IR text in, assembly text out.
@@ -33,6 +36,17 @@ public final class Compiler {
      */
     public static String compile(String file, String source) {
         Module module = IrParser.parse(file, source);
+        IrVerifier.verify(module, targetOf(module));
         return AsmEmitter.emit(module);
+    }
+
+    private static Target targetOf(Module module) {
+        Target target = Targets.byName(module.target());
+        if (target == null) {
+            // The parser already refuses a target nobody knows, so reaching here
+            // would mean the two disagree about what exists.
+            throw new IllegalStateException("no description for target " + module.target());
+        }
+        return target;
     }
 }

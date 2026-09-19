@@ -1,5 +1,6 @@
 package i8086.emit;
 
+import i8086.CompileError;
 import i8086.asm.Instruction;
 import i8086.asm.InstructionPrinter;
 import i8086.asm.Numbers;
@@ -54,9 +55,29 @@ public final class AsmEmitter {
             for (Instruction instruction : ((Item.InlineAsm) item).body()) {
                 text.append(INDENT).append(InstructionPrinter.print(instruction)).append('\n');
             }
-        } else {
+        } else if (item instanceof Item.Data) {
             emitData(text, (Item.Data) item);
+        } else {
+            throw notYet(item);
         }
+    }
+
+    /**
+     * Refuses what the back end cannot turn into instructions yet.
+     *
+     * <p>A variable lives in a register nobody has allocated and a store needs an
+     * addressing mode nobody has chosen, so these wait for instruction selection
+     * and register allocation. The refusal is here, at the point that cannot do
+     * the work, rather than earlier where the program is still fine.
+     */
+    private static CompileError notYet(Item item) {
+        String what = item instanceof Item.Var ? "a variable declaration"
+                : item instanceof Item.Assign ? "an assignment"
+                : "this item";
+        return new CompileError(item.position(),
+                "the emitter cannot write code for " + what + " yet: instruction selection and "
+                        + "register allocation come first, so only programs whose body is inline "
+                        + "assembly can be emitted so far");
     }
 
     private static void emitData(StringBuilder text, Item.Data data) {

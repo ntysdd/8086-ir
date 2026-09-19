@@ -1,5 +1,6 @@
 package i8086.emit;
 
+import i8086.CompileError;
 import i8086.ir.IrParser;
 import i8086.ir.Module;
 import i8086.testing.Assert;
@@ -51,6 +52,8 @@ public final class AsmEmitterTest {
         suite.add("Asm emitter spells numbers the same way the IR printer does",
                 AsmEmitterTest::spellsNumbersTheSameWay);
         suite.add("Asm emitter is deterministic", AsmEmitterTest::isDeterministic);
+        suite.add("Asm emitter refuses what it cannot generate code for yet",
+                AsmEmitterTest::refusesVariables);
     }
 
     private static String emit(String source) {
@@ -102,5 +105,18 @@ public final class AsmEmitterTest {
 
     private static void isDeterministic() {
         Assert.assertEquals(emit(HELLO), emit(HELLO));
+    }
+
+    /**
+     * A variable needs a register nobody has allocated and a store needs an
+     * addressing mode nobody has chosen, so the emitter says so at the item
+     * rather than emitting something plausible.
+     */
+    private static void refusesVariables() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> emit("target 8086\norg 0\nentry a\na:\n    var x: u16\n    x = 1\n    ret\n"));
+        Assert.assertEquals("test.ir:5:5", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("cannot write code for"),
+                "the refusal says what is missing: " + refused.getMessage());
     }
 }

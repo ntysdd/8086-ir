@@ -1,0 +1,148 @@
+package i8086.ir;
+
+import i8086.testing.Assert;
+import i8086.testing.Suite;
+import i8086.target.Targets;
+
+/**
+ * Tests for what the verifier refuses, and for what it must not refuse.
+ *
+ * <p>Both halves matter. A rule that fires on a correct program makes the
+ * language unusable, so every rule here has a case that has to pass as well as
+ * one that has to fail ({@code AGENTS.md}, invariant 4).
+ *
+ * <p>The body of a test program starts on line six, because a module begins
+ * with three header lines, a blank line and a label.
+ */
+public final class IrVerifierTest {
+
+    private IrVerifierTest() {
+    }
+
+    public static void register(Suite suite) {
+        suite.add("Ir verifier accepts a variable read and written", IrVerifierTest::acceptsVariables);
+        suite.add("Ir verifier takes a width from the place", IrVerifierTest::takesWidthFromPlace);
+        suite.add("Ir verifier accepts a label as an address", IrVerifierTest::acceptsLabelAsAddress);
+        suite.add("Ir verifier accepts a same-width signedness change",
+                IrVerifierTest::acceptsSignednessChange);
+        suite.add("Ir verifier accepts the flag set in a clobber list",
+                IrVerifierTest::acceptsFlagsClobber);
+        suite.add("Ir verifier refuses an unknown name", IrVerifierTest::refusesUnknownName);
+        suite.add("Ir verifier refuses a label as a destination",
+                IrVerifierTest::refusesLabelAsDestination);
+        suite.add("Ir verifier refuses a label defined twice", IrVerifierTest::refusesDuplicateLabel);
+        suite.add("Ir verifier refuses one name for two things", IrVerifierTest::refusesNameClash);
+        suite.add("Ir verifier refuses a declaration of the flag set",
+                IrVerifierTest::refusesFlagsDeclaration);
+        suite.add("Ir verifier refuses a width mismatch", IrVerifierTest::refusesWidthMismatch);
+        suite.add("Ir verifier refuses a literal too wide for its place",
+                IrVerifierTest::refusesWideLiteral);
+        suite.add("Ir verifier refuses an assignment with no width at all",
+                IrVerifierTest::refusesUnknownWidth);
+        suite.add("Ir verifier refuses a prefix that disagrees with the value",
+                IrVerifierTest::refusesDisagreeingPrefix);
+        suite.add("Ir verifier refuses an entry label that is never defined",
+                IrVerifierTest::refusesMissingEntry);
+        suite.add("Ir verifier refuses a name in an address that is nothing",
+                IrVerifierTest::refusesUnknownAddressBase);
+        suite.add("Ir verifier refuses a segment override that is not a segment",
+                IrVerifierTest::refusesBadSegment);
+        suite.add("Ir verifier refuses a clobber that is not a register",
+                IrVerifierTest::refusesBadClobber);
+    }
+
+    private static void verify(String body) {
+        IrVerifier.verify(parse(body), Targets.byName("8086"));
+    }
+
+    private static Module parse(String body) {
+        return IrParser.parse("test.ir", program(body));
+    }
+
+    private static String program(String body) {
+        return "target 8086\norg 0x100\nentry main\n\nmain:\n" + body;
+    }
+
+    private static void refuses(String position, String body) {
+        Assert.assertRefused(position, () -> verify(body));
+    }
+
+    // --- what has to pass --------------------------------------------------
+
+    private static void acceptsVariables() {
+        verify("    var x: u16\n    x = 1\n    x = 2\n    var y: u8\n    y = 3\n");
+    }
+
+    private static void takesWidthFromPlace() {
+        verify("    var x: u16\n    var p: u16\n    x = [p]\n    [p] = x\n    word [p] = x\n");
+    }
+
+    private static void acceptsLabelAsAddress() {
+        verify("    var x: u16\n    var p: u16\n    p = msg\n    x = [msg]\nmsg: db 0\n");
+    }
+
+    private static void acceptsSignednessChange() {
+        verify("    var signed: i16\n    var unsigned: u16\n    unsigned = 1\n    signed = unsigned\n");
+    }
+
+    private static void acceptsFlagsClobber() {
+        verify("    asm clobbers(ax, dx, flags) {\n        int 0x21\n    }\n");
+    }
+
+    // --- what has to be refused --------------------------------------------
+
+    private static void refusesUnknownName() {
+        refuses("test.ir:6:5", "    nothing = 1\n");
+    }
+
+    private static void refusesLabelAsDestination() {
+        refuses("test.ir:6:5", "    msg = 1\nmsg: db 0\n");
+    }
+
+    private static void refusesDuplicateLabel() {
+        refuses("test.ir:9:1", "    ret\nhere:\n    ret\nhere:\n");
+    }
+
+    private static void refusesNameClash() {
+        refuses("test.ir:7:5", "    var x: u16\n    x:\n");
+    }
+
+    private static void refusesFlagsDeclaration() {
+        refuses("test.ir:6:5", "    var flags: u16\n");
+    }
+
+    private static void refusesWidthMismatch() {
+        refuses("test.ir:8:14", "    var narrow: u8\n    var wide: u16\n    narrow = wide\n");
+    }
+
+    private static void refusesWideLiteral() {
+        refuses("test.ir:7:14", "    var narrow: u8\n    narrow = 0x100\n");
+    }
+
+    private static void refusesUnknownWidth() {
+        refuses("test.ir:8:5", "    var p: u16\n    var q: u16\n    [p] = [q]\n");
+    }
+
+    private static void refusesDisagreeingPrefix() {
+        refuses("test.ir:7:16", "    var x: u16\n    byte [x] = x\n");
+    }
+
+    private static void refusesMissingEntry() {
+        Module module = IrParser.parse("test.ir",
+                "target 8086\norg 0x100\nentry nowhere\n\nmain:\n    ret\n");
+        Assert.assertRefused("test.ir:3:1",
+                () -> IrVerifier.verify(module, Targets.byName("8086")));
+    }
+
+    private static void refusesUnknownAddressBase() {
+        refuses("test.ir:7:9", "    var x: u16\n    x = [nothing]\n");
+    }
+
+    private static void refusesBadSegment() {
+        refuses("test.ir:7:9", "    var x: u16\n    x = ax:[x]\n");
+    }
+
+    private static void refusesBadClobber() {
+        refuses("test.ir:6:5", "    asm clobbers(zz) {\n        int 0x21\n    }\n");
+    }
+}
