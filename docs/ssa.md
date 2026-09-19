@@ -190,8 +190,15 @@ verifier knows a target, a register or an instruction.
 ## 7. What the passes do with it — [decided]
 
 The passes that read this form are listed in `i8086.pass.Pipeline`, and
-`README.md` says the same list. Three things about working on it are worth stating
-here, because they are properties of the form rather than of any one pass:
+`README.md` says the same list. Three of them, in this order: **constant
+propagation**, which writes a known value where it is read; **dead value
+elimination**, which removes what nothing can observe; and **unread flags**,
+which lets an operation whose flags nobody reads stop claiming them — and that one
+has to be last, because "nobody reads them" is a question about the program the
+other two have finished shaping.
+
+Three things about working on it are worth stating here, because they are
+properties of the form rather than of any one pass:
 
 * **Every pass runs on a verified form and has its output verified.** The
   pipeline verifies once at the start and after each pass, which is the first
@@ -250,9 +257,10 @@ shape the input had and the shape the back end was written for
 * **An inline block that says what it reads.** Until it can, a module containing
   one is optimised conservatively (§4, §7). That is the missing half of
   {@code docs/ir.md} §9.
-* **The rest of the pass list.** Copy propagation, value numbering, load
-  elimination, loop-invariant code motion and branch simplification are named in
-  `README.md` and not written. Reassociating an {@code expr}, folding a
-  comparison, and the identities ({@code x + 0}, {@code x * 1}) are all waiting on
-  the same thing: a pass has to be able to ask what the flags of an operation are
-  worth, and today it can only ask whether anybody reads them.
+* **The rest of the pass list.** The three of §7 are what exists; copy
+  propagation, value numbering, load elimination, loop-invariant code motion and
+  branch simplification are named in `README.md` and not written. Reassociating an
+  expression, folding a comparison, and the identities ({@code x + 0},
+  {@code x * 1}) are all waiting on the same thing: a pass has to be able to ask
+  what the flags of an operation are worth, and today it can only ask whether
+  anybody reads them.

@@ -1,9 +1,11 @@
 # The 8086-IR surface
 
-Status: **draft**. This document is the description of record for the IR
-*surface* — the syntax and semantics a person writes and reads. `README.md`
-says what the project is and why; `AGENTS.md` says how to work on it without
-breaking it; this document says what the thing in the middle looks like.
+Status: **draft, and in force where it is built**. This document is the
+description of record for the IR *surface* — the syntax and semantics a person
+writes and reads. `README.md` says what the project is and what the compiler does
+with this surface today, `AGENTS.md` says how to work on it without breaking it,
+[`docs/ssa.md`](ssa.md) describes the form the middle of the pipeline uses, and
+[`docs/asm.md`](asm.md) the assembly that comes out.
 
 A construct is proposed here and approved here **before** it is implemented
 (`AGENTS.md`). Every claim below carries one of three marks:
@@ -11,6 +13,11 @@ A construct is proposed here and approved here **before** it is implemented
 * **[decided]** — agreed; implementable as written.
 * **[proposed]** — designed, spelled out, but not yet confirmed; may change.
 * **[open]** — named and known to be missing, not designed yet.
+
+A mark says whether the *design* is settled, not whether the compiler does it —
+several things marked [decided] here are not built, and `README.md`'s *Status*
+is where that is written down. A construct that is decided and unbuilt is still an
+unsupported-input hard error rather than a quiet approximation of something else.
 
 ---
 
@@ -399,7 +406,10 @@ eval(a + b)         ; one addition, value discarded, flags left defined
   reduction are constrained. Replacing `MUL` with `SHL` changes the flags, so it
   is legal only when the flags are dead. Folding is legal whenever the resulting
   flag bits can be reproduced (§4.2) — which, on the 8086, generally means only
-  when the flags are dead.
+  when the flags are dead. This is not left for each pass to remember: **unread
+  flags** is a pass, it asks the SSA form whether anything reads the version an
+  operation defines, and it is what makes the one-byte `inc` reachable for an
+  addition nobody reads the carry of (`README.md`, *Status*).
 * A comparison is not written with `eval`: `cmp` and `test` are statements of
   their own (§4.4), and like `eval` they are one operation, because a comparison
   whose flags came from somewhere else would be a comparison nobody could read.
@@ -523,6 +533,9 @@ nothing else and cost nothing.
 ### 6.1 Multiply — [decided]
 
 * `*` is available at 16 and 32 bits and **truncates to the operand width**.
+  `[open]` 32 bits is decided as a surface and not built: the back end does
+  sixteen. A 32-bit multiply is a pair of 16×16 partial products and nothing here
+  produces one yet.
 * The high half is the user's business: `(u32)a * (u32)b` gives the full 16×16
   product in its low 32 bits, and anything wider than that is inline assembly.
   The surface language has no tuple-returning `mul`.
@@ -638,7 +651,10 @@ Because variables are virtual registers, the meaning is exact:
 > slots. If it needs more simultaneously live variables than the register file
 > holds, that is a **hard error**, not a silent frame.
 
-**[open]** the spelling of the marker.
+**[open]** the spelling of the marker — and a fact worth knowing while it is open:
+**nothing spills today**, marker or not. There is no frame and no spill slot in the
+compiler at all, so every function currently behaves as a no-spill one, and a
+program that needs more registers than six is refused (`README.md`, *Status*).
 
 ## 9. Inline assembly — [decided]
 
@@ -753,7 +769,8 @@ the file, which is the opposite of what happens here.
 **[open]** the repeat spelling (`db 32 dup(0)`, MASM-style, or `times 32 db 0`,
 NASM-style), and whether anything beyond the image — absolute placement, a `.COM`
 "BSS" past the end of the file — is ever offered. It is not in v1 and it is not
-promised.
+promised. Nor is any repeat form implemented: `db`/`dw`/`dd` take a list of atoms
+and nothing else, and a file that needs a zero-filled buffer has to write one out.
 
 **[open]** sections, modules, `extern`/`global` and a link step — deliberately
 out of v1.
@@ -764,6 +781,12 @@ Operations that are not arithmetic: `in`/`out`, `int`, `hlt`, `cli`, `sti`,
 `nop`, `iret`, the `setcc` family, and the carry consumers. On a target that does
 not provide one, using it is an **unsupported-input hard error** — never a silent
 substitution.
+
+None of them is selectable yet: the surface for them is decided, the back end does
+not emit them, and **inline assembly is how a program writes one today** (§9).
+That is a hard error rather than a fallback, but it is worth saying out loud
+because it is the shortest path to a program this compiler cannot compile and
+another assembler could.
 
 **[open]** whether string operations (`movsb` and friends) and `jcxz` get a
 surface of their own or are left to inline assembly.

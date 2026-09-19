@@ -1,10 +1,18 @@
 # The assembly text
 
-Status: **draft**. This document is the description of record for the assembly
-text: the form the emitter writes, the form the bundled `asm` assembler reads,
-and the form an inline assembly block contains. `docs/ir.md` is the description
-of record for the IR surface, `README.md` says what the project is, and
-`AGENTS.md` says how to work on it.
+Status: **draft, and in force for the text the emitter writes**. This document is
+the description of record for the assembly text: the form the emitter writes, the
+form the bundled `asm` assembler will read, and the form an inline assembly block
+contains. [`docs/ir.md`](ir.md) is the description of record for the IR surface,
+`README.md` says what the project is and what exists, and `AGENTS.md` says how to
+work on it.
+
+**The assembler does not exist yet.** The emitter writes this text — which means
+what is exercised today is the writing half: the syntax below, the mnemonics and
+operand shapes the target lists, and the size prefixes. Everything about reading
+it back — encodings, the shortest-encoding rule, label relaxation — is decided and
+untested, and belongs to a component that has not been written. What the compiler
+produces today is a listing, not a program (`README.md`, *Status*).
 
 Marks mean the same as in `docs/ir.md`: **[decided]**, **[proposed]**,
 **[open]** — and a construct is proposed and approved here before it is
@@ -35,9 +43,12 @@ is encoded are facts about the target and live in the target description
 (`AGENTS.md`, invariant 2). A syntax file that listed 8086 mnemonics would be
 target knowledge in the wrong place.
 
-Two things are tested rather than assumed: the emitter's output must always be
-re-assemblable, and the assembler's decoder and encoder are inverses on every
-encoding the emitter can produce (`AGENTS.md`, invariant 5).
+Two things are requirements on the assembler rather than observations about it,
+because the component they belong to does not exist yet: its decoder and encoder
+are inverses on every encoding the emitter can produce (`AGENTS.md`, invariant 5),
+and the text the emitter writes is text it can read. Both are what the tests will
+check the day it is written; neither is checked today, because today there is
+nothing to check.
 
 ## 2. Lines and comments — [decided]
 

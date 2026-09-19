@@ -103,15 +103,23 @@ that is the property being tested, not a feature being promised.
 ## Implementation approach
 
 The pipeline is a conventional one, adapted to the constraints of the target.
+Each step says where it stands: **built**, **partly**, or **planned**.
 
-1. **Parse** the textual IR into a module → functions → basic blocks →
-   instructions.
-   Also: print it back. Parse/print round-tripping is a tested invariant.
-2. **Verify** the input IR and **lower** it to machine IR: operations become
+1. **Parse** the textual IR into a module of items — labels, statements, data —
+   and print it back. Parse/print round-tripping is a tested invariant.
+   **Built.** The basic blocks and functions the rest of this list speaks of are
+   derived from those items rather than parsed into existence: the graph is read
+   off the item list in step 3, and there are no functions yet at all.
+2. **Verify** the input IR, and **lower** it to machine IR: operations become
    target operations, while operands remain virtual registers and flags remain
    virtual flag registers. Lowering is where operand combinations are made
    legal, so a machine-IR instruction is always a combination the target can
    actually encode — a memory+memory `add` is split here, not later.
+   **Partly, and not in that shape.** Verification is built. There is no
+   separate machine-IR layer: the passes work on the surface's own operations,
+   which are already one operation to a statement, and lowering happens item by
+   item inside selection. A second target is what would make the separation
+   worth its cost, and there is no second target.
 3. **Build SSA**: compute dominators, insert φ-nodes, promote memory to
    registers where safe. SSA is the canonical form for everything downstream,
    and what it looks like is specified in [`docs/ssa.md`](docs/ssa.md).
@@ -120,6 +128,9 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    those flags, SSA construction materialises it with the explicit read-flags
    operation. From that point on it *is* an ordinary value, and every generic
    pass handles it without needing to know what a flag is.
+   **Mostly built.** Dominators, φ's and renaming are done, the flags included;
+   promoting memory and materialising a flag value are not. Both wait on the same
+   missing thing — the target's per-flag effects — and neither is needed yet.
 4. **Optimize**, as a sequence of verified passes. The bulk of the pipeline is
    generic: constant folding and propagation, dead code elimination, copy
    propagation, global value numbering / CSE, redundant load elimination,
@@ -133,13 +144,16 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    stops claiming them, which is what lets the target use a form that disturbs
    them. The passes are listed in `i8086.pass.Pipeline`, and a test compares that
    list against the names written out here, so a pass added in one place and not
-   the other fails the build.
+   the other fails the build. **Three built, the rest planned.**
 5. **Run the target-specific tail.** Real machines have quirks that are not
    worth abstracting, and encoding-level knowledge is stated directly at the
    end of the optimizer, immediately before instruction selection: at most
    three target-specific passes, for the 8086 late peephole and cleanup work.
    Each belongs to exactly one target, is marked as such in the pipeline
    listing, and lives with that target rather than in the generic pass package.
+   **Planned.** Nothing here needs one yet: what this step is for — stating an
+   encoding fact where the alternative is another abstraction — is currently
+   stated in the target's own tables, where the forms and expansions live.
 6. **Instruction selection**: pick the instruction *form* — which instruction,
    which addressing mode — by size first, with the target's cost estimates
    breaking ties (*Optimised for size*, above). Byte-level encoding choices are
@@ -147,28 +161,40 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    whether an immediate needs the sign-extended form, depends on values that are
    only known once everything has been placed — a forward-referenced label's
    address, most obviously. Those belong to the assembler (step 9). Selection
-   only selects: it never synthesizes a new
-   instruction sequence, because lowering already guaranteed legal operand
-   combinations. Virtual flag registers are absorbed here, into the implicit
-   flag effects of the instructions that produce them, so the allocator deals
-   in register classes only. What comes out is a form the target can encode,
-   which is what makes it verifiable. The read-flags operation is selected the
-   same way: the target says what it has — `LAHF` or `PUSHF` on the 8086, which
-   has no `SETcc`, and `SETcc` once a target provides it.
+   only selects: it either takes a form the target lists or substitutes a
+   sequence the target declares, and it never composes one of its own. Virtual
+   flag registers are absorbed here, into the implicit flag effects of the
+   instructions that produce them, so the allocator deals in register classes
+   only. What comes out is a form the target can encode, which is what makes it
+   verifiable. The read-flags operation is selected the same way: the target says
+   what it has — `LAHF` or `PUSHF` on the 8086, which has no `SETcc`.
+   **Built for arithmetic, comparisons, control flow, loads, stores and the
+   machine's multiply and divide**; conversions, `setcc` and the target-provided
+   operations of `docs/ir.md` §11 are not there yet, and a byte access is refused
+   with the reason.
 7. **Register allocation**: graph colouring over the target's small, heavily
    constrained register file, with pre-coloured physical registers for implicit
    operands and sub-register-aware live ranges. Spilling uses frame-relative
    stack slots.
-8. **Emit** assembly text for the selected target.
+   **Partly built, and simpler than that.** It is linear scan over intervals, with
+   no spilling at all: needing more registers than the machine has is a hard error
+   (`docs/ir.md` §8.2), which is a promise rather than a shortfall. What the target
+   says an instruction destroys is respected, and addresses are kept in the
+   registers that can hold one. There are no sub-registers, so a byte value has
+   nowhere to live — which is why a byte access is refused.
+8. **Emit** assembly text for the selected target. **Built.**
 9. **Assemble** (optionally, in the same run): the bundled `asm` front end
    encodes instructions, choosing the shortest encoding for each form it is
    given, resolves and relaxes labels (the shortest jump that reaches its
    target), and writes a flat binary or a listing. The syntax it reads and the
    emitter writes is specified in [`docs/asm.md`](docs/asm.md).
+   **Planned, and the largest thing missing**: the assembly this compiler writes
+   cannot yet be turned into bytes, which makes it a listing rather than a
+   program.
 
-This pass list is the description of record: adding, removing, reordering or
-re-targeting a pass means updating it in the same change, and a target-specific
-pass has to be visible as such here.
+This pass list is the description of record, and so is the state written beside
+each step: adding, removing, reordering or re-targeting a pass means updating it
+in the same change, and a target-specific pass has to be visible as such here.
 
 ### Repository layout
 
@@ -226,84 +252,69 @@ accepted.
   it under the `sim` reference interpreter, and compare against the unoptimized
   program's observable results (registers and memory). `sim` is a test aid and
   a behavioural model of what the 8086 makes observable — it is not
-  cycle-accurate, and nothing in the pipeline may depend on it.
+  cycle-accurate, and nothing in the pipeline may depend on it. Neither the
+  assembler nor `sim` exists yet, so end-to-end tests currently stop at the
+  assembly text, compared exactly.
 
 ---
 
 ## Status
 
-The pipeline runs end to end: IR text in, assembly text out, with SSA
-construction and verification in the middle. What is missing is the passes that
-would read the form, and the assembler that would turn the output into bytes.
+The pipeline runs end to end: IR text in, assembly text out, with SSA construction,
+three optimization passes, and the way back out of SSA in the middle. What is
+missing is the assembler that would turn that text into bytes, and the parts of the
+surface and the instruction set listed below.
 
 Working today:
 
-* The IR surface of [`docs/ir.md`](docs/ir.md): parsing, printing, and
-  verification, so `parse(print(ir)) == ir` and every refusal carries a position.
-* The control-flow sugar of §7.2 — `.if`, `.elseif`, `.else`, `.while` —
-  normalised away as it is read, into comparisons, branches and labels.
-* **SSA construction and verification**, described in [`docs/ssa.md`](docs/ssa.md):
-  the control flow graph, dominators and the dominance frontier, liveness, φ
-  placement, and the renaming walk. Every variable is renamed — the flags
-  included — and every use names the definition that reaches it. `optimize
-  --emit ssa` prints the form.
+* **The IR surface** of [`docs/ir.md`](docs/ir.md): parsing, printing and
+  verification, so `parse(print(ir)) == ir` and every refusal carries a position —
+  together with the control-flow sugar of §7.2, normalised away as it is read.
+* **SSA construction and verification**, described in
+  [`docs/ssa.md`](docs/ssa.md): the control flow graph, dominators and the dominance
+  frontier, liveness, φ placement, and the renaming walk. Every variable is renamed
+  — the flags included — and every use names the definition that reaches it.
+  Leaving SSA needs no copies at all, for the reason [`docs/ssa.md`](docs/ssa.md) §8
+  gives. `optimize --emit ssa` prints the form.
 * **An optimiser**: constant propagation, dead value elimination, and giving up
-  flags nobody reads, run as a verified pass sequence between SSA and the back
-  end. Every pass runs on a verified form and its output is verified in turn.
-  Leaving SSA again is a transformation like any other, and its output — a module
-  with one name per variable — is checked by the surface's own verifier before
-  anything selects instructions from it. `optimize --emit ir` prints what the
-  passes left.
-* The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
-  it.
-* Instruction selection and register allocation, enough to compile arithmetic on
-  variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
-  `jmp`, the `jcc` family, and the operators the 8086 has forms for. A register
-  allocator that does not spill, and says so; it honours an inline block's clobber
-  list, keeping a value that is still to be read out of the registers the block
-  destroys; when there is control flow, a value that lives across a label keeps one
-  register rather than reusing it, which is right rather than clever.
-* **Loads and stores**, 16 bits wide: a load through a value, a load from a fixed
-  address, a store of either kind, and an address given one of the three registers
-  this machine can put inside brackets. `volatile` is implemented and honoured: a
-  read marked volatile happens even when nothing uses the value, while a plain read
-  nobody uses is removed. A byte or double-word access is refused, because a value
-  lives in a whole register and nothing here can name half of one.
-* **The target says what its instructions destroy**, and the allocator believes it:
-  `mov cl, n` writes a register no value was given, `mul` leaves half its answer in
-  `dx`, writing `cl` counts as writing `cx`, and a value still to be read across any
-  of that is refused the register. A shift by a constant of three or more goes
-  through `cl` for that reason — four bytes whatever the count, against two per
-  single step — and a value living across the shift is kept out of `cx`. A copy that
-  turns out to be a copy from a register into itself is dropped, which is what makes
-  a sequence written with copies as cheap as one that guessed right.
-* **Multiply and divide**, 16 bits: `*`, `/` and `%`, signed and unsigned, with the
-  machine's registers handled by target-declared sequences. `mul r` multiplies what
-  is in `ax`, `div r` divides `dx:ax`, and the sign is extended with `cwd` or cleared
-  with `xor dx, dx` as the operands' signedness says. A literal divisor is put in a
-  register, since the machine takes no immediate. A division whose flags are still
-  read is refused, because this machine says nothing about the flags after one and
-  the sequence clears `dx` on the way through them.
-* The bundled assembler is planned but not built: the assembly the emitter writes
-  cannot be turned into bytes yet.
+  flags nobody reads, in that order. Every pass runs on a verified form and has its
+  output verified in turn, and leaving SSA is a transformation whose output the
+  surface's own verifier checks before anything selects from it.
+  `optimize --emit ir` prints what the passes left.
+* **Instruction selection and register allocation**, enough to compile arithmetic
+  on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
+  `jmp`, the `jcc` family, 16-bit loads and stores, and `*`, `/` and `%` signed and
+  unsigned. `volatile` is honoured: a read marked volatile happens even when nothing
+  uses its value, while a plain read nobody uses is removed.
+* **A target that says what its instructions do to registers**: which registers an
+  instruction destroys (`mov cl, n` writes one no value was given, `mul` leaves half
+  its answer in `dx`, and writing `cl` counts as writing `cx`), which registers an
+  address may live in, and what to expand when the machine insists on a register of
+  its own. The allocator does not spill — too many live values is a hard error, which
+  is the promise [`docs/ir.md`](docs/ir.md) §8.2 makes — and it drops the copies of a
+  register into itself that turn out to be unnecessary.
+* **The assembly text** of [`docs/asm.md`](docs/asm.md), and the emitter that writes
+  it. The bundled assembler that would read it back is planned and not built, so what
+  comes out is a listing rather than a program.
 
-Not built yet, and refused with a reason rather than guessed at: conversions,
-`setcc`, an access narrower or wider than a register, a load inside an arithmetic
-operand, and the assembler — so the assembly this compiler writes cannot be turned
-into bytes yet, which makes it a listing rather than a program. SSA construction
-does not yet materialise a flag value that has to survive an instruction defining
-those flags, because the target does not state its flag effects per flag yet — and
-nothing asks it to. The optimiser is three passes and not the ten the pipeline
-describes; while a module contains an inline assembly block nothing in it may be
-removed, because a block cannot say what it reads yet; and no load is reusable,
-because nothing yet says when two accesses are the same memory
-([`docs/ir.md`](docs/ir.md) §3.4).
+Not built yet, and refused with a reason rather than guessed at: conversions and
+byte accesses (there are no sub-registers, so half a register has no name), `setcc`,
+a load inside an arithmetic operand, and the target-provided operations of
+[`docs/ir.md`](docs/ir.md) §11. Three things the pipeline names are also absent:
+materialising a flag value that has to survive an instruction defining those flags,
+promoting memory to values, and any target-specific pass. And two deliberate
+retreats, each with the missing piece named: nothing may be removed from a module
+containing an inline assembly block, because a block cannot say what it reads yet
+(§9), and no load is reusable, because nothing yet says when two accesses are the
+same memory (§3.4).
 
 Planned milestones:
 
 1. IR definition, parser, printer, verifier, and the target description the
    rest of the pipeline reads 8086 facts from. **Done.**
 2. Bundled assembler (encode + label resolution + branch relaxation) for 8086.
+   **Not started**, and the largest piece missing: without it the output cannot be
+   turned into bytes, and nothing can be executed or tested end to end.
 3. SSA construction and verification. **Done**, apart from the flag
    materialisation that waits on the target's per-flag effects.
 4. Core optimization passes. **Started**: constant propagation, dead value
