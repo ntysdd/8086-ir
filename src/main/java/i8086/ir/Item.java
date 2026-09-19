@@ -45,13 +45,6 @@ public abstract class Item {
     }
 
     /**
-     * A data definition: {@code msg: db "..."}, {@code tbl: dw 0x1234, 0x5678}.
-     *
-     * <p>The label is optional, because {@code db} is also allowed bare. There
-     * is no separate "uninitialised" form: space is a repeat of a value, and
-     * the value is zero unless written ({@code docs/ir.md} §10).
-     */
-    /**
      * The name this item is reached by, or null when nothing can reach it.
      *
      * <p>Three kinds of item put bytes in the image and can be named, and every place
@@ -140,6 +133,13 @@ public abstract class Item {
         }
     }
 
+    /**
+     * A data definition: {@code msg: db "..."}, {@code tbl: dw 0x1234, 0x5678}.
+     *
+     * <p>The label is optional, because {@code db} is also allowed bare. There is no
+     * separate "uninitialised" form: bytes in the image that mean nothing are
+     * {@link Pad} ({@code docs/ir.md} §10.2).
+     */
     public static final class Data extends Item {
 
         /** One element: a number, or a string of bytes for {@code db}. */

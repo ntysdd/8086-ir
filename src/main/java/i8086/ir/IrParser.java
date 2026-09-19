@@ -185,27 +185,6 @@ public final class IrParser {
     }
 
     /**
-     * The token that begins a line is a {@code $}-marked name, or null when it is
-     * whatever it looks like.
-     *
-     * <p>A name the author marked is theirs, so {@code $.if} is a variable called
-     * {@code .if} and not the sugar ({@code docs/ir.md} §3.1). The marker is what
-     * makes a variable of every word in the surface, including the ones that shape
-     * the text itself.
-     */
-    private static boolean marked(Token token) {
-        return token.is(TokenKind.IDENT) && token.forced();
-    }
-
-    /**
-     * Whether this token is the given word of the surface, rather than a name the
-     * author marked as theirs.
-     *
-     * <p>Every place that reads a word as syntax asks this instead of comparing the
-     * spelling, because {@code $} is exactly the way to have a variable called
-     * {@code eval} or {@code var} ({@code docs/ir.md} §3.1).
-     */
-    /**
      * Whether the token here begins a value: a name, a literal or a bracket.
      *
      * <p>This is what a one-token lookahead needs to tell a word that is being used
@@ -217,6 +196,14 @@ public final class IrParser {
         return token.is(TokenKind.NUMBER) || token.is(TokenKind.IDENT) || token.is("[");
     }
 
+    /**
+     * Whether this token is the given word of the surface, rather than a name the
+     * author marked as theirs.
+     *
+     * <p>Every place that reads a word as syntax asks this instead of comparing the
+     * spelling, because {@code $} is exactly the way to have a variable called
+     * {@code eval} or {@code var} ({@code docs/ir.md} §3.1).
+     */
     private static boolean isWord(Token token, String word) {
         return !token.forced() && token.isName(word);
     }
@@ -701,14 +688,6 @@ public final class IrParser {
         return new Item.Var(keyword.position(), name.name(), type);
     }
 
-    /**
-     * Refuses a name that is a word of the surface rather than a name.
-     *
-     * <p>{@code byte} and {@code db} mean something wherever they appear before
-     * an operand, and so do {@code jmp}, {@code cmp} and the conditions. A
-     * declaration using one would produce a program whose meaning depends on
-     * where you look. Better to say so at the declaration.
-     */
     /**
      * Refuses a name that is only spelled like a name, which is now exactly one
      * thing: a name the compiler generated (§7.2).

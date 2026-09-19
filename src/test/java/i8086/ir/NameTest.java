@@ -63,15 +63,13 @@ public final class NameTest {
     }
 
     /**
-     * What the audit cannot check, written down so that it is not mistaken for a
-     * naming question: a data item cannot hold a label's address, so {@code dw msg}
-     * — a pointer table, a vector table, a boot sector's jump — is not writable yet.
-     * That is {@code docs/ir.md} §10.2 and it has nothing to do with names.
-     */
-
-    /**
      * The audit. Each word is used as a variable, a memory base, a label and a
      * branch target, and the whole thing has to be a program.
+     *
+     * <p>What it cannot check, so that it is not mistaken for a naming question: a
+     * data item cannot hold a label's address, so {@code dw msg} — a pointer table, a
+     * vector table, a boot sector's jump — is not writable yet. That is
+     * {@code docs/ir.md} §12 item 6 and it has nothing to do with names.
      *
      * <p>If this ever fails for a word, the surface has grown an ambiguity — some
      * position where the word can be read two ways — and the failure names it. That
