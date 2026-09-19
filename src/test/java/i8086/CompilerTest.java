@@ -97,7 +97,13 @@ public final class CompilerTest {
                 CompilerTest::narrowsAValueItStillNeeds);
         suite.add("Compiler reloads a narrowed value from its home",
                 CompilerTest::narrowsFromAHome);
-        suite.add("Compiler refuses a conversion that widens", CompilerTest::refusesAWidening);
+        suite.add("Compiler widens a byte with zeroes", CompilerTest::widensWithZeroes);
+        suite.add("Compiler widens a byte with its sign", CompilerTest::widensWithTheSign);
+        suite.add("Compiler keeps a value out of the register a widening uses",
+                CompilerTest::keepsAValueOutOfTheWideningRegister);
+        suite.add("Compiler refuses a widening to a double word",
+                CompilerTest::refusesAWideningToADoubleWord);
+        suite.add("Compiler refuses a widening of a load", CompilerTest::refusesAWideningOfALoad);
         suite.add("Compiler refuses five byte values at one point",
                 CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
@@ -1299,23 +1305,98 @@ public final class CompilerTest {
     }
 
     /**
-     * Widening is the direction this machine has no instruction for: {@code MOVZX} and {@code MOVSX}
-     * arrived with the 386, so it is a sequence the target has to declare and it does not yet
-     * ({@code docs/ir.md} §3.5).
+     * {@code x = movzx y}: the extension this machine has no instruction for, so it is the sequence
+     * the target declares — the byte into {@code al}, {@code ah} cleared, the answer copied out of
+     * {@code ax} ({@code docs/ir.md} §3.5).
      */
-    private static void refusesAWidening() {
+    private static void widensWithZeroes() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var small: u8\n"
+                + "    var wide: u16\n"
+                + "    small = byte [0x40]\n"
+                + "    wide = movzx small\n"
+                + "    word [0x42] = wide\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("xor ah, ah"),
+                "the top half is cleared with the one instruction this machine has: " + assembly);
+        Assert.assertTrue(assembly.contains("mov al, "),
+                "and the byte goes into al, which is what xor ah, ah extends: " + assembly);
+        Assert.assertFalse(assembly.contains("movzx"),
+                "there is no such instruction on this machine: " + assembly);
+    }
+
+    /** {@code x = movsx y}: {@code cbw} is the machine's own sign extension of al into ax. */
+    private static void widensWithTheSign() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var small: i8\n"
+                + "    var wide: i16\n"
+                + "    small = byte [0x40]\n"
+                + "    wide = movsx small\n"
+                + "    word [0x42] = wide\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    cbw\n"),
+                "sign extension is cbw: " + assembly);
+        Assert.assertFalse(assembly.contains("movsx"),
+                "which is what a 386 calls movsx: " + assembly);
+    }
+
+    /**
+     * The sequence works on {@code ax} and nowhere else, so it says so: a value alive across the
+     * widening is kept out of that register, and the instruction that destroys it is the one the
+     * sequence wrote ({@code docs/ir.md} §3.5, §11).
+     */
+    private static void keepsAValueOutOfTheWideningRegister() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var small: u8\n"
+                + "    var wide: u16\n"
+                + "    var keep: u16\n"
+                + "    keep = word [0x44]\n"
+                + "    small = byte [0x40]\n"
+                + "    wide = movzx small\n"
+                + "    word [0x42] = keep\n"
+                + "    word [0x46] = wide\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("xor ah, ah"), "the widening is there: " + assembly);
+        Assert.assertFalse(assembly.contains("mov word [0x42], ax"),
+                "and the value that lives across it did not end up in the register it destroys: "
+                        + assembly);
+    }
+
+    /**
+     * A widening into a double word would need two registers to hold the answer, and this back end
+     * can name one — so it is refused rather than done halfway.
+     */
+    private static void refusesAWideningToADoubleWord() {
         CompileError refused = Assert.assertThrows(CompileError.class,
                 () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var small: u8\n"
-                        + "    var wide: u16\n"
+                        + "    var wide: u32\n"
                         + "    small = byte [0x40]\n"
                         + "    wide = movzx small\n"
+                        + "    cmp wide, 0\n"
+                        + "    jz done\ndone:\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("widening to a u32"),
+                refused.getMessage());
+    }
+
+    /**
+     * A conversion reads a register's half, and which register a load would land in is not decided
+     * at the point the sequence is written — so the value goes into a variable first, which is what
+     * the surface says about every other operand that has to be computed
+     * ({@code docs/ir.md} §3.5).
+     */
+    private static void refusesAWideningOfALoad() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var wide: u16\n"
+                        + "    p = 0x1000\n"
+                        + "    wide = movzx byte [p]\n"
                         + "    word [0x42] = wide\n"
                         + "    ret\n"));
-        Assert.assertTrue(refused.getMessage().contains("conversion that widens"),
+        Assert.assertTrue(refused.getMessage().contains("put the value in a variable first"),
                 refused.getMessage());
-        Assert.assertTrue(refused.getMessage().contains("MOVZX"),
-                "and names what the machine is missing: " + refused.getMessage());
     }
 
     private static void refusesWideAccess() {

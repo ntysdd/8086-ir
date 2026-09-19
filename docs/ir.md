@@ -597,12 +597,20 @@ there is nothing to narrow from.
   (§3.4), which is the MASM type-operator idiom: `byte x` is how MASM says "the
   low byte of x".
 * On the 8086 both extensions are **expansions** in the sense of `AGENTS.md`:
-  `MOVZX` and `MOVSX` only arrived with the 386.
+  `MOVZX` and `MOVSX` only arrived with the 386. The sequence is the machine's own: the
+  byte goes into `al`, `xor ah, ah` clears the top half or `cbw` fills it from the sign,
+  and the answer is copied out of `ax`. The copies that turn out to move a register into
+  itself are the allocator's to drop, so a widening whose value is already in `ax` costs
+  one instruction and nothing more.
 * **Narrowing costs a move at most, and nothing to compute.** `byte x` is the low byte of
   `x`, and the low byte of a value is already in the low half of the register the value is
   in — so the narrowing is a copy of that half into wherever the result goes, and no
   instruction computes anything. That is why the two directions have different words
   rather than one bracket: one of them is free and the other is not (§3.2).
+* **[open]** a widening into a value wider than a register. `movzx` from `u8` to `u32` is one
+  conversion by the rule above, and on this machine the answer is two registers: nothing in
+  the back end can name a pair, so it is refused. What a double word *is* — two registers,
+  or something the target describes — is the same question as §12 item 6's far pointer.
 * **[open]** what a conversion does to the flags. A narrowing is a move and touches nothing,
   so for it the answer is "nothing" — but widening is an instruction that does touch them, and
   the compiler currently assumes that *any* conversion disturbs them, which is more than it has

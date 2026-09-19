@@ -330,7 +330,8 @@ Working today:
 * **Instruction selection and register allocation**, enough to compile arithmetic
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, loads and stores of a byte or a word, narrowing a value to its
-  low byte or its low word, and `*`, `/` and `%` signed and
+  low byte or its low word, widening a byte with `xor ah, ah` or `cbw` — the sequences this
+  machine needs where a 386 says `movzx` and `movsx` — and `*`, `/` and `%` signed and
   unsigned. `volatile` is honoured: a read marked volatile happens even when nothing
   uses its value, while a plain read nobody uses is removed.
 * **A target that says what its instructions do to registers**: which registers an
@@ -358,9 +359,9 @@ Working today:
   register is taken, a value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
-Not built yet, and refused with a reason rather than guessed at: a conversion that
-**widens** (`movzx`, `movsx` — the encodings this machine does not have, so they would be
-sequences the target declares), `setcc`,
+Not built yet, and refused with a reason rather than guessed at: a widening into a value
+wider than a register (the answer is two of them, and nothing in the back end can name a
+pair), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
 refused until every definition writes those bytes — a wrong answer nobody is told about

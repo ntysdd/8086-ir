@@ -375,25 +375,25 @@ public final class InstructionSelector {
     }
 
     /**
-     * A conversion: a narrowing is nearly free, and a widening is not.
+     * A conversion: narrowing is nearly free, widening is a sequence the target declares.
      *
      * <p>{@code y = byte x} asks for the low byte of {@code x}, and the machine already has it
      * there — the value lives in the low half of a register, so the narrowing is a move that says
      * which half is meant, and nothing at all when the destination is that same register
-     * ({@code docs/ir.md} §3.5). Widening is the other direction and is not free: this machine has
-     * no {@code MOVZX} or {@code MOVSX}, so it is a sequence the target has to declare, and the
-     * target does not declare one yet.
+     * ({@code docs/ir.md} §3.5). Widening is the other direction and is not free on this machine: no
+     * {@code MOVZX} and no {@code MOVSX} before the 386, so it is a sequence the target declares and
+     * this is the lookup.
      */
     private void emitConversion(Value.Convert convert, String destination) {
-        if (convert.conversion().direction() != Conversion.Direction.NARROW) {
-            throw notYet(convert.position(), "a conversion that widens: this machine has no MOVZX "
-                    + "or MOVSX, so it is a sequence the target has to declare "
-                    + "(docs/ir.md §3.5)");
-        }
         String source = sourceRegister(convert.operand());
         if (source == null) {
-            throw notYet(convert.position(), "a narrowing of a value that is not a variable: the low "
-                    + "half of a register is what an instruction reads (docs/ir.md §3.5)");
+            throw notYet(convert.position(), "a conversion of a value that is not a variable: a "
+                    + "conversion reads a register's half, and which register a load lands in is not "
+                    + "decided here — put the value in a variable first (docs/ir.md §3.5)");
+        }
+        if (convert.conversion().direction() == Conversion.Direction.WIDEN) {
+            emitWidening(convert, destination, source);
+            return;
         }
         if (convert.conversion() == Conversion.LOW_WORD || source.equals(destination)) {
             // The low word of a value is the register it lives in, since a value wider than a
@@ -406,6 +406,29 @@ public final class InstructionSelector {
         out.add(new Instruction(convert.position(), "mov", operands(
                 virtual(destination, convert.position()),
                 new Operand.LowByte(convert.position(), source))));
+    }
+
+    /**
+     * {@code x = movzx y} and {@code x = movsx y}: the extension this machine has no instruction
+     * for, so the target declares the sequence that does it ({@code docs/ir.md} §3.5).
+     *
+     * <p>A widening into a double word is refused rather than done halfway: the result is two
+     * registers, and this back end can name one.
+     */
+    private void emitWidening(Value.Convert convert, String destination, String source) {
+        Type widened = form.typeOf(destination);
+        if (widened != null && widened.bytes() > Size.WORD.bytes()) {
+            throw notYet(convert.position(), "a widening to a " + widened.spelling() + ": the "
+                    + "result is two registers and nothing here can name a pair (docs/ir.md §3.5)");
+        }
+        Expansion sequence = target.widen(convert.position(),
+                virtual(destination, convert.position()), virtual(source, convert.position()),
+                convert.conversion() == Conversion.SIGN_EXTEND);
+        if (sequence == null) {
+            throw notYet(convert.position(), "a widening: this target declares no sequence for it "
+                    + "(docs/ir.md §3.5)");
+        }
+        out.addAll(sequence.instructions());
     }
 
     /** {@code p = msg}: the address of a label, as an immediate. */

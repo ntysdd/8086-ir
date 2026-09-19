@@ -344,6 +344,18 @@ public interface Target {
                               Operand source, long count);
 
     /**
+     * A sequence that widens a byte into a register, or null when this target declares none.
+     *
+     * <p>Widening is the direction this machine has no instruction for: {@code MOVZX} and
+     * {@code MOVSX} arrived with the 386, so what the surface calls a conversion is a sequence here
+     * — {@code xor ah, ah} to fill the top with zeroes, {@code cbw} to fill it with a copy of the
+     * sign bit. Both of those work on {@code ax} and nowhere else, so the sequence is written the
+     * way this target's other sequences are: the byte goes where the machine wants it, the
+     * extension happens, and the answer is copied out ({@code docs/ir.md} §3.5).
+     */
+    Expansion widen(SourcePos where, Operand destination, Operand source, boolean signed);
+
+    /**
      * The names of the machine state a module sets up for itself, in the order a diagnostic should
      * list them: this target's segment registers that can be written, and the stack pointer they
      * are set up with ({@code docs/ir.md} §8.1).

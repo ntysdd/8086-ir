@@ -225,6 +225,9 @@ public final class I8086 implements Target {
         table.put("stosw", names("di"));
         table.put("movsb", names("si", "di"));
         table.put("movsw", names("si", "di"));
+        // The two conversions this machine has: both work on {@code ax} and nowhere else.
+        table.put("cbw", names("ax"));
+        table.put("cwd", names("ax", "dx"));
         return Collections.unmodifiableMap(table);
     }
 
@@ -821,6 +824,29 @@ public final class I8086 implements Target {
     }
 
     /**
+     * The byte into {@code ax}, extended, and then out to where the answer goes.
+     *
+     * <p>{@code xor ah, ah} clears the top half and {@code cbw} fills it with the sign — the two
+     * things this machine can do that a 386 calls {@code MOVZX} and {@code MOVSX}. Both work on
+     * {@code ax} and nowhere else, so the sequence is stated in full: the copies that turn out to be
+     * moves of a register into itself are the allocator's to drop.
+     *
+     * <p>The flags are given up, which the surface already assumes of any conversion
+     * ({@code docs/ir.md} §3.5, {@code [open]}): {@code xor} and {@code cbw} both write them.
+     */
+    @Override
+    public Expansion widen(SourcePos where, Operand destination, Operand source, boolean signed) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "al"), source));
+        instructions.add(signed
+                ? instruction(where, "cbw")
+                : instruction(where, "xor", new Operand.Name(where, "ah"),
+                        new Operand.Name(where, "ah")));
+        instructions.add(instruction(where, "mov", destination, new Operand.Name(where, "ax")));
+        return new Expansion(instructions, false);
+    }
+
+    /**
      * Setting a segment register, or the stack pointer, from an operand.
      *
      * <p>{@code sp} takes the operand directly — {@code mov sp, x} is one instruction — and a
@@ -830,8 +856,7 @@ public final class I8086 implements Target {
      * the allocator is the one that finds out, and drops a copy of a register into itself.
      */
     @Override
-    public Expansion segmentMove(SourcePos where, String name, Operand value) {
-        List<Instruction> instructions = new ArrayList<Instruction>();
+    public Expansion segmentMove(SourcePos where, String name, Operand value) {        List<Instruction> instructions = new ArrayList<Instruction>();
         if (name.equals("sp")) {
             instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
             return new Expansion(instructions, true);

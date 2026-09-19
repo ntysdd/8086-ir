@@ -30,6 +30,7 @@ public final class I8086Test {
 
     public static void register(Suite suite) {
         suite.add("I8086 says which register can hold a byte", I8086Test::byteHalves);
+        suite.add("I8086 widens a byte with the instructions it has", I8086Test::widensBytes);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
         suite.add("I8086 says an instruction that writes nothing destroys nothing",
@@ -123,6 +124,41 @@ public final class I8086Test {
         // of it as far as anything outside this package is concerned.
         Assert.assertEquals("[cx]", clobbers("mov", name("ch"), number(0)).toString());
         Assert.assertEquals("[bx]", clobbers("mov", name("bh"), number(0)).toString());
+    }
+
+    /**
+     * Widening, the direction this machine has no instruction for.
+     *
+     * <p>The byte goes into {@code al}, the top half is cleared with {@code xor ah, ah} or filled
+     * from the sign with {@code cbw}, and the answer is copied out of {@code ax} — because both of
+     * those work on {@code ax} and nowhere else. And {@code cbw} says what it takes away behind the
+     * allocator's back, which is the register a value alive across it may not be in
+     * ({@code docs/ir.md} §3.5).
+     */
+    private static void widensBytes() {
+        Target target = Targets.byName("8086");
+        Operand destination = new Operand.Virtual(AT, "wide#1");
+        Operand source = new Operand.Virtual(AT, "small#1");
+
+        Expansion zeroes = target.widen(AT, destination, source, false);
+        Assert.assertEquals("mov, xor, mov", mnemonics(zeroes));
+        Assert.assertEquals("ah", ((Operand.Name) zeroes.instructions().get(1).operands().get(0)).name());
+
+        Expansion signed = target.widen(AT, destination, source, true);
+        Assert.assertEquals("mov, cbw, mov", mnemonics(signed));
+        Assert.assertEquals("[ax]", clobbers("cbw").toString());
+    }
+
+    /** The mnemonics of a sequence, in order, so that its shape can be compared. */
+    private static String mnemonics(Expansion expansion) {
+        StringBuilder text = new StringBuilder();
+        for (Instruction instruction : expansion.instructions()) {
+            if (text.length() > 0) {
+                text.append(", ");
+            }
+            text.append(instruction.mnemonic());
+        }
+        return text.toString();
     }
 
     private static void destroysNothing() {
