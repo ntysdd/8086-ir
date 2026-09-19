@@ -470,6 +470,69 @@ public final class I8086 implements Target {
         return forms == null ? Collections.<Form>emptyList() : forms;
     }
 
+    /**
+     * {@code mov ax, left; mul right; mov destination, ax}.
+     *
+     * <p>The machine multiplies what is in {@code AX} by the operand and leaves the
+     * low half in {@code AX} with the high half in {@code DX} — which is why the low
+     * half is the whole answer here: the surface says {@code *} truncates to the
+     * operand width ({@code docs/ir.md} §6.1), and anything wider than that is the
+     * writer's business to spell out.
+     */
+    @Override
+    public Expansion multiply(SourcePos where, Operand destination, Operand left, Operand right,
+                              boolean signed) {
+        if (left == null || right == null) {
+            return null;
+        }
+        if (right instanceof Operand.Number && !(left instanceof Operand.Number)) {
+            Operand swap = left;
+            left = right;
+            right = swap;
+        }
+        if (right instanceof Operand.Number) {
+            return null; // multiplying two literals is not this target's to do
+        }
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "ax"), left));
+        instructions.add(instruction(where, signed ? "imul" : "mul", right));
+        instructions.add(instruction(where, "mov", destination, new Operand.Name(where, "ax")));
+        return new Expansion(instructions, true);
+    }
+
+    /**
+     * {@code mov ax, left; [cwd | xor dx, dx]; div right; mov destination, dx|ax}.
+     *
+     * <p>{@code cwd} is the whole of the sign extension: it fills {@code DX} with a
+     * copy of {@code AX}'s sign bit, which is exactly the dividend the instruction
+     * wants. Without a sign to copy there is nothing for it to do, so an unsigned
+     * division clears {@code DX} instead.
+     *
+     * <p>The flags do not survive this sequence and cannot: {@code div} leaves them
+     * undefined on this machine, and clearing {@code DX} has been through them on the
+     * way. Saying so is what makes selection refuse the sequence where the program can
+     * still read them ({@code docs/ir.md} §5.1).
+     */
+    @Override
+    public Expansion divide(SourcePos where, Operand destination, Operand left, Operand right,
+                            boolean signed, boolean remainder) {
+        if (left == null || right == null || right instanceof Operand.Number) {
+            return null;
+        }
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "ax"), left));
+        if (signed) {
+            instructions.add(instruction(where, "cwd"));
+        } else {
+            instructions.add(instruction(where, "xor", new Operand.Name(where, "dx"),
+                    new Operand.Name(where, "dx")));
+        }
+        instructions.add(instruction(where, signed ? "idiv" : "div", right));
+        instructions.add(instruction(where, "mov", destination,
+                new Operand.Name(where, remainder ? "dx" : "ax")));
+        return new Expansion(instructions, false);
+    }
+
     @Override
     public Expansion multiplyByConstant(SourcePos where, Operand destination, Operand source,
                                         long factor) {

@@ -13,6 +13,8 @@ import i8086.ir.Names;
 import i8086.ir.Operation;
 import i8086.ir.Operator;
 import i8086.ir.Place;
+import i8086.ir.Signedness;
+import i8086.ir.Type;
 import i8086.ir.Value;
 import i8086.target.Expansion;
 import i8086.target.Form;
@@ -20,6 +22,7 @@ import i8086.target.Shape;
 import i8086.target.Target;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -345,7 +348,8 @@ public final class InstructionSelector {
         if (expression instanceof Expression.Complement) {
             Expression operand = ((Expression.Complement) expression).operand();
             emitExpression(operand, destination);
-            emitInPlace(Operator.COMPLEMENT, destination, null, expression.position(), false);
+            emitInPlace(Operator.COMPLEMENT, destination, null, null, expression.position(),
+                    false);
             return;
         }
 
@@ -359,10 +363,25 @@ public final class InstructionSelector {
             return;
         }
 
+        // Multiply and divide are done in registers the machine names itself, which
+        // means a sequence rather than an instruction — and the sequence wants its
+        // operands as operands, so it is asked before either side is moved anywhere.
+        Value leftLeaf = leafOf(apply.left());
+        Value rightLeaf = leafOf(apply.right());
+        if (leftLeaf != null && rightLeaf != null) {
+            Expansion sequence = implicitSequence(operator, Arrays.asList(leftLeaf, rightLeaf),
+                    destination);
+            if (sequence != null) {
+                requireFlagsMayBeLost(sequence.keepsFlags(), apply.position(), operator, false);
+                out.addAll(sequence.instructions());
+                return;
+            }
+        }
+
         if (isLiteral(apply.right())) {
             emitExpression(apply.left(), destination);
             emitInPlace(operator, destination, ((Expression.Leaf) apply.right()).value(),
-                    apply.position(), false);
+                    Signedness.of(apply, names), apply.position(), false);
             return;
         }
 
@@ -372,7 +391,7 @@ public final class InstructionSelector {
         emitExpression(apply.right(), scratch);
         emitExpression(apply.left(), destination);
         emitInPlace(operator, destination, new Value.Name(apply.right().position(), scratch),
-                apply.position(), false);
+                Signedness.of(apply, names), apply.position(), false);
     }
 
     /**
@@ -440,6 +459,9 @@ public final class InstructionSelector {
 
         Expansion expansion = expansionFor(operator, second,
                 sourceRegister(operands.get(0)), destination, operation.position());
+        if (expansion == null) {
+            expansion = implicitSequence(operator, operands, destination);
+        }
         if (expansion != null) {
             requireFlagsMayBeLost(expansion.keepsFlags(), operation.position(), operator,
                     flagsMayBeRead);
@@ -448,7 +470,151 @@ public final class InstructionSelector {
         }
 
         emitValue(operands.get(0), destination, flagsMayBeRead);
-        emitInPlace(operator, destination, second, operation.position(), flagsMayBeRead);
+        emitInPlace(operator, destination, second, signedness(operator, operands, destination),
+                operation.position(), flagsMayBeRead);
+    }
+
+    /** The value an expression is, when it is one, or null when it is a tree. */
+    private static Value leafOf(Expression expression) {
+        return expression instanceof Expression.Leaf
+                ? ((Expression.Leaf) expression).value() : null;
+    }
+
+    /**
+     * Multiplication and division done on their own, where the operands are still
+     * operands.
+     *
+     * <p>This is worth doing before either side is moved anywhere, and the reason is
+     * what the allocator sees. A sequence that copies into the destination and back
+     * out of it makes the destination live across the whole thing, which costs
+     * registers; one that reads its operands where they already are gives the
+     * destination its first mention at the end, when the work is done. The in-place
+     * route is still there for the cases this cannot take: an operand that is itself a
+     * tree, and a division in the middle of one.
+     */
+    private Expansion implicitSequence(Operator operator, List<Value> operands,
+                                       String destination) {
+        boolean multiplies = operator == Operator.MULTIPLY
+                || operator == Operator.MULTIPLY_UNSIGNED
+                || operator == Operator.MULTIPLY_SIGNED;
+        if (operands.size() < 2 || (!multiplies && !operator.divides())) {
+            return null;
+        }
+        for (Value operand : operands) {
+            if (!(operand instanceof Value.Name) && !(operand instanceof Value.Number)) {
+                return null; // a load in an operand: not something this back end can hand on
+            }
+        }
+
+        SourcePos where = operands.get(0).position();
+        boolean signed = Boolean.TRUE.equals(signedness(operator, operands, destination));
+        Operand left = operandOf(operands.get(0));
+        Operand right = operandOf(operands.get(1));
+        Operand target0 = virtual(destination, where);
+        if (multiplies) {
+            // A literal is fine on either side: multiplication does not care, and the
+            // target moves one it finds on the right.
+            return target.multiply(where, target0, left, right, signed);
+        }
+        if (right instanceof Operand.Number) {
+            // A division cannot swap its sides, so a literal divisor needs a register —
+            // and a register it is, not a value: the selector is the one saying where
+            // this goes, and the allocator is told by the ordinary rule that a register
+            // written by hand is destroyed.
+            List<Instruction> instructions = new ArrayList<Instruction>();
+            instructions.add(new Instruction(where, "mov",
+                    operands(new Operand.Name(where, LITERAL_SCRATCH), right)));
+            Expansion rest = target.divide(where, target0, left,
+                    new Operand.Name(where, LITERAL_SCRATCH), signed,
+                    operator == Operator.REMAINDER);
+            if (rest == null) {
+                return null;
+            }
+            instructions.addAll(rest.instructions());
+            return new Expansion(instructions, rest.keepsFlags());
+        }
+        return target.divide(where, target0, left, right, signed,
+                operator == Operator.REMAINDER);
+    }
+
+    /**
+     * Whether a multiply or a divide is the signed one, or null when nothing says.
+     *
+     * <p>Two of the four ways to write one say so in the mnemonic; the other two
+     * follow the operands ({@code docs/ir.md} §6.1), which means looking at what the
+     * operands are. A literal has no signedness of its own, so the other side
+     * decides, and if neither says, the place the answer is going has the same
+     * signedness as what it is computed from.
+     */
+    private Boolean signedness(Operator operator, List<Value> operands, String destination) {
+        switch (operator) {
+            case MULTIPLY_SIGNED:
+            case DIVIDE_SIGNED:
+                return Boolean.TRUE;
+            case MULTIPLY_UNSIGNED:
+            case DIVIDE_UNSIGNED:
+                return Boolean.FALSE;
+            default:
+                break;
+        }
+        for (Value operand : operands) {
+            Boolean signed = Signedness.of(operand, names);
+            if (signed != null) {
+                return signed;
+            }
+        }
+        Type type = names.typeOf(destination);
+        return type == null ? null : Boolean.valueOf(type.isSigned());
+    }
+
+    /**
+     * Multiplication and division, which the machine does in registers it names
+     * itself.
+     *
+     * <p>{@code mul r} multiplies whatever is in {@code ax} and leaves the low half
+     * there; {@code div r} divides {@code dx:ax}. So the sequence copies the operand
+     * that is already in the destination into {@code ax}, does the operation, and
+     * copies the answer back — and those copies name {@code ax} and {@code dx} as
+     * operands the selector wrote, which is how the allocator knows to keep other
+     * values out of them while this runs.
+     *
+     * <p>The divisor or multiplier being a literal is no obstacle: the machine takes
+     * a register or a memory operand, so the literal is put in one. That register is
+     * clobbered, and the allocator is told so by the same rule.
+     */
+    private Expansion sequenceFor(Operator operator, String destination, Value second,
+                                  Boolean signed, SourcePos where) {
+        boolean multiplies = operator == Operator.MULTIPLY
+                || operator == Operator.MULTIPLY_UNSIGNED
+                || operator == Operator.MULTIPLY_SIGNED;
+        if (second == null || (!multiplies && !operator.divides())) {
+            return null;
+        }
+        Operand inPlace = virtual(destination, where);
+        Operand right = operandOf(second);
+        boolean isSigned = signed != null && signed.booleanValue();
+        if (right instanceof Operand.Number) {
+            // The machine takes a register, so the literal needs one; the sequence
+            // says which and the allocator treats it as destroyed.
+            List<Instruction> withLiteral = new ArrayList<Instruction>();
+            withLiteral.add(new Instruction(where, "mov",
+                    operands(new Operand.Name(where, LITERAL_SCRATCH), right)));
+            Operand scratch = new Operand.Virtual(where, LITERAL_SCRATCH);
+            Expansion rest = multiplies
+                    ? target.multiply(where, inPlace, inPlace, scratch, isSigned)
+                    : target.divide(where, inPlace, inPlace, scratch, isSigned,
+                    operator == Operator.REMAINDER);
+            if (rest == null) {
+                return null;
+            }
+            withLiteral.addAll(rest.instructions());
+            return new Expansion(withLiteral, rest.keepsFlags());
+        }
+        if (multiplies) {
+            return target.multiply(where, inPlace, inPlace, right, isSigned);
+        }
+        return target.divide(where, inPlace, inPlace, right, isSigned,
+                operator == Operator.REMAINDER);
     }
 
     /** The literal a value is, or null when it is not one. */
@@ -456,15 +622,32 @@ public final class InstructionSelector {
         return isLiteral(expression) ? ((Expression.Leaf) expression).value() : null;
     }
 
-    /** The operation itself, on a value that is already in {@code destination}. */
-    private void emitInPlace(Operator operator, String destination, Value second, SourcePos where,
-                             boolean flagsMayBeRead) {
+    /**
+     * The operation itself, on a value that is already in {@code destination}.
+     *
+     * <p>Most operations are one instruction, and the target's forms say which. An
+     * operation the machine has no ordinary form for — multiplication and division,
+     * which it does in registers it names itself — gets a sequence from the target
+     * instead ({@code AGENTS.md}, "Expansion"). By the time either is asked, the first
+     * operand is already in the destination, so a sequence copies out of it and back
+     * into it; a copy that turns out to be a copy of a register into itself is
+     * dropped by the allocator, which is the only part of this that knows where
+     * anything lives.
+     */
+    private void emitInPlace(Operator operator, String destination, Value second, Boolean signed,
+                             SourcePos where, boolean flagsMayBeRead) {
         List<Form> forms = target.forms(operator);
         if (forms.isEmpty()) {
-            throw new CompileError(where,
-                    "no form for '" + operator.spelling() + "' is available yet: the instruction "
-                            + "this machine has for it keeps an operand in a fixed register, and "
-                            + "implicit operands are not expressible here yet");
+            Expansion sequence = sequenceFor(operator, destination, second, signed, where);
+            if (sequence == null) {
+                throw new CompileError(where,
+                        "no form for '" + operator.spelling() + "' is available yet: the "
+                                + "instruction this machine has for it keeps an operand in a "
+                                + "fixed register, and this back end cannot express that");
+            }
+            requireFlagsMayBeLost(sequence.keepsFlags(), where, operator, flagsMayBeRead);
+            out.addAll(sequence.instructions());
+            return;
         }
 
         List<Operand> operands = new ArrayList<Operand>();
@@ -566,6 +749,19 @@ public final class InstructionSelector {
         }
         return virtual(registerNameOf(value), value.position());
     }
+
+    /**
+     * A register a literal goes into when the machine will not take it directly.
+     *
+     * <p>Multiplying and dividing take a register or a memory operand, so a literal
+     * has to be put somewhere. {@code bx} is the choice because it is a value register
+     * and not an address register: a value that is only computed with is more common
+     * than one that is addressed through, so this is the one that gets in the way of
+     * the fewest programs. That it is destroyed is stated by the ordinary rule —
+     * operand zero is a register the selector wrote — and the allocator keeps other
+     * values out of it around here.
+     */
+    private static final String LITERAL_SCRATCH = "bx";
 
     /** Refuses a form that changes the flags where they are still wanted. */
     private static void requireFlagsMayBeLost(boolean keepsFlags, SourcePos where,

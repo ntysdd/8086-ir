@@ -274,22 +274,30 @@ Working today:
   `dx`, writing `cl` counts as writing `cx`, and a value still to be read across any
   of that is refused the register. A shift by a constant of three or more goes
   through `cl` for that reason — four bytes whatever the count, against two per
-  single step — and a value living across the shift is kept out of `cx`.
+  single step — and a value living across the shift is kept out of `cx`. A copy that
+  turns out to be a copy from a register into itself is dropped, which is what makes
+  a sequence written with copies as cheap as one that guessed right.
+* **Multiply and divide**, 16 bits: `*`, `/` and `%`, signed and unsigned, with the
+  machine's registers handled by target-declared sequences. `mul r` multiplies what
+  is in `ax`, `div r` divides `dx:ax`, and the sign is extended with `cwd` or cleared
+  with `xor dx, dx` as the operands' signedness says. A literal divisor is put in a
+  register, since the machine takes no immediate. A division whose flags are still
+  read is refused, because this machine says nothing about the flags after one and
+  the sequence clears `dx` on the way through them.
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
 Not built yet, and refused with a reason rather than guessed at: conversions,
-`setcc`, `mul` and `div` (the machine multiplies what is in `ax` and takes no
-operand saying so, and pinning an operand to a register is not expressible yet),
-an access narrower or wider than a register, and the assembler — so the assembly
-this compiler writes cannot be turned into bytes yet, which makes it a listing
-rather than a program. SSA construction does not yet materialise a flag value that
-has to survive an instruction defining those flags, because the target does not
-state its flag effects per flag yet — and nothing asks it to. The optimiser is
-three passes and not the ten the pipeline describes; while a module contains an
-inline assembly block nothing in it may be removed, because a block cannot say
-what it reads yet; and no load is reusable, because nothing yet says when two
-accesses are the same memory ([`docs/ir.md`](docs/ir.md) §3.4).
+`setcc`, an access narrower or wider than a register, a load inside an arithmetic
+operand, and the assembler — so the assembly this compiler writes cannot be turned
+into bytes yet, which makes it a listing rather than a program. SSA construction
+does not yet materialise a flag value that has to survive an instruction defining
+those flags, because the target does not state its flag effects per flag yet — and
+nothing asks it to. The optimiser is three passes and not the ten the pipeline
+describes; while a module contains an inline assembly block nothing in it may be
+removed, because a block cannot say what it reads yet; and no load is reusable,
+because nothing yet says when two accesses are the same memory
+([`docs/ir.md`](docs/ir.md) §3.4).
 
 Planned milestones:
 
@@ -302,8 +310,9 @@ Planned milestones:
    elimination and unread flags; the rest of the list in *Implementation
    approach* is not written.
 5. 8086 instruction selection and register allocation. **Partly done**: enough
-   for arithmetic, comparisons, control flow, and 16-bit loads and stores;
-   conversions and narrow accesses are refused with a reason.
+   for arithmetic, comparisons, control flow, multiplication and division, and
+   16-bit loads and stores; conversions and narrow accesses are refused with a
+   reason.
 6. `sim` interpreter, and an end-to-end example that assembles and runs.
 7. A second backend on top of the existing target description, to prove that
    the boundary holds without touching pass code.

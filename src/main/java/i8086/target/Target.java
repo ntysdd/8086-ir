@@ -177,6 +177,40 @@ public interface Target {
     }
 
     /**
+     * A sequence that multiplies two registers, or null when this target has none.
+     *
+     * <p>The 8086 has one instruction and it is not an ordinary one: {@code mul r}
+     * multiplies whatever is in {@code AX} and leaves the low half there, with the
+     * high half in {@code DX}. So the sequence is a copy in and a copy out, and the
+     * copies are stated even when they turn out to be unnecessary — the allocator is
+     * the one that finds out, and it drops a copy of a register into itself.
+     *
+     * <p>Multiplication does not care which side a literal is on, so a literal on the
+     * right is moved to the left rather than refused: it is the side that can be
+     * given to the copy, since the instruction takes a register or a memory operand
+     * and not an immediate.
+     */
+    Expansion multiply(SourcePos where, Operand destination, Operand left, Operand right,
+                       boolean signed);
+
+    /**
+     * A sequence that divides two registers, or null when this target has none.
+     *
+     * <p>{@code div r} divides {@code DX:AX}, so the top half has to be made the
+     * dividend's sign or zero first; the quotient arrives in {@code AX} and the
+     * remainder in {@code DX}, and {@code remainder} says which of the two the caller
+     * wants.
+     *
+     * <p>Nothing here checks the divisor. Division by zero and a quotient that does
+     * not fit are faults the hardware reports and the program's business
+     * ({@code docs/ir.md} §2.2), and the compiler's duty is only not to introduce one
+     * the program did not already have — which is why a division is not something a
+     * pass may move or duplicate ({@code docs/ir.md} §5.5).
+     */
+    Expansion divide(SourcePos where, Operand destination, Operand left, Operand right,
+                     boolean signed, boolean remainder);
+
+    /**
      * The forms that do this operator, smallest first is not promised — the
      * caller sorts — but every form is one the machine really has.
      *

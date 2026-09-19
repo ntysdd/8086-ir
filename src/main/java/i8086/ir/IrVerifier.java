@@ -311,34 +311,11 @@ public final class IrVerifier {
      * which is what the mnemonic forms are for (§5.5).
      */
     private Boolean signednessOf(Value value) {
-        if (value instanceof Value.Name) {
-            Type type = names.typeOf(((Value.Name) value).name());
-            return type == null ? null : Boolean.valueOf(type.isSigned());
-        }
-        return null;
+        return Signedness.of(value, names);
     }
 
     private Boolean signednessOf(Expression expression) {
-        if (expression instanceof Expression.Leaf) {
-            return signednessOf(((Expression.Leaf) expression).value());
-        }
-        if (expression instanceof Expression.Complement) {
-            return signednessOf(((Expression.Complement) expression).operand());
-        }
-        Expression.Apply apply = (Expression.Apply) expression;
-        switch (apply.operator()) {
-            case DIVIDE_UNSIGNED:
-            case MULTIPLY_UNSIGNED:
-            case SHIFT_RIGHT:
-                return Boolean.FALSE;
-            case DIVIDE_SIGNED:
-            case MULTIPLY_SIGNED:
-            case SHIFT_ARITHMETIC:
-                return Boolean.TRUE;
-            default:
-                Boolean left = signednessOf(apply.left());
-                return left != null ? left : signednessOf(apply.right());
-        }
+        return Signedness.of(expression, names);
     }
 
     /**

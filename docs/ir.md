@@ -804,10 +804,15 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     instruction can say what it destroys, and the allocator keeps a value that is
     still to be read out of those registers: `mov cl, 8` writes a register no value
     was given, `mul` leaves half its answer in `dx`, and a value living in `cx` or
-    `dx` across either one is refused that register. What is still missing is the
-    direction the two cannot express between them — an operand that must *be* in a
-    register — which is what `mul` and `div` need for their first operand, since the
-    machine multiplies what is in `ax` and takes no operand saying so.
+    `dx` across either one is refused that register. What the *machine* insists on —
+    that a multiply has one operand in `ax` — is handled by the target declaring the
+    sequence and the allocator dropping the copies that turn out to be copies from a
+    register into itself, so nothing is pinned and nothing is reserved.
+
+    What is still missing is the direction none of that covers: the *surface* has no
+    way to say "this value has to be in this register here", which is what a BIOS or
+    DOS interface wants and what the item was about in the first place. The machine's
+    own insistence is spelled out by the target; a program's is not spellable yet.
 13. A **calling convention**: how a call is written at all, where the arguments
     go, what a callee preserves, and who tidies up afterwards. None of it exists —
     the surface has no call, so a module's only interfaces are its entry point and

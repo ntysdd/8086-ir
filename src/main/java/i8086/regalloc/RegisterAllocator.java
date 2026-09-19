@@ -88,7 +88,10 @@ public final class RegisterAllocator {
         for (Selection.Piece piece : selection.pieces()) {
             List<Instruction> rewritten = new ArrayList<Instruction>();
             for (Instruction instruction : piece.instructions()) {
-                rewritten.add(resolve(instruction, index));
+                Instruction resolved = resolve(instruction, index);
+                if (!isSelfCopy(resolved)) {
+                    rewritten.add(resolved);
+                }
                 index++;
             }
             pieces.add(piece.with(rewritten));
@@ -242,6 +245,29 @@ public final class RegisterAllocator {
                 forbidden.addAll(destroyed);
             }
         }
+    }
+
+    /**
+     * Whether an instruction is a copy of a register into itself.
+     *
+     * <p>A sequence the target handed over has to name the registers the machine
+     * insists on — {@code mov ax, x} before a multiply — and whether that copy is
+     * needed is a question about allocation. If {@code x} was given {@code ax}, the
+     * copy says nothing and goes; if it was not, the copy is what makes the sequence
+     * work. The same rule catches the copy back out when the answer already belongs in
+     * {@code ax}.
+     *
+     * <p>Nothing is lost by dropping one: moving a register into itself changes
+     * neither the register nor the flags.
+     */
+    private static boolean isSelfCopy(Instruction instruction) {
+        if (!instruction.mnemonic().equals("mov") || instruction.operands().size() != 2) {
+            return false;
+        }
+        Operand destination = instruction.operands().get(0);
+        Operand source = instruction.operands().get(1);
+        return destination instanceof Operand.Name && source instanceof Operand.Name
+                && ((Operand.Name) destination).name().equals(((Operand.Name) source).name());
     }
 
     /**

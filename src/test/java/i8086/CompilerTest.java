@@ -66,6 +66,18 @@ public final class CompilerTest {
         suite.add("Compiler keeps a small shift to single steps", CompilerTest::repeatsSmallShifts);
         suite.add("Compiler keeps a value out of the register a shift destroys",
                 CompilerTest::keepsValuesOffShiftCounts);
+        suite.add("Compiler multiplies two values the way the machine does",
+                CompilerTest::multiplies);
+        suite.add("Compiler divides in dx:ax and reads the quotient", CompilerTest::divides);
+        suite.add("Compiler takes the remainder from dx", CompilerTest::remainders);
+        suite.add("Compiler reads the signedness of a division",
+                CompilerTest::readsDivisionSignedness);
+        suite.add("Compiler puts a literal divisor in a register",
+                CompilerTest::literalDivisor);
+        suite.add("Compiler refuses a division whose flags are read",
+                CompilerTest::refusesDivisionWithLiveFlags);
+        suite.add("Compiler allows a multiply whose flags are read",
+                CompilerTest::allowsMultiplyWithLiveFlags);
         suite.add("Compiler refuses a store of a computed value",
                 CompilerTest::refusesComputedStore);
         suite.add("Compiler reads the signedness of a comparison",
@@ -464,6 +476,155 @@ public final class CompilerTest {
                 "the shifted value is not in the register the count arrives in: " + assembly);
         Assert.assertFalse(assembly.contains("shl cx, cl"),
                 "and nothing shifts the value that was destroyed: " + assembly);
+    }
+
+    /**
+     * A program with two computed values and one to put their result in, so that the
+     * machine's own registers can be read off the answer.
+     */
+    private static String twoValues(String operation) {
+        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var a: u16\n    var b: u16\n    var q: u16\n    var e: u16\n"
+                + "    a = eval(e + 1)\n"
+                + "    b = eval(e + 2)\n"
+                + "    q = eval(a " + operation + " b)\n"
+                + "    volatile [0x40] = q\n"
+                + "    ret\n";
+    }
+
+    /**
+     * Multiplication, which the machine does to whatever is in {@code ax}.
+     *
+     * <p>Two things in the output are the point. The copies the sequence is written
+     * with are gone where the allocator found them unnecessary: the answer goes into
+     * {@code ax} and stays there, so the copy back out is a copy from a register into
+     * itself and was dropped. And {@code b} is in {@code bx} rather than the natural
+     * {@code dx}, because {@code mul} destroys {@code dx} and {@code b} is still being
+     * read.
+     */
+    private static void multiplies() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov cx, ax\n"
+                        + "    inc cx\n"
+                        + "    mov bx, ax\n"
+                        + "    add bx, 2\n"
+                        + "    mov ax, cx\n"
+                        + "    mul bx\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", twoValues("*")));
+    }
+
+    private static void divides() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov cx, ax\n"
+                        + "    inc cx\n"
+                        + "    mov bx, ax\n"
+                        + "    add bx, 2\n"
+                        + "    mov ax, cx\n"
+                        + "    xor dx, dx\n"
+                        + "    div bx\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", twoValues("/")));
+    }
+
+    /** The same division, read from the other half of the answer. */
+    private static void remainders() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov cx, ax\n"
+                        + "    inc cx\n"
+                        + "    mov bx, ax\n"
+                        + "    add bx, 2\n"
+                        + "    mov ax, cx\n"
+                        + "    xor dx, dx\n"
+                        + "    div bx\n"
+                        + "    mov ax, dx\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", twoValues("%")));
+    }
+
+    /**
+     * {@code div} and {@code idiv} are not two spellings of one instruction, and the
+     * signed one needs the dividend's sign in {@code dx} — which is what {@code cwd}
+     * does, and it is the same instruction a {@code movsx} of {@code ax} would be.
+     */
+    private static void readsDivisionSignedness() {
+        String signed = Compiler.compile("t.ir", signedValues());
+        String unsigned = Compiler.compile("t.ir", twoValues("/"));
+        Assert.assertTrue(signed.contains("    cwd\n    idiv bx\n"),
+                "a signed division sign-extends the dividend: " + signed);
+        Assert.assertTrue(unsigned.contains("    xor dx, dx\n    div bx\n"),
+                "and an unsigned one clears it: " + unsigned);
+    }
+
+    /** The signed twin of {@link #twoValues}, with the same shape. */
+    private static String signedValues() {
+        return "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var a: i16\n    var b: i16\n    var q: i16\n    var e: i16\n"
+                + "    a = eval(e + 1)\n"
+                + "    b = eval(e + 2)\n"
+                + "    q = eval(a / b)\n"
+                + "    volatile [0x40] = q\n"
+                + "    ret\n";
+    }
+
+    /**
+     * The machine divides by a register or a memory operand, never by an immediate,
+     * and a division cannot swap its sides — so a literal divisor is put in one. That
+     * register is clobbered, which the allocator finds out the same way it finds out
+     * about any other register the selector wrote by hand.
+     */
+    private static void literalDivisor() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var a: u16\n    var q: u16\n"
+                + "    a = eval(a + 1)\n"
+                + "    q = eval(a / 10)\n"
+                + "    volatile [0x40] = q\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    mov bx, 0xa\n"),
+                "the literal divisor goes into a register: " + assembly);
+        Assert.assertTrue(assembly.contains("    div bx\n"),
+                "and the division reads that register: " + assembly);
+    }
+
+    /**
+     * A division leaves the flags undefined on this machine, and the sequence clears
+     * {@code dx} on the way through them. So it may only be used where nobody can
+     * still read them — which the surface says by writing {@code expr}, or by not
+     * reading them at all.
+     */
+    private static void refusesDivisionWithLiveFlags() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var a: u16\n    var b: u16\n    var q: u16\n"
+                        + "    q = eval(a / b)\n"
+                        + "    jc l0\n"
+                        + "l0:\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("expr(...)"),
+                "and says what to write instead: " + refused.getMessage());
+    }
+
+    /** A multiply does leave the flags the multiplication leaves, so a branch may read them. */
+    private static void allowsMultiplyWithLiveFlags() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var a: u16\n    var b: u16\n    var q: u16\n"
+                + "    a = eval(a + 1)\n"
+                + "    b = eval(b + 1)\n"
+                + "    q = eval(a * b)\n"
+                + "    jc l0\n"
+                + "l0:\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    mul "),
+                "a multiply whose flags are read is ordinary: " + assembly);
     }
 
     /**
