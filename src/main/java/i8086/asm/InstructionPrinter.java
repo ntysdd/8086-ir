@@ -61,6 +61,12 @@ public final class InstructionPrinter {
             String name = ((Operand.Offset) operand).name();
             return dialect == Dialect.NASM ? name : "offset " + name;
         }
+        if (operand instanceof Operand.Far) {
+            // The same spelling in both dialects: a far pointer is two numbers and a
+            // colon, and the colon is what makes it far.
+            Operand.Far far = (Operand.Far) operand;
+            return Numbers.spelling(far.segment()) + ":" + Numbers.spelling(far.offset());
+        }
         return printMemory((Operand.Memory) operand, dialect);
     }
 

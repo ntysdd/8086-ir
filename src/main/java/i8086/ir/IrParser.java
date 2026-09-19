@@ -1243,9 +1243,38 @@ public final class IrParser {
                     "'" + size.spelling() + "' says how wide a memory access is, so it needs "
                             + "a memory operand after it");
         }
+        if (segment != null && peek().is(TokenKind.NUMBER)) {
+            // 'jmp ds:0x7E00' is the mistake this catches: a far pointer's segment is a
+            // number and not a register, because the machine's far jump takes an
+            // immediate pointer.
+            throw new CompileError(first.position(),
+                    "a segment override applies to a memory operand, so a bracket follows it; "
+                            + "a far pointer is two numbers, as in '0x0000:0x7E00' "
+                            + "(docs/asm.md §4)");
+        }
         if (segment != null) {
             throw new CompileError(first.position(),
                     "a segment override needs a memory operand after it");
+        }
+        if (first.is(TokenKind.NUMBER) && tokenAt(1).is(":")) {
+            // A far pointer: 'jmp 0x0000:0x7E00'. Two numbers, which is what the machine
+            // encodes, and what NASM reads as well — the colon is what makes it far
+            // (docs/asm.md §4).
+            long farSegment = first.value();
+            next();
+            next();
+            Token farOffset = peek();
+            if (farOffset.is(TokenKind.IDENT)) {
+                throw new CompileError(farOffset.position(),
+                        "a far jump takes two numbers, segment:offset; jumping to a label is not "
+                                + "supported yet, because the offset a far pointer needs is not the "
+                                + "one a label has until the assembler has placed it "
+                                + "(docs/asm.md §4, docs/ir.md §12)");
+            }
+            require(farOffset.is(TokenKind.NUMBER), farOffset.position(),
+                    "expected an offset after the colon, but found " + farOffset.describe());
+            next();
+            return new Operand.Far(first.position(), farSegment, farOffset.value());
         }
         if (first.is(TokenKind.NUMBER)) {
             next();

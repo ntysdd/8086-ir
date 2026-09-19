@@ -109,6 +109,35 @@ public abstract class Operand {
     }
 
     /**
+     * {@code seg:off}: a far pointer, written out as two numbers.
+     *
+     * <p>This is the operand of a far jump, {@code jmp 0x0000:0x7E00} — the last act
+     * of a boot loader, which hands control to a kernel somewhere else in memory. The
+     * machine has one encoding for it, the immediate far pointer, which is exactly
+     * two numbers; a far pointer held in memory is a different instruction and is not
+     * written here.
+     */
+    public static final class Far extends Operand {
+
+        private final long segment;
+        private final long offset;
+
+        public Far(SourcePos position, long segment, long offset) {
+            super(position);
+            this.segment = segment;
+            this.offset = offset;
+        }
+
+        public long segment() {
+            return segment;
+        }
+
+        public long offset() {
+            return offset;
+        }
+    }
+
+    /**
      * A memory reference: an optional size prefix, an optional segment
      * override, and the contents of the brackets.
      *

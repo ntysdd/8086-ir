@@ -126,13 +126,14 @@ block is a straight sequence of instructions.
 
 ## 4. Operands — [decided]
 
-An operand is one of four shapes. Which of them a given mnemonic accepts is the
+An operand is one of five shapes. Which of them a given mnemonic accepts is the
 target's business, not this document's.
 
 ```
 ax                  a register, named by the target
 0x10                an immediate
 offset msg          the address of a label, as an immediate
+0x0000:0x7E00       a far pointer, segment:offset — the operand of a far jump
 [bx+si+0x10]        memory
 ```
 
@@ -150,7 +151,18 @@ mov  ax, [msg]
 mov  [bx+si+2], ax
 mov  es:[bx], al
 mov  dx, offset msg
+jmp  0x0000:0x7E00
 ```
+
+`[decided]` a **far pointer** is two numbers with a colon between them, and the
+colon is what makes it far — the machine's far jump takes exactly that, an
+immediate pointer, and NASM reads the same spelling, so nothing is translated. It is
+written inside an inline assembly block, which is where a boot loader's last act
+lives; there is no statement for it, because it goes nowhere this module knows.
+
+`[open]` a far pointer whose offset is a **label**, `jmp 0:kernel`. It needs the
+label's offset *within the segment*, which is not the address a label has until the
+assembler has placed it, and every use so far wants a number.
 
 `[proposed]` whether a displacement may be an arithmetic expression
 (`[bx+si+len*2]`) or only a number, a name, or a name plus a number.

@@ -864,6 +864,13 @@ this is also what defines "address taken" in §5.2.
 filled by the allocator, or forcing the variable into memory — and whether
 inputs and outputs are part of the syntax or only clobbers are.
 
+**A block goes on to the next item as far as the compiler is concerned.** A block
+ending in `hlt`, or in the far jump that hands control to a kernel, goes nowhere,
+and treating it as falling through is conservative rather than wrong: the extra
+edge may keep code alive that nothing reaches, and it never removes code that
+something does. Asking the target whether an instruction can return is worth doing
+the day it costs something.
+
 Until that is decided, a block is opaque in the one direction that matters to an
 optimiser: it says which registers it destroys, but not which ones it **reads**,
 so a variable whose only other use is inside a block cannot be shown to be live

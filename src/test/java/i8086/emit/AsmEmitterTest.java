@@ -50,6 +50,7 @@ public final class AsmEmitterTest {
 
     public static void register(Suite suite) {
         suite.add("Asm emitter writes the whole program", AsmEmitterTest::writesWholeProgram);
+        suite.add("Asm emitter writes a far jump", AsmEmitterTest::writesAFarJump);
         suite.add("Asm emitter writes arithmetic", AsmEmitterTest::writesArithmetic);
         suite.add("Asm emitter writes a loop",
                 AsmEmitterTest::writesALoop);
@@ -157,6 +158,25 @@ public final class AsmEmitterTest {
         String printed = i8086.ir.IrPrinter.print(module);
         Assert.assertTrue(printed.contains("        mov bx, offset msg\n"), printed);
         Assert.assertTrue(printed.contains("pad 0x20\n"), printed);
+    }
+
+    /**
+     * A far jump, which is how a boot loader hands control to a kernel: two numbers
+     * and a colon, in both dialects, so there is nothing to translate.
+     */
+    private static void writesAFarJump() {
+        String source = "target 8086\norg 0x7c00\nentry main\n\nmain:\n"
+                + "    asm clobbers(ax, dx, si, flags) {\n        mov si, offset text\n"
+                + "        mov ah, 0x0E\n        lodsb\n        int 0x10\n"
+                + "        jmp 0x0000:0x7E00\n    }\n"
+                + "    ret\ntext: db \"K\"\n";
+        String assembly = emit(source);
+        Assert.assertTrue(assembly.contains("    jmp 0:0x7e00\n"), assembly);
+        Assert.assertTrue(assembly.contains("    mov si, text\n"), assembly);
+        // And the IR printer writes the same operand, so the block round-trips.
+        String printed = i8086.ir.IrPrinter.print(IrParser.parse("test.ir", source));
+        Assert.assertTrue(printed.contains("        jmp 0:0x7e00\n"), printed);
+        Assert.assertTrue(printed.contains("        mov si, offset text\n"), printed);
     }
 
     /**
