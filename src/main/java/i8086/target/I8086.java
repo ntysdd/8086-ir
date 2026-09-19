@@ -1,5 +1,10 @@
 package i8086.target;
 
+import i8086.SourcePos;
+import i8086.asm.Instruction;
+import i8086.asm.Operand;
+import i8086.ir.Operator;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -76,6 +81,93 @@ public final class I8086 implements Target {
         return Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(names)));
     }
 
+    /**
+     * The registers a value may live in, in the order the allocator should use
+     * them up.
+     *
+     * <p>{@code sp} is the stack. {@code bp} is left out because it is where a
+     * frame pointer will go, and because taking it now would mean giving it back
+     * later. The rest are free, in an order that puts the ones with fewest other
+     * duties first: {@code ax} and {@code dx} are where multiplication and
+     * division insist on their operands, and {@code bx}, {@code si} and
+     * {@code di} are the only registers that can address memory.
+     */
+    private static final List<String> VALUE_REGISTERS = Collections.unmodifiableList(
+            Arrays.asList("ax", "cx", "dx", "bx", "si", "di"));
+
+    /**
+     * What the machine has for each operator, and what each one costs.
+     *
+     * <p>Smaller is better, so the small ones are the ones that do less:
+     * {@code inc} is one byte where {@code add} is three, and it is smaller
+     * because it leaves the carry alone. It is also only {@code add 1}, which the
+     * form says rather than selection having to know it.
+     *
+     * <p>The byte counts are the smallest encoding each form can have. Which
+     * encoding is used is the assembler's decision ({@code README.md}, step 9),
+     * so these are what selection needs to choose between forms and no more.
+     */
+    private static final Map<Operator, List<Form>> FORMS = forms();
+
+    private static Map<Operator, List<Form>> forms() {
+        Map<Operator, List<Form>> table = new LinkedHashMap<Operator, List<Form>>();
+        binary(table, Operator.ADD, "add");
+        binary(table, Operator.SUBTRACT, "sub");
+        binary(table, Operator.AND, "and");
+        binary(table, Operator.OR, "or");
+        binary(table, Operator.XOR, "xor");
+
+        // add 1 and subtract 1 have shorter forms, and shorter because they do
+        // not touch the carry.
+        table.get(Operator.ADD).add(new Form("inc", registers(1), Long.valueOf(1), false, 1));
+        table.get(Operator.SUBTRACT).add(new Form("dec", registers(1), Long.valueOf(1), false, 1));
+
+        table.put(Operator.COMPLEMENT, one(new Form("not", registers(1), 2)));
+        shifts(table, Operator.SHIFT_LEFT, "shl");
+        shifts(table, Operator.SHIFT_RIGHT, "shr");
+        shifts(table, Operator.SHIFT_ARITHMETIC, "sar");
+        return Collections.unmodifiableMap(table);
+    }
+
+    private static void binary(Map<Operator, List<Form>> table, Operator operator, String mnemonic) {
+        List<Form> forms = new ArrayList<Form>();
+        forms.add(new Form(mnemonic, shapes(Shape.REGISTER, Shape.REGISTER), 2));
+        forms.add(new Form(mnemonic, shapes(Shape.REGISTER, Shape.IMMEDIATE), 3));
+        table.put(operator, forms);
+    }
+
+    /**
+     * A shift by one is one instruction and keeps the flags. Anything else has to
+     * be repeated, because the 8086 has no shift by an immediate that is not one
+     * ({@code docs/ir.md} §5.6), and repeating it does not leave the same flags.
+     * A count in a register needs {@code cl}, which is the implicit-operand work
+     * that is not done yet.
+     */
+    private static void shifts(Map<Operator, List<Form>> table, Operator operator, String mnemonic) {
+        List<Form> forms = new ArrayList<Form>();
+        forms.add(new Form(mnemonic, shapes(Shape.REGISTER, Shape.IMMEDIATE), Long.valueOf(1),
+                true, 2));
+        table.put(operator, forms);
+    }
+
+    private static List<Form> one(Form form) {
+        List<Form> forms = new ArrayList<Form>();
+        forms.add(form);
+        return forms;
+    }
+
+    private static List<Shape> registers(int count) {
+        List<Shape> shapes = new ArrayList<Shape>(count);
+        for (int i = 0; i < count; i++) {
+            shapes.add(Shape.REGISTER);
+        }
+        return shapes;
+    }
+
+    private static List<Shape> shapes(Shape... shapes) {
+        return Arrays.asList(shapes);
+    }
+
     @Override
     public String name() {
         return "8086";
@@ -107,5 +199,67 @@ public final class I8086 implements Target {
             }
         }
         return Collections.unmodifiableList(canonical);
+    }
+
+    @Override
+    public List<String> valueRegisters() {
+        return VALUE_REGISTERS;
+    }
+
+    @Override
+    public List<Form> forms(Operator operator) {
+        List<Form> forms = FORMS.get(operator);
+        return forms == null ? Collections.<Form>emptyList() : forms;
+    }
+
+    @Override
+    public Expansion multiplyByConstant(SourcePos where, Operand destination, Operand source,
+                                        long factor) {
+        if (factor < 2 || (factor & (factor - 1)) != 0) {
+            return null; // only a power of two is a shift
+        }
+        int steps = 0;
+        for (long remaining = factor; remaining > 1; remaining >>= 1) {
+            steps++;
+        }
+        return repeatedShift(where, "shl", destination, source, steps, false);
+    }
+
+    @Override
+    public Expansion shiftByConstant(SourcePos where, String mnemonic, Operand destination,
+                                     Operand source, long count) {
+        if (count < 1 || count > 16) {
+            return null; // a sixteen-bit value has nothing left after sixteen shifts
+        }
+        // One shift is the operation itself; more than one is not, because the
+        // flags after the last shift are not the flags after a single shift by
+        // that count.
+        return repeatedShift(where, mnemonic, destination, source, (int) count, count == 1);
+    }
+
+    private static Expansion repeatedShift(SourcePos where, String mnemonic, Operand destination,
+                                           Operand source, int steps, boolean keepsFlags) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        if (!sameRegister(destination, source)) {
+            instructions.add(instruction(where, "mov", destination, source));
+        }
+        for (int i = 0; i < steps; i++) {
+            instructions.add(instruction(where, mnemonic, destination,
+                    new Operand.Number(where, 1, "1")));
+        }
+        return new Expansion(instructions, keepsFlags);
+    }
+
+    /** Whether two operands name the same register, decided or not. */
+    private static boolean sameRegister(Operand left, Operand right) {
+        String leftName = left instanceof Operand.Name ? ((Operand.Name) left).name()
+                : ((Operand.Virtual) left).name();
+        String rightName = right instanceof Operand.Name ? ((Operand.Name) right).name()
+                : ((Operand.Virtual) right).name();
+        return leftName.equals(rightName);
+    }
+
+    private static Instruction instruction(SourcePos where, String mnemonic, Operand... operands) {
+        return new Instruction(where, mnemonic, Arrays.asList(operands));
     }
 }

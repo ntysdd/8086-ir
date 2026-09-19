@@ -3,6 +3,11 @@ package i8086.emit;
 import i8086.CompileError;
 import i8086.ir.IrParser;
 import i8086.ir.Module;
+import i8086.isel.InstructionSelector;
+import i8086.isel.Selection;
+import i8086.regalloc.RegisterAllocator;
+import i8086.target.Target;
+import i8086.target.Targets;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
 
@@ -45,6 +50,9 @@ public final class AsmEmitterTest {
 
     public static void register(Suite suite) {
         suite.add("Asm emitter writes the whole program", AsmEmitterTest::writesWholeProgram);
+        suite.add("Asm emitter writes arithmetic", AsmEmitterTest::writesArithmetic);
+        suite.add("Asm emitter refuses a branch it cannot select yet",
+                AsmEmitterTest::refusesBranch);
         suite.add("Asm emitter drops the target and the entry point",
                 AsmEmitterTest::dropsModuleMetadata);
         suite.add("Asm emitter flattens an inline block", AsmEmitterTest::flattensInlineBlock);
@@ -52,15 +60,13 @@ public final class AsmEmitterTest {
         suite.add("Asm emitter spells numbers the same way the IR printer does",
                 AsmEmitterTest::spellsNumbersTheSameWay);
         suite.add("Asm emitter is deterministic", AsmEmitterTest::isDeterministic);
-        suite.add("Asm emitter refuses what it cannot generate code for yet",
-                AsmEmitterTest::refusesVariables);
-        suite.add("Asm emitter refuses a branch it cannot generate code for",
-                AsmEmitterTest::refusesBranch);
     }
 
     private static String emit(String source) {
         Module module = IrParser.parse("test.ir", source);
-        return AsmEmitter.emit(module);
+        Target target = Targets.byName(module.target());
+        Selection selected = InstructionSelector.select(module, target);
+        return AsmEmitter.emit(module, RegisterAllocator.allocate(selected, target));
     }
 
     private static void writesWholeProgram() {
@@ -110,23 +116,45 @@ public final class AsmEmitterTest {
     }
 
     /**
-     * A variable needs a register nobody has allocated and a store needs an
-     * addressing mode nobody has chosen, so the emitter says so at the item
-     * rather than emitting something plausible.
+     * The whole path: instructions chosen, registers assigned, text written.
+     *
+     * <p>{@code add ax, 1} and not {@code inc ax}, because the operation came from
+     * {@code eval}: its flags can be read, and {@code inc} does not touch the
+     * carry. The variable {@code x} lives in {@code ax} and the temporary the
+     * multiply needs in {@code cx}.
      */
-    private static void refusesVariables() {
-        CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> emit("target 8086\norg 0\nentry a\na:\n    var x: u16\n    x = 1\n    ret\n"));
-        Assert.assertEquals("test.ir:5:5", refused.position().toString());
-        Assert.assertTrue(refused.getMessage().contains("cannot write code for"),
-                "the refusal says what is missing: " + refused.getMessage());
+    private static void writesArithmetic() {
+        String assembly = emit("target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var x: i16\n"
+                + "    var y: i16\n"
+                + "    var t: i16\n"
+                + "    x = 1\n"
+                + "    x = eval(x + 1)\n"
+                + "    t = expr(x * 4)\n"
+                + "    y = eval(x + t)\n"
+                + "    ret\n");
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "main:\n"
+                + "    mov ax, 1\n"
+                + "    add ax, 1\n"
+                + "    mov cx, ax\n"
+                + "    shl cx, 1\n"
+                + "    shl cx, 1\n"
+                + "    mov dx, ax\n"
+                + "    add dx, cx\n"
+                + "    ret\n", assembly);
     }
 
+    /**
+     * A comparison is not selectable yet, so the whole path refuses it — and the
+     * refusal comes from the selector, which is where the missing work is.
+     */
     private static void refusesBranch() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> emit("target 8086\norg 0\nentry a\na:\n    jmp a\n"));
-        Assert.assertEquals("test.ir:5:5", refused.position().toString());
-        Assert.assertTrue(refused.getMessage().contains("cannot write code for a jump"),
-                "the refusal names the item: " + refused.getMessage());
+                () -> emit("target 8086\norg 0\nentry a\na:\n    var x: u16\n    jmp a\n"));
+        Assert.assertEquals("test.ir:6:5", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("instruction selection cannot emit"),
+                "the refusal says which stage is missing: " + refused.getMessage());
     }
 }

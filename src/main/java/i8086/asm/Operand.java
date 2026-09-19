@@ -41,6 +41,36 @@ public abstract class Operand {
         }
     }
 
+    /**
+     * A register nobody has chosen yet.
+     *
+     * <p>This is what instruction selection produces and what register
+     * allocation removes: a variable becomes code before anyone has said which
+     * register it lives in. The name is the variable's, and it is deliberately
+     * unprintable — {@link InstructionPrinter} refuses one — so that "this can be
+     * written out" and "every register has been decided" are the same thing, and
+     * getting the order wrong is a loud failure rather than a line of assembly
+     * naming something the machine has never heard of.
+     */
+    public static final class Virtual extends Operand {
+
+        private final String name;
+
+        public Virtual(SourcePos position, String name) {
+            super(position);
+            this.name = name;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        /** The same operand with the register it turned out to live in. */
+        public Name resolvedTo(String register) {
+            return new Name(position(), register);
+        }
+    }
+
     /** A numeric literal. */
     public static final class Number extends Operand {
 

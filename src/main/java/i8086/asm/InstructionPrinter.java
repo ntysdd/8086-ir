@@ -34,6 +34,14 @@ public final class InstructionPrinter {
         if (operand instanceof Operand.Name) {
             return ((Operand.Name) operand).name();
         }
+        if (operand instanceof Operand.Virtual) {
+            // Not input, so not a diagnostic: the compiler printed before it
+            // decided where this value lives. Loud, because the alternative is
+            // assembly naming a register the machine has never heard of.
+            throw new IllegalStateException(
+                    "register allocation has not run: '" + ((Operand.Virtual) operand).name()
+                            + "' is still a virtual register");
+        }
         if (operand instanceof Operand.Number) {
             return Numbers.spelling(((Operand.Number) operand).value());
         }

@@ -4,6 +4,9 @@ import i8086.emit.AsmEmitter;
 import i8086.ir.IrParser;
 import i8086.ir.IrVerifier;
 import i8086.ir.Module;
+import i8086.isel.InstructionSelector;
+import i8086.isel.Selection;
+import i8086.regalloc.RegisterAllocator;
 import i8086.target.Target;
 import i8086.target.Targets;
 
@@ -15,11 +18,11 @@ import i8086.target.Targets;
  * touching the file system ({@code AGENTS.md}, "keep command-line entry points
  * thin").
  *
- * <p>The order is the pipeline of {@code README.md}. Only its ends exist so far:
- * a module is parsed and emitted, and there are no passes to run between them
- * yet. A program whose body is entirely inline assembly has nothing to
- * optimise, which is why the first end-to-end program can be built before the
- * middle of the pipeline exists.
+ * <p>The order is the pipeline of {@code README.md}: parse, verify, select
+ * instructions, allocate registers, emit. What is not here yet is the middle of
+ * the optimiser — SSA and the passes — which goes between verifying and
+ * selecting, and which is why a program can be compiled today but not yet
+ * improved.
  */
 public final class Compiler {
 
@@ -36,8 +39,11 @@ public final class Compiler {
      */
     public static String compile(String file, String source) {
         Module module = IrParser.parse(file, source);
-        IrVerifier.verify(module, targetOf(module));
-        return AsmEmitter.emit(module);
+        Target target = targetOf(module);
+        IrVerifier.verify(module, target);
+        Selection selected = InstructionSelector.select(module, target);
+        Selection allocated = RegisterAllocator.allocate(selected, target);
+        return AsmEmitter.emit(module, allocated);
     }
 
     private static Target targetOf(Module module) {

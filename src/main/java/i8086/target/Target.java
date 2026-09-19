@@ -1,5 +1,9 @@
 package i8086.target;
 
+import i8086.SourcePos;
+import i8086.asm.Operand;
+import i8086.ir.Operator;
+
 import java.util.List;
 
 /**
@@ -49,4 +53,46 @@ public interface Target {
      * has to list them.
      */
     List<String> conditions();
+
+    /**
+     * The registers a value may live in, in the order they should be used up.
+     *
+     * <p>This is the register class the allocator colours against: what is in the
+     * list is what a variable may become, and what is left out is left out for a
+     * reason that belongs to the machine — {@code sp} is the stack, and the
+     * registers that can only be addressed by half their names are not free for
+     * the taking.
+     */
+    List<String> valueRegisters();
+
+    /**
+     * The forms that do this operator, smallest first is not promised — the
+     * caller sorts — but every form is one the machine really has.
+     *
+     * <p>The question is asked in the IR's vocabulary, because that is what
+     * selection has: it knows an addition happened, not that the instruction for
+     * it is called {@code add}. Answering in that vocabulary is exactly what
+     * keeps the machine's words on this side of the boundary.
+     */
+    List<Form> forms(Operator operator);
+
+    /**
+     * A sequence that multiplies a register by a constant, or null when this
+     * target has no such trick.
+     *
+     * <p>Returning a sequence rather than a form is the point:
+     * {@code AGENTS.md} allows selection to substitute a declared expansion, and
+     * this is one. The caller must respect {@link Expansion#keepsFlags()}.
+     */
+    Expansion multiplyByConstant(SourcePos where, Operand destination, Operand source,
+                                 long factor);
+
+    /**
+     * A sequence that shifts a register by a constant count, or null when this
+     * target has no such trick. {@code mnemonic} is the shift the operation
+     * asked for, so {@code shl}, {@code shr} and {@code sar} all come through
+     * here and stay the machine's words.
+     */
+    Expansion shiftByConstant(SourcePos where, String mnemonic, Operand destination,
+                              Operand source, long count);
 }

@@ -216,8 +216,25 @@ build.bat run assemble hello.asm -o hello.bin
 
 ## Status
 
-Early skeleton: the README describes the intended design. Nothing here is
-implemented yet.
+The pipeline runs end to end: IR text in, assembly text out. What is missing is
+its middle.
+
+Working today:
+
+* The IR surface of [`docs/ir.md`](docs/ir.md): parsing, printing, and
+  verification, so `parse(print(ir)) == ir` and every refusal carries a position.
+* The assembly text of [`docs/asm.md`](docs/asm.md), and the emitter that writes
+  it.
+* Instruction selection and register allocation, enough to compile arithmetic on
+  variables: `var`, assignments, `eval`, `expr`, and the operators the 8086 has
+  forms for. A register allocator that does not spill, and says so.
+* The bundled assembler is planned but not built: the assembly the emitter writes
+  cannot be turned into bytes yet.
+
+Not built yet, and refused with a reason rather than guessed at: the SSA middle
+of the pipeline and every optimization pass, instruction selection for loads and
+stores, conversions, comparisons and branches, `setcc`, the control-flow sugar,
+and the assembler.
 
 Planned milestones:
 
