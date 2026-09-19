@@ -45,7 +45,11 @@ The text is line-oriented. **One statement per line**, and a newline ends the
 statement: there is no continuation character and no separator, so anything that
 does not fit on one line is written on one line.
 
-* A **label** is a name followed by `:` and stands on its own line.
+* A **label** is a name followed by `:`. It stands on its own line, with one
+exception: a labelled data definition writes the label and the definition on
+one line, as `msg: db "..."` below, because the label and the bytes it names
+are one thing. A label before an instruction is not allowed; the instruction
+goes on the next line.
 * An **instruction** is a mnemonic, then zero or more operands separated by
   commas.
 * A **directive** is a data word or `org`; see §6.
@@ -57,7 +61,7 @@ stand on its own.
 main:
     mov  ah, 9              ; DOS: print a string
     mov  dx, offset msg
-    int  21h
+    int  0x21
     ret
 
 msg: db "Hello, world!$"

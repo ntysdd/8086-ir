@@ -13,5 +13,8 @@ public final class AllTests {
         HarnessTest.register(suite);
         i8086.SourcePosTest.register(suite);
         i8086.asm.TokenizerTest.register(suite);
+        i8086.ir.IrParserTest.register(suite);
+        i8086.emit.AsmEmitterTest.register(suite);
+        i8086.CompilerTest.register(suite);
     }
 }

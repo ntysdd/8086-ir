@@ -48,6 +48,9 @@ if not exist "%CLASSES%" mkdir "%CLASSES%"
 javac %JAVAC_FLAGS% -d "%CLASSES%" @"%BUILD%\main-sources.txt"
 if errorlevel 1 goto :compile-failed
 
+rem --- `build.bat run ...` compiles the product and runs it, without the tests
+if /i "%~1"=="run" goto :run
+
 rem --- compile the tests against it, then run them --------------------------
 if not exist "%TESTCLASSES%" mkdir "%TESTCLASSES%"
 javac %JAVAC_FLAGS% -cp "%CLASSES%" -d "%TESTCLASSES%" @"%BUILD%\test-sources.txt"
@@ -60,6 +63,13 @@ echo build: OK
 exit /b 0
 
 rem ---------------------------------------------------------------------------
+:run
+rem The whole command line is passed through, leading `run` and all, and
+rem i8086.cli.Main drops that first word: batch cannot rebuild a shifted
+rem argument list without losing the quoting it was given.
+java -cp "%CLASSES%" i8086.cli.Main %*
+exit /b %errorlevel%
+
 :collect
 rem %~1 = source root, %~2 = list file to write
 rem

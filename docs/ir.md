@@ -408,7 +408,7 @@ of it.
 asm clobbers(ax, dx, flags) {
     mov ah, 9
     mov dx, offset msg
-    int 21h
+    int 0x21
 }
 ```
 
@@ -419,10 +419,33 @@ this is also what defines "address taken" in §5.2.
 filled by the allocator, or forcing the variable into memory — and whether
 inputs and outputs are part of the syntax or only clobbers are.
 
-## 10. Data — [proposed]
+## 10. The header, and data
 
-Single-segment `.COM` layout: an origin, an entry point, and data defined inline
-where it sits, asm-style.
+### 10.1 The module header — [decided]
+
+Three directives, first, once each, before any item:
+
+```
+target 8086                 which machine the module is for
+org    0x100                where the image is loaded
+entry  main                 which label execution begins at
+```
+
+* All three are required. A module without them has no meaning: there would be
+  nothing to compile it for, nothing to place it at, and nothing to start.
+* **A target name may begin with a digit**, because this one does. This is the
+  only place in the surface where a number is read as a word, and it is
+  deliberate: the processor is called the 8086, and `target i8086` would be
+  inventing a name to suit the lexer.
+* `org` is an offset inside a segment, so it is at most `0xFFFF`.
+* The entry point is a label defined in the module. It is placed where it is
+  written: **items keep their source order**, so a module that wants its image to
+  begin with its entry point writes that label first. `[open]` whether a later
+  version instead places the entry point itself, or emits a jump to it.
+
+### 10.2 Data — [proposed, except as noted]
+
+Single-segment `.COM` layout: data defined inline where it sits, asm-style.
 
 ```
 target 8086

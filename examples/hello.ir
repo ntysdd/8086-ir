@@ -1,0 +1,21 @@
+; hello.ir - a DOS .COM that prints a string, then returns to DOS.
+;
+; The whole program is an inline assembly block, because the DOS entry point for
+; "print a string" is reached through registers, and there is no way to bind a
+; register from the surface yet (docs/ir.md §9). Everything else the compiler
+; needs is here: where the image is loaded, where execution begins, the bytes to
+; print, and the instruction that gets out of the way of the optimiser.
+
+target 8086
+org    0x100
+entry  main
+
+main:
+    asm clobbers(ax, dx, flags) {
+        mov ah, 9
+        mov dx, offset msg
+        int 0x21
+    }
+    ret
+
+msg: db "Hello, world!$"
