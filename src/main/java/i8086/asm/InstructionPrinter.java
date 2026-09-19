@@ -75,6 +75,12 @@ public final class InstructionPrinter {
                     "register allocation has not run: '" + ((Operand.Virtual) operand).name()
                             + "' is still a virtual register");
         }
+        if (operand instanceof Operand.LowByte) {
+            // The same, for the one operand that has not been told which half to read yet.
+            throw new IllegalStateException(
+                    "register allocation has not run: '" + ((Operand.LowByte) operand).name()
+                            + "' is still waiting for the half to read");
+        }
         if (operand instanceof Operand.Number) {
             return Numbers.spelling(((Operand.Number) operand).value());
         }

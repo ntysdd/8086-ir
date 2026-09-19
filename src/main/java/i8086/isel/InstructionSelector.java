@@ -6,6 +6,7 @@ import i8086.asm.Instruction;
 import i8086.asm.Numbers;
 import i8086.asm.Operand;
 import i8086.asm.Size;
+import i8086.ir.Conversion;
 import i8086.ir.Expression;
 import i8086.ir.Item;
 import i8086.ir.MemoryOperand;
@@ -373,6 +374,40 @@ public final class InstructionSelector {
         out.addAll(sequence.instructions());
     }
 
+    /**
+     * A conversion: a narrowing is nearly free, and a widening is not.
+     *
+     * <p>{@code y = byte x} asks for the low byte of {@code x}, and the machine already has it
+     * there — the value lives in the low half of a register, so the narrowing is a move that says
+     * which half is meant, and nothing at all when the destination is that same register
+     * ({@code docs/ir.md} §3.5). Widening is the other direction and is not free: this machine has
+     * no {@code MOVZX} or {@code MOVSX}, so it is a sequence the target has to declare, and the
+     * target does not declare one yet.
+     */
+    private void emitConversion(Value.Convert convert, String destination) {
+        if (convert.conversion().direction() != Conversion.Direction.NARROW) {
+            throw notYet(convert.position(), "a conversion that widens: this machine has no MOVZX "
+                    + "or MOVSX, so it is a sequence the target has to declare "
+                    + "(docs/ir.md §3.5)");
+        }
+        String source = sourceRegister(convert.operand());
+        if (source == null) {
+            throw notYet(convert.position(), "a narrowing of a value that is not a variable: the low "
+                    + "half of a register is what an instruction reads (docs/ir.md §3.5)");
+        }
+        if (convert.conversion() == Conversion.LOW_WORD || source.equals(destination)) {
+            // The low word of a value is the register it lives in, since a value wider than a
+            // register is not something this back end can do yet; and the low half is already where
+            // the result goes when the two are the same name. Either way it is a copy, and the
+            // allocator drops it when the two values end up in one register.
+            emitMove(destination, source, convert.position());
+            return;
+        }
+        out.add(new Instruction(convert.position(), "mov", operands(
+                virtual(destination, convert.position()),
+                new Operand.LowByte(convert.position(), source))));
+    }
+
     /** {@code p = msg}: the address of a label, as an immediate. */
     private void emitLabelAddress(String destination, Value.Name label) {
         out.add(new Instruction(label.position(), "mov",
@@ -492,7 +527,8 @@ public final class InstructionSelector {
             return;
         }
         if (value instanceof Value.Convert) {
-            throw notYet(value.position(), "a conversion");
+            emitConversion((Value.Convert) value, destination);
+            return;
         }
         throw notYet(value.position(), "a load");
     }

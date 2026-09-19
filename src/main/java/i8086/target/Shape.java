@@ -8,7 +8,9 @@ import i8086.asm.Operand;
  *
  * <p>A {@link i8086.asm.Operand.Virtual} is a {@link #REGISTER}: it is a value
  * that will live in one, and selection chooses the form before anyone has said
- * which one.
+ * which one. A {@link i8086.asm.Operand.LowByte} is one too: it is the low half of
+ * a register, which is a register as far as the instruction is concerned
+ * ({@code docs/ir.md} §3.5).
  */
 public enum Shape {
 
@@ -43,7 +45,8 @@ public enum Shape {
         if (operand instanceof Operand.Memory) {
             return MEMORY;
         }
-        if (operand instanceof Operand.Virtual || operand instanceof Operand.Name) {
+        if (operand instanceof Operand.Virtual || operand instanceof Operand.Name
+                || operand instanceof Operand.LowByte) {
             return REGISTER;
         }
         throw new IllegalArgumentException("no shape is known for " + operand.getClass().getName());

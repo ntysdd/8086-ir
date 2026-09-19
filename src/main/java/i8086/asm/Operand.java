@@ -71,6 +71,35 @@ public abstract class Operand {
         }
     }
 
+    /**
+     * A value read through its low half: the source of a narrowing conversion
+     * ({@code docs/ir.md} §3.5).
+     *
+     * <p>It is the one operand that is not read at the width of the value it names, and it exists
+     * because this machine has no instruction that narrows: {@code y = byte x} is the low byte of
+     * {@code x}, which is already in the low half of the register {@code x} lives in. So the move
+     * that carries out the narrowing says so on the operand, and the allocator writes that half's
+     * name — {@code al} where the value is in {@code ax}. Nothing else can produce one: the surface
+     * makes both sides of an assignment the same width, and a conversion is the only way to change
+     * that ({@code docs/ir.md} §3.2).
+     *
+     * <p>It carries a value's name and not a register, like {@link Virtual}: which register, and
+     * which half of it, is the allocator's to decide.
+     */
+    public static final class LowByte extends Operand {
+
+        private final String name;
+
+        public LowByte(SourcePos position, String name) {
+            super(position);
+            this.name = name;
+        }
+
+        public String name() {
+            return name;
+        }
+    }
+
     /** A numeric literal. */
     public static final class Number extends Operand {
 

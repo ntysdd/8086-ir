@@ -168,12 +168,19 @@ public final class Liveness {
      * alone would miss the address a load reads through — and a value no walk sees is a
      * value with no register and no life. A name that is not virtual is a register or a
      * label, which is neither a value nor this question.
+     *
+     * <p>A {@link Operand.LowByte} mentions its value like any other operand: a narrowing
+     * conversion reads it, and a use this walk missed would make a value look dead where it is
+     * read — which on the far side of a call that destroys every register is a value read out
+     * of a register the call has already overwritten ({@code docs/ir.md} §3.5).
      */
     private static List<String> mentioned(Instruction instruction) {
         List<String> names = new ArrayList<String>();
         for (Operand operand : instruction.operands()) {
             if (operand instanceof Operand.Virtual) {
                 names.add(((Operand.Virtual) operand).name());
+            } else if (operand instanceof Operand.LowByte) {
+                names.add(((Operand.LowByte) operand).name());
             } else if (operand instanceof Operand.Memory) {
                 for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
                     if (atom.isVirtual()) {

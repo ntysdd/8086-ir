@@ -92,6 +92,12 @@ public final class CompilerTest {
                 CompilerTest::walksAByteString);
         suite.add("Compiler loads, changes and stores a byte", CompilerTest::worksOnBytes);
         suite.add("Compiler refuses a multiply on bytes", CompilerTest::refusesAByteMultiply);
+        suite.add("Compiler narrows a value to its low byte", CompilerTest::narrowsToTheLowByte);
+        suite.add("Compiler narrows a value it still needs afterwards",
+                CompilerTest::narrowsAValueItStillNeeds);
+        suite.add("Compiler reloads a narrowed value from its home",
+                CompilerTest::narrowsFromAHome);
+        suite.add("Compiler refuses a conversion that widens", CompilerTest::refusesAWidening);
         suite.add("Compiler refuses five byte values at one point",
                 CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
@@ -1219,6 +1225,97 @@ public final class CompilerTest {
         Assert.assertTrue(refused.getMessage().contains("only live in the registers that have a low "
                 + "half, which is four"), "and counts the registers a byte has: "
                 + refused.getMessage());
+    }
+
+    /**
+     * {@code y = byte x}: the low byte of a value, which the machine already has where the value is,
+     * so the narrowing is one move and never arithmetic ({@code docs/ir.md} §3.5).
+     *
+     * <p>This is the shape a program wants when it takes the low half of something: what an assembly
+     * author would write as {@code mov al, cl}, and what the surface asks for with the word
+     * {@code byte}.
+     */
+    private static void narrowsToTheLowByte() {
+        Assert.assertEquals("org 0x100\n\n$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov al, cl\n"
+                        + "    mov byte [0x42], al\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    var y: u8\n"
+                        + "    x = word [0x40]\n"
+                        + "    y = byte x\n"
+                        + "    byte [0x42] = y\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The same narrowing with the wide value still to be read afterwards, so the two live in
+     * different registers and the copy is the one instruction that is left.
+     */
+    private static void narrowsAValueItStillNeeds() {
+        Assert.assertEquals("org 0x100\n\n$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov al, cl\n"
+                        + "    mov word [0x42], cx\n"
+                        + "    mov byte [0x44], al\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    var y: u8\n"
+                        + "    x = word [0x40]\n"
+                        + "    y = byte x\n"
+                        + "    word [0x42] = x\n"
+                        + "    byte [0x44] = y\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A narrowing of a value that had to wait in its home across a call that destroys every
+     * register. The low byte has to come out of the cell, not out of a register the call has already
+     * overwritten — which is what the allocator gets wrong if its liveness does not see the operand
+     * a narrowing reads ({@code docs/ir.md} §3.5, §8.1).
+     */
+    private static void narrowsFromAHome() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                + "$cell: pad 2\n\n$main:\n"
+                + "    var x: u16 in $cell\n"
+                + "    var y: u8\n"
+                + "    x = word [0x40]\n"
+                + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                + "    y = byte x\n"
+                + "    byte [0x42] = y\n"
+                + "    ret\n");
+        int stored = assembly.indexOf("mov word [$cell], ");
+        int called = assembly.indexOf("int 0x13");
+        int loaded = assembly.indexOf("word [$cell]", called);
+        int narrowed = assembly.indexOf("mov byte [0x42], ");
+        Assert.assertTrue(stored >= 0 && called > stored,
+                "the value waits in its home across the call: " + assembly);
+        Assert.assertTrue(loaded > called, "and comes back out of it afterwards: " + assembly);
+        Assert.assertTrue(narrowed > loaded,
+                "so the low byte is taken from what came back: " + assembly);
+    }
+
+    /**
+     * Widening is the direction this machine has no instruction for: {@code MOVZX} and {@code MOVSX}
+     * arrived with the 386, so it is a sequence the target has to declare and it does not yet
+     * ({@code docs/ir.md} §3.5).
+     */
+    private static void refusesAWidening() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var small: u8\n"
+                        + "    var wide: u16\n"
+                        + "    small = byte [0x40]\n"
+                        + "    wide = movzx small\n"
+                        + "    word [0x42] = wide\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("conversion that widens"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("MOVZX"),
+                "and names what the machine is missing: " + refused.getMessage());
     }
 
     private static void refusesWideAccess() {

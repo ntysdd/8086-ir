@@ -493,7 +493,8 @@ with is one register's worth at most, and this back end cannot name a pair (§3.
   fewer places to live than a word: `si`, `di` and `bp` cannot hold one at all, and a
   program with four byte values alive at once has run out of registers (§8.2). A
   memory access one byte wide is ordinary: `c = byte [p]` and `byte [p] = c` are one
-  load and one store, of the width the value has (§3.4).
+  load and one store, of the width the value has (§3.4). Taking the low byte of a wider
+  value is the narrowing conversion of §3.5, and it is one move at most.
 * **[open]** a literal cannot be written negative: `-1` is refused, and the bit
   pattern has to be written as `0xFFFF`. There is no unary minus in the surface,
   and whether there should be is not decided.
@@ -597,11 +598,16 @@ there is nothing to narrow from.
   low byte of x".
 * On the 8086 both extensions are **expansions** in the sense of `AGENTS.md`:
   `MOVZX` and `MOVSX` only arrived with the 386.
-* **[open]** what a conversion does to the flags. On this machine widening is an
-  instruction that touches them, so the compiler currently assumes a conversion
-  disturbs them, which refuses more than it has to. Which it is, is the target's
-to say (§4.2), and the answer belongs behind the target's flag effects rather
-  than in the IR.
+* **Narrowing costs a move at most, and nothing to compute.** `byte x` is the low byte of
+  `x`, and the low byte of a value is already in the low half of the register the value is
+  in — so the narrowing is a copy of that half into wherever the result goes, and no
+  instruction computes anything. That is why the two directions have different words
+  rather than one bracket: one of them is free and the other is not (§3.2).
+* **[open]** what a conversion does to the flags. A narrowing is a move and touches nothing,
+  so for it the answer is "nothing" — but widening is an instruction that does touch them, and
+  the compiler currently assumes that *any* conversion disturbs them, which is more than it has
+  to. Which flags each one leaves is the target's to say (§4.2), and the answer belongs behind
+  the target's flag effects rather than in the IR.
 
 ## 4. Flags
 

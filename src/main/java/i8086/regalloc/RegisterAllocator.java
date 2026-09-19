@@ -283,8 +283,8 @@ public final class RegisterAllocator {
     /** The virtual names one operand mentions: itself, or the address it is made of. */
     private static List<String> names(Operand operand) {
         List<String> names = new ArrayList<String>();
-        if (operand instanceof Operand.Virtual) {
-            names.add(((Operand.Virtual) operand).name());
+        if (operand instanceof Operand.Virtual || operand instanceof Operand.LowByte) {
+            names.add(nameOf(operand));
         } else if (operand instanceof Operand.Memory) {
             for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
                 if (atom.isVirtual()) {
@@ -293,6 +293,13 @@ public final class RegisterAllocator {
             }
         }
         return names;
+    }
+
+    /** The value an operand names, which the two virtual kinds both carry. */
+    private static String nameOf(Operand operand) {
+        return operand instanceof Operand.LowByte
+                ? ((Operand.LowByte) operand).name()
+                : ((Operand.Virtual) operand).name();
     }
 
     /** A copy of one value into another: the machine's own way of writing {@code d = s}. */
@@ -1083,6 +1090,20 @@ public final class RegisterAllocator {
             return register == null ? operand
                     : new Operand.Name(operand.position(), written(groupOf(name), register));
         }
+        if (operand instanceof Operand.LowByte) {
+            // The value is read through its low half, so the register it was moved into is read
+            // through its low half too — which is where that half of the value is (docs/ir.md §3.5).
+            String name = ((Operand.LowByte) operand).name();
+            String register = scratches.get(groupOf(name));
+            if (register == null) {
+                return operand;
+            }
+            String half = target.byteRegister(register);
+            if (half == null) {
+                throw new IllegalStateException("'" + register + "' has no low byte to read");
+            }
+            return new Operand.Name(operand.position(), half);
+        }
         if (operand instanceof Operand.Memory) {
             Operand.Memory memory = (Operand.Memory) operand;
             List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
@@ -1284,6 +1305,9 @@ public final class RegisterAllocator {
             if (operand instanceof Operand.Virtual) {
                 String name = ((Operand.Virtual) operand).name();
                 operands.add(((Operand.Virtual) operand).resolvedTo(written(name)));
+            } else if (operand instanceof Operand.LowByte) {
+                operands.add(new Operand.Name(operand.position(),
+                        lowHalf(((Operand.LowByte) operand).name())));
             } else if (operand instanceof Operand.Memory) {
                 operands.add(resolve((Operand.Memory) operand));
             } else {
@@ -1291,6 +1315,23 @@ public final class RegisterAllocator {
             }
         }
         return new Instruction(instruction.position(), instruction.mnemonic(), operands);
+    }
+
+    /**
+     * The name of the low half of the register a value lives in.
+     *
+     * <p>A narrowing conversion reads a value through its low half
+     * ({@link Operand.LowByte}, {@code docs/ir.md} §3.5), and the half is named by the target: a
+     * register with no byte half would be a bug in {@link #registersFor} rather than a program this
+     * cannot compile, so it is said that way.
+     */
+    private String lowHalf(String name) {
+        String register = registerOf(name);
+        String half = target.byteRegister(register);
+        if (half == null) {
+            throw new IllegalStateException("'" + register + "' has no low byte to read");
+        }
+        return half;
     }
 
     private Operand resolve(Operand.Memory operand) {
