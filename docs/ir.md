@@ -846,6 +846,19 @@ Because variables are virtual registers, the meaning is exact:
 compiler at all, so every function currently behaves as a no-spill one, and a
 program that needs more registers than six is refused (`README.md`, *Status*).
 
+**[open]** the allocator gives each name **one register for the whole function**, so
+a name that is redefined around a call is kept out of everything the call destroys
+even though nothing of it is alive there (§11.1). The fix is to split a name's life
+at each definition that reads nothing — `x = eval(x + 1)` is one instruction that
+reads and writes, and a write that reads nothing starts a new life — with each life
+ending at its last mention. It was written and tried: it fixes the case that
+motivated it, and it moved one value into the register a shift count arrives in,
+which is a miscompile that an existing test caught. So it is written down here
+rather than half in the code. The place to look next time is the shift sequence,
+which shifts its **source** in place and then copies out — the source is alive across
+the instruction that sets the count, and whatever the new lives say about that has to
+agree with the rule that keeps values out of `cl`.
+
 ## 9. Inline assembly — [decided]
 
 Inline assembly is the escape hatch: register-based BIOS/DOS calls, port
