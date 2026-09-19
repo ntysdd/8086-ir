@@ -126,8 +126,9 @@ the parser: **values never stand next to each other**. There is no reading of
 it is an operator, so a word's role is decided by what stands beside it, and one
 token of lookahead settles the few places where a word could begin two things:
 `eval` and `expr` are the operation only in front of `(`; a size word is a size
-only when a value follows it; and `in` gives a variable a home only after the
-type of its declaration (§3.1.2). The dot words are not on this list because the
+only when a value follows it; and a name gives a variable a home only after the type
+of its declaration, with the word after it saying whether the home is kept current
+(§3.1.2). The dot words are not on this list because the
 dot settles them: `.if` is the sugar and cannot be a name (§7.2).
 
 **The dot is the one exception, and it is worth its cost.** `.if`, `.elseif`,
@@ -218,41 +219,48 @@ produces is described.
 
 ```
 tries: pad 2
+dap:   pad 16
 
 main:
-    var left: u16 in tries      ; left is those two bytes, not a register
+    var left: u16 in tries               ; a home for left: these bytes, if it needs
+    var packet: u16 in dap through       ; and one that is kept current
     left = 4
 again:
-    int 0x13                    ; a handler this compiler has never seen
+    int 0x13                             ; a handler this compiler has never seen
     jnc done
     left = eval(left - 1)
     cmp left, 0
     jne again
 done:
+    packet = 0x10
     ret
 ```
 
-`var x: u16 in place` says that `x` **is** bytes in the image at `place`, rather
-than a virtual register the allocator may keep in a register. Every read is a
-load, every definition is a store, and no register copy is kept: the value has one
-home and it is memory. `left` above survives `int 0x13` without the program saying
-what the handler keeps, which is the whole point of it.
+`var x: u16 in place` gives `x` a **home**: bytes in the image that it may live in.
+Whether it does is the allocator's decision, and that is what the declaration is for.
+A value that fits in a register stays in one and the home is never touched, which
+costs nothing; a value the registers cannot hold is given its home instead of being
+refused, and then every read of it is a load and its one definition is followed by a
+store. `left` above survives `int 0x13` without the program saying what the handler
+keeps — and it needs no register across the call to do it, which is the whole point.
 
 Why it earns its place:
 
-* **A home that outlives anything opaque.** A value that has to live across an
-  `int`, across an inline block, or across anything the compiler cannot see is kept
-  today in registers the thing is declared not to destroy (§11.1). That is a
-  promise about the *handler*, and it cannot be made in general: nothing in the
-  surface says what memory an `int` writes, so only registers can be reasoned about
-  at all. A declared home gives the program bytes whose contents *it* controls, and
-  what the compiler cannot see inside a block stops mattering.
-* **The pressure escape hatch.** Needing more simultaneously live values than the
-  six registers is a hard error (§8.2), and this is how a program says "this one
-  lives in memory" without writing the load and the store by hand — which is what
-  §11.1's second route does manually, with the reload landing in a *fresh name*. It
-  is a promise the compiler keeps for free: there is nothing to spill, because
-  nothing was ever in a register.
+* **The pressure escape hatch is the point of it.** Needing more simultaneously live
+  values than the six registers is a hard error (§8.2), and this is how a program says
+  "this one may live in memory" without writing the load and the store by hand — which
+  is what §11.1's second route does manually, with the reload landing in a *fresh
+  name*. Writing them by hand is not the same thing: it fixes *when* the memory is
+  used, so a value that would have fitted in a register pays for memory anyway. A home
+  is used only when it is needed, and a program that declares one and turns out not to
+  need it has paid nothing.
+* **A home is also a place that outlives anything opaque.** A value that has to live
+  across an `int`, across an inline block, or across anything else the compiler cannot
+  see is kept today in registers the thing is declared not to destroy (§11.1). That is
+  a promise about the *handler*, and it cannot be made in general: nothing in the
+  surface says what memory an `int` writes, so only registers can be reasoned about at
+  all. A home gives the program bytes whose contents *it* controls, and what the
+  compiler cannot see inside a block stops mattering.
 * **It is what hand-written boot code does**, and that is why the home is a *name*
   rather than a number. A boot sector keeps its few bytes in the sector and
   addresses them, because there is nowhere else: the stack may not exist yet
@@ -262,11 +270,36 @@ Why it earns its place:
   so that every in-image label keeps its value; GRUB's installer patches fields at
   fixed byte offsets of stage1. A name survives all of that; a number does not.
 
-**It is not a spill, and §8.2 is unchanged.** Nothing here is handed to a variable
-by the allocator: the home is named by the program, it is in the image rather than
-on the stack, and no value is ever moved between the home and a register behind the
-writer's back. "No frame, no spill slot" is a promise about what the *compiler*
-invents, and this is not invented.
+**The home is memory the program declared, so nothing is invented.** §8.2's promise
+is about what the *compiler* makes up — no frame, no spill slot — and a home is the
+program's own storage: the address is a label in the image, chosen by the author, and
+the compiler uses it only because the author said it may. What §8.2 refuses is the
+compiler deciding on its own to put a value somewhere, and that has not changed: a
+variable with no home is still refused when the registers run out.
+
+**Two modes, and the difference is when the memory is written.** `in place` alone is
+the first: the home is used when the registers cannot hold the value, and until then
+the bytes at `place` hold whatever they held — the image's own contents, or what the
+last program left there if the module never writes them. So `in place` says nothing
+about what somebody else reading those bytes would see; it says where the value goes
+when it has to go somewhere. **[open]** the spelling of the second mode, and whether
+it belongs on the declaration at all — §12 item 18.
+
+`through` is the second mode, and it says the home is to be **kept current**: every
+write to that variable goes to the home, whenever it happens and whatever else the
+allocator does with the value. It is for a home that somebody else reads — a handler,
+the next stage, or a program that patches the image. It costs a store per definition,
+which is what asking for it means.
+
+**A write through a home is half of a volatile write.** It is never removed, never
+duplicated, and never moved across another access to memory, all of which a volatile
+write is too (§3.4), with one difference: the compiler **may** leave it out when it
+can prove the home already holds that value, and a volatile write never may. That
+proof is the compiler's to make and nobody else's to assume, and today the only one
+available is the one §3.4 already states — the same access written twice — so a store
+of the same value to the same home with nothing in between is the store that may go.
+Everything else stands: the bytes are written on every definition, in the order the
+program writes them, and nothing else may be moved across one.
 
 Three rules, and what each is for:
 
@@ -280,34 +313,48 @@ Three rules, and what each is for:
   (§2.2). The check is the verifier's rather than the parser's, because the item may
   be declared after the code that names it — the same reason a `dw` list of labels
   is checked by the verifier (§10.2).
-* **Nothing is assumed about who else touches those bytes.** A home *is* the bytes
-  of the item it names, and the compiler claims nothing about the two in either
-  direction: a write through `x` is not assumed visible through a read of `place`,
-  and a read of `x` is not folded to something written earlier. That is the rule
-  §3.4 already takes about two accesses, and here it is not a limitation but the
-  feature: a program that asks for a home is saying it wants those bytes written, so
-  believing anything about them would be believing the opposite. Two variables may
-  therefore name the same bytes — a 16-bit value and the two bytes it is made of —
-  and nothing needs to be said about that either, because nothing is inferred.
-* **Its writes are effects; its reads are loads.** A store to a home is never
-  removed, never duplicated, and never moved across another access to memory, which
-  is what the home is for. A read whose value nobody uses changes nothing and may
-  go, as a plain read of memory may today; `volatile` keeps the meaning §3.4 gives
-  it and stays the way to say that a read is itself an effect.
+* **A home is one cell, so values in it may not be alive at the same time.** This is
+  the rule registers are handed out by, and it is the allocator's to keep, because it
+  is the allocator that decides which values go to a home. Two variables may name the
+  same bytes — a 16-bit value and the two bytes it is made of — and nothing is
+  inferred about that in either direction: a write through `x` is not assumed visible
+  through a read of `place`, and a read of `x` is not folded to something written
+  earlier. That is the rule §3.4 already takes about two accesses, and here it is the
+  feature rather than a limitation, because a program that asks for a home is saying
+  it wants those bytes written. What the bytes *are* is what the image says (`pad`
+  counts as zeros, §10.2), and a program that wants a value there has to write one.
+* **Its writes are effects.** A store to a home is never removed, never duplicated,
+  and never moved across another access to memory, which is what the home is for —
+  and in `through` mode that is true of every write to the variable, not only of the
+  ones the allocator chose to put in memory. A read whose value nobody uses changes
+  nothing and may go, as a plain read of memory may today; `volatile` keeps the
+  meaning §3.4 gives it and stays the way to say that a read is itself an effect.
+  **[open]** a home whose *bytes* something else writes — a timer's tick counter, a
+  cell a handler updates — is a different matter, because then the compiler may not
+  keep a copy of the value at all: §12 item 19.
 
-**What it lowers to, since that is where the cost is.** Before SSA, and without the
-surface saying so: a read is a load into a fresh value, a definition is a store, and
-an operation on a home reads it, computes in a register, and writes back — so
-`left = eval(left - 1)` is a load, a subtraction and a store. Whether the machine
-can do some of that in place (`sub word [tries], 1` is one instruction on this one)
-is the target's business and not the surface's. A variable with a home therefore
-costs a load per use and a store per definition, and a program pays that
-deliberately: bytes and instructions are what this project measures, and what is
-bought with them is a home that outlives what the compiler cannot see. The lowered
-accesses have to stay distinguishable from an authored `[0x40] = x` — not in the
-syntax, which says nothing about it, but for the pass that would one day promote
-memory to values (*README*, step 3): a home was asked for, so it may not be quietly
-promoted back into a register.
+**What the allocator does, since that is where the cost is.** The decision is made
+where every other decision about where a value lives is made — in the allocator, and
+not before SSA as a question about operand shapes (*README*, step 7). A value given a
+home is one whose reads become loads and whose definition is followed by a store, so
+`left = eval(left - 1)` is a load, a subtraction and a store when `left` is in memory
+and one instruction when it is not. Whether the machine can do part of that in place
+(`sub word [tries], 1` is one instruction on this one) is the target's business and
+not the surface's.
+
+A home is a resource like a register, and it is handed out the same way: the value
+it holds may not be alive at the same time as another value that is given it, and the
+allocator colours a graph to decide (*README*, step 7). So the number of values that
+end up in memory is the fewest the program allows — a home is one more colour, and
+the colouring is optimal. What is *not* optimal is the cost: which of several values
+goes to memory when only some of them fit is a question about how often each is read,
+and that is a heuristic.
+
+The accesses the allocator writes have to stay distinguishable from an authored
+`[0x40] = x` — not in the syntax, which says nothing about it, but for the pass that
+would one day promote memory to values (*README*, step 3): a home was asked for, so a
+value the allocator put there may not be quietly promoted back into a register, or
+the bytes the program asked to be written stop being written.
 
 **[open]** where the absoluteness stops. This proposal confines a home to bytes the
 image already contains, so the address is a label and stays right whatever `org`
@@ -320,22 +367,24 @@ default, and whether its segment can be stated at all (§8.1), belong to that
 question.
 
 **What it does not change.** Reading a *virtual register* before anything writes it
-stays unchecked (§3.1) — a variable with a home is a different thing, and it is
-defined from the start, because its bytes are in the image and what they hold is
-what the image says (`pad` counts as zeros, §10.2). The address of a virtual
-register is still refused, for the reason §10.2 gives: it would be whatever the
-allocator chose. That reason is about the allocator's choice and so it does not
-reach a home, which makes whether a home's address may be written as a value
-**[open]** — §12 item 16.
+stays unchecked (§3.1), and a variable with a home is a virtual register with
+somewhere to go — so reading it before writing it is unchecked in the same way. The
+bytes at the home are there from the start, but whether the *variable* holds what they
+hold depends on the allocator: a value that stayed in a register never wrote them.
+That is the difference the two modes make, and a program that needs the bytes to be
+current says so. The address of a virtual register is still refused, for the reason
+§10.2 gives: it would be whatever the allocator chose. That reason is about the
+allocator's choice and so it does not reach a home, which makes whether a home's
+address may be written as a value **[open]** — §12 item 16.
 
-The word `in` is a word of the surface from now on, and **it is a word rather than a
-reservation** (§3.1): `var in: u16` is still a variable called `in`, and a
-declaration whose home is a data item called `in` is written `var x: u16 in in` —
-which the printer writes back as `var $x: u16 in $in`, because the second `in` is
-where a name stands, the first is where the surface's word does, and every name
-carries the `$` that says it is one (§3.1.1). `in` at the start of a statement is
-still the port instruction and is still refused with its reason (§11); the three
-never stand in the same place, which is the argument the whole surface rests on
+The words `in` and `through` join the surface, and **they are words rather than
+reservations** (§3.1). A variable may still be called either of them: `var in: u16`
+declares one, a declaration whose home is a data item called `in` is written
+`var x: u16 in in`, and the printer writes that back as `var x: u16 in $in` — the
+second `in` is where a name stands, the first is where the surface's word does, and
+every name carries the `$` that says it is one (§3.1.1). `in` at the start of a
+statement is still the port instruction, still refused with its reason (§11); the
+roles never stand in the same place, which is the argument the whole surface rests on
 (§3.1).
 
 ### 3.2 Widths and signedness — [decided]
@@ -993,6 +1042,12 @@ enough" is a theorem about that graph, and the message names the values that wer
 alive at the same time — which is the answer to "why not", and the thing a program
 has to change.
 
+This marker is about the **stack**, and §3.1.2's homes are about memory the program
+declared, so the two are different promises: a function that may not spill still has
+its declared homes to put a value in, because those bytes are the program's own and
+not something the compiler invented. What that means for the open question here is
+that the spelling does not have to say anything about them.
+
 **[decided] each definition is one life.** The form gives every definition a name of
 its own, and the allocator is told only which names have to share a register: the ones
 a φ joins, and the two ends of a copy whose source dies there (`RegisterAllocator`,
@@ -1416,6 +1471,21 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     and wrong for a label the author named `ax` and branched to — a program the
     surface allows, because nothing is reserved (§3.1). Reading a program back needs
     the spelling to be enough on its own, and here it is not.
+18. The spelling of the mode that keeps a home current: `through` in §3.1.2, which is a
+    proposal. What is decided is that there are two modes and what each of them means —
+    the home is used when the registers run out, or the home is written on every
+    definition — because a home that somebody else reads has to be told apart from one
+    that is only the allocator's own business. Whether the second is a word on the
+    declaration (`in place through`), a property of the home itself (a `pad` that says
+    it is kept current), or a declaration of its own is what is open.
+19. A home whose bytes something else writes. `through` keeps the *memory* current on
+    every write, which is what a reader outside the module needs, and says nothing
+    about the other direction: the compiler may still hold a copy of a value it read.
+    For a cell a handler or a device updates — the timer's counter at 0x046C, a byte a
+    handler rewrites — no copy may be held at all, which is what `volatile` means for
+    an access (§3.4) and what a variable cannot say yet. Whether that is a third mode,
+    or the same idea applied to the variable rather than to the declaration, is the
+    question.
 
 ## 13. Non-goals for v1
 
