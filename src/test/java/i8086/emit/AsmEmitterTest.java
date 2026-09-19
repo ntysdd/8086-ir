@@ -51,7 +51,7 @@ public final class AsmEmitterTest {
     public static void register(Suite suite) {
         suite.add("Asm emitter writes the whole program", AsmEmitterTest::writesWholeProgram);
         suite.add("Asm emitter writes arithmetic", AsmEmitterTest::writesArithmetic);
-        suite.add("Asm emitter refuses a branch it cannot select yet",
+        suite.add("Asm emitter writes a loop",
                 AsmEmitterTest::writesALoop);
         suite.add("Asm emitter drops the target and the entry point",
                 AsmEmitterTest::dropsModuleMetadata);
@@ -166,14 +166,14 @@ public final class AsmEmitterTest {
                 + "main:\n"
                 + "    mov ax, 0\n"
                 + "    mov cx, 3\n"
+                + "    jmp $lbl1\n"
                 + "\n"
                 + "$lbl0:\n"
-                + "    cmp ax, cx\n"
-                + "    jnc $lbl1\n"
                 + "    add ax, 1\n"
-                + "    jmp $lbl0\n"
                 + "\n"
                 + "$lbl1:\n"
+                + "    cmp ax, cx\n"
+                + "    jc $lbl0\n"
                 + "    ret\n", assembly);
     }
 }

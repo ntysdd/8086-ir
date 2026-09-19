@@ -229,7 +229,7 @@ public final class IrParser {
         List<Item> out = new ArrayList<Item>();
         String end = null;
         String next = freshLabel();
-        out.addAll(test(parseCondition("'.if'"), next, at));
+        out.addAll(test(parseCondition("'.if'"), next, false, at));
         endOfLine();
 
         while (true) {
@@ -240,7 +240,7 @@ public final class IrParser {
                 out.add(jump(end, here.position()));
                 out.add(label(next, here.position()));
                 next = freshLabel();
-                out.addAll(test(parseCondition("'.elseif'"), next, here.position()));
+                out.addAll(test(parseCondition("'.elseif'"), next, false, here.position()));
                 endOfLine();
                 continue;
             }
@@ -265,18 +265,37 @@ public final class IrParser {
         }
     }
 
-    /** {@code .while cond ... .endw}: test at the top, jump back at the bottom. */
+    /**
+     * {@code .while cond ... .endw}, with the test at the bottom:
+     *
+     * <pre>
+     *   jmp TEST
+     * BODY:
+     *   ...
+     * TEST:
+     *   cmp ...
+     *   j{cond} BODY      ; the condition's own branch, back to the body
+     * </pre>
+     *
+     * <p>The test has to happen before the first time round, so there is a jump to
+     * it — paid once. After that the <em>conditional</em> branch is what goes back,
+     * which saves an instruction every time round, and instructions are what this
+     * project counts. The branch is the one the writer asked for rather than its
+     * opposite, because falling out of the loop is the path that needs no
+     * instruction at all.
+     */
     private List<Item> parseWhile(Token keyword) {
         SourcePos at = keyword.position();
-        List<Item> out = new ArrayList<Item>();
-        String top = freshLabel();
-        String end = freshLabel();
-        out.add(label(top, at));
-        out.addAll(test(parseCondition("'.while'"), end, at));
+        Condition condition = parseCondition("'.while'");
         endOfLine();
+        List<Item> out = new ArrayList<Item>();
+        String body = freshLabel();
+        String test = freshLabel();
+        out.add(jump(test, at));
+        out.add(label(body, at));
         out.addAll(parseItems());
-        out.add(jump(top, at));
-        out.add(label(end, at));
+        out.add(label(test, at));
+        out.addAll(test(condition, body, true, at));
         require(peek().isName(".endw"), peek().position(),
                 "expected '.endw' to close the '.while' at " + at);
         next();
@@ -284,12 +303,20 @@ public final class IrParser {
         return out;
     }
 
-    /** One test of the sugar: compare, then branch past this branch when it fails. */
-    private List<Item> test(Condition condition, String falseTarget, SourcePos where) {
+    /**
+     * One test of the sugar: compare, then branch — to the target when the
+     * comparison holds, or when it does not.
+     *
+     * <p>Which way round is the caller's business, and it is the difference between
+     * the two constructs: an {@code .if} leaves when its test fails, a
+     * {@code .while} goes back when its test holds.
+     */
+    private List<Item> test(Condition condition, String destination, boolean whenTrue,
+                            SourcePos where) {
         List<Item> out = new ArrayList<Item>();
         out.add(new Item.Compare(where, Item.Compare.Kind.CMP, condition.left, condition.right));
-        String taken = target.conditionFor(condition.comparison, condition.signed);
-        out.add(new Item.Branch(where, target.negate(taken), falseTarget));
+        String word = target.conditionFor(condition.comparison, condition.signed);
+        out.add(new Item.Branch(where, whenTrue ? word : target.negate(word), destination));
         return out;
     }
 

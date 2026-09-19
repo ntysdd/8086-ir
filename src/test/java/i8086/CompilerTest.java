@@ -176,8 +176,9 @@ public final class CompilerTest {
     }
 
     /**
-     * A loop the sugar wrote, compiled: the comparison, the branch back, and the
-     * exit, with the two variables each in a register for the whole of it.
+     * A loop the sugar wrote, compiled: the jump to the test, the body, and the
+     * test at the bottom whose conditional branch is what goes back — so the body
+     * costs one instruction fewer every time round than a test at the top would.
      */
     private static void compilesSugar() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
@@ -185,10 +186,10 @@ public final class CompilerTest {
                 + "    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    cmp ax, cx\n    jnc $lbl1\n"),
-                "the loop tests at the top and leaves when the comparison fails: " + assembly);
-        Assert.assertTrue(assembly.contains("    jmp $lbl0\n"),
-                "and goes back at the bottom: " + assembly);
+        Assert.assertTrue(assembly.contains("    jmp $lbl1\n\n$lbl0:\n    add ax, 1\n"),
+                "the loop body comes first and the test is jumped to: " + assembly);
+        Assert.assertTrue(assembly.contains("$lbl1:\n    cmp ax, cx\n    jc $lbl0\n"),
+                "and the condition's own branch goes back: " + assembly);
     }
 
     /**

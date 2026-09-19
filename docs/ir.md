@@ -522,6 +522,33 @@ Labels, `jmp`, and the `jcc` family. This is what the pipeline sees.
   opposites. `jb` against `jnc` is not a rule anybody could guess, so it is asked
   rather than derived.
 
+Both constructs are shaped for **instruction count**, which is one of the two
+things this project measures output by:
+
+```
+.if c            .while c
+  A                A
+.else            .endw
+  B
+.endif
+
+cmp c            jmp TEST      ; paid once, to reach the test
+j{not c} L1      BODY:
+A                  A
+jmp END          TEST:
+cmp c            cmp c
+j{not c} L1      j{c} BODY     ; the condition's own branch is what goes back
+B
+END:
+```
+
+An `if` spends one branch per test and no jump unless there is an `else`. A
+`while` puts its test at the bottom, which costs one jump on entry and then saves
+one instruction every time round: the conditional branch is what goes back, and
+falling out of the loop is the path that needs no instruction at all. The inner
+branch of a `while` is therefore the condition **as written**, where an `if`
+branches on its opposite.
+
 ## 8. Storage state and the stack
 
 ### 8.1 Segment registers — [decided]
