@@ -13,7 +13,9 @@ These hold for every change, with no exceptions and no "just for now".
 1. **SSA is verified, not assumed.**
    Every transformation runs `verify()` on its input and on its output. A pass
    that cannot state and check its own pre/postconditions is not finished. Never
-   commit IR that has not been verified.
+   commit IR that has not been verified. The input IR is not SSA and has its own
+   verifier (well-formedness, widths, definedness, positions); from SSA
+   construction onward, every transformation verifies SSA on both sides.
 2. **Target knowledge lives in the target layer, except in the last passes.**
    Instruction encodings, operand constraints, register classes, flag
    semantics, addressing modes and segmentation belong to the target
@@ -164,22 +166,36 @@ Rules that keep this layout meaningful:
   pass framework, it is in the wrong place or does too much.
 * One pass per class, implementing the pass interface, with analysis split out
   into separate analysis classes that the pass consumes.
-* Lowering makes operand combinations legal; selection only selects. `isel`
-  picks an instruction form for a machine-IR instruction and never synthesizes a
-  new sequence. If something wants to emit instructions after lowering, the
-  missing work belongs in lowering, before SSA, where it can still be optimized
-  and verified.
+* Lowering makes operand combinations legal; selection only selects. The two
+  are allowed to replace an operation with instructions in exactly one way each:
+  * **Lowering** turns an operation the target cannot express into one it can:
+    operand-shape legalisation, wide operations split into narrow ones, far
+    pointer arithmetic written out. It happens before SSA, so what it produces
+    is optimised and verified like any other code.
+  * **Expansion** substitutes a fixed, target-declared instruction sequence for
+    one operation that has no single instruction, and may happen at selection
+    time. `setcc` on a target without `SETcc`, and materialising a flag value,
+    are the examples. The sequence comes from the target description, so `isel`
+    substitutes a declared expansion rather than choosing freely: it is a
+    lookup, not code generation, which is what keeps its output verifiable.
+  * Neither may invent the other's job. If something wants to emit instructions
+    for an operand combination, that is legalisation and belongs in lowering.
 * Virtual flag registers are absorbed at selection time, into the implicit flag
   effects of the concrete instructions. Register classes are all the allocator
   has to reason about.
-* Flag values are ordinary values. The IR has exactly one explicit read-flags
-  operation, and SSA construction materialises a virtual flag register with it
-  whenever that flag would have to survive an instruction which defines it.
-  Lowering therefore needs no liveness analysis to keep flags alive, and no
-  generic pass may reintroduce a special notion of "flag" beyond the target
-  description's flag-def and flag-use sets.
+* Flag values are ordinary values, and the surface has an explicit way to turn
+  one into a value (`docs/ir.md`, the `setcc` family). SSA construction
+  materialises a virtual flag register with it whenever that flag would have to
+  survive an instruction which defines it. Lowering therefore needs no liveness
+  analysis to keep flags alive, and no generic pass may reintroduce a special
+  notion of "flag" beyond the target description's flag effects, which are
+  three-state: defined, undefined, or preserved.
 * New passes are registered explicitly in the pipeline, and the pass list in
   `README.md` is updated in the same change.
+* `docs/ir.md` is the description of record for the IR *surface* — the syntax and
+  semantics a person writes and reads. A new IR construct is proposed and
+  approved there before it is implemented, and `README.md` links to it rather
+  than restating it.
 * The 8086 is *the* target. Everything else in README's *Future targets* is a
   later goal, and is never a reason to build abstraction ahead of need. The
   target-description boundary exists from the first milestone so that 8086

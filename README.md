@@ -18,6 +18,7 @@ The whole thing is written in Java 8, with no third-party runtime dependencies.
   * Input: a high-level, readable IR that a human can write and edit by hand.
     It is close to 8086 semantics but not bound to the hardware: unlimited
     virtual registers, no fixed operand constraints, explicit memory effects.
+    The surface is specified in [`docs/ir.md`](docs/ir.md).
   * Output: ordinary, readable 8086 assembly (Intel syntax), the kind of code
     you would otherwise write by hand for DOS, BIOS, bootloaders or embedded
     targets.
@@ -33,6 +34,18 @@ The whole thing is written in Java 8, with no third-party runtime dependencies.
   encoding-level knowledge is stated directly: at most three target-specific
   passes at the very end, just before instruction selection, clearly marked as
   belonging to one target.
+* **Optimised for size, not for speed.**
+  The optimizer is a real pipeline, but the objective it is scored against is
+  instruction **size in bytes** and instruction **count**, not cycles. Both
+  matter more on this target: a boot sector is exactly 512 bytes, a `.COM` has
+  to fit under 64K, and the 8086 has no cache to fill and no pipeline to stall.
+  So the transformations that shape code are the ones that make it smaller —
+  fewer instructions, shorter encodings, a memory operand instead of a
+  load/use/store sequence, implicit-operand forms (`cbw`, `cwd`, `lodsb`), and
+  the shortest jump that reaches its label. Where two candidates are the same
+  size, the target's cost estimates break the tie. Speed is a tie-break, never
+  the goal. Deliberately absent: loop unrolling, inlining for speed, and
+  anything else that trades bytes for cycles.
 * **Self-contained.**
   A bundled micro-assembler (`asm`) parses the emitted assembly, encodes it,
   resolves labels and produces a flat binary. Same repo, same build, no NASM
@@ -120,8 +133,9 @@ The pipeline is a conventional one, adapted to the constraints of the target.
    Each belongs to exactly one target, is marked as such in the pipeline
    listing, and lives with that target rather than in the generic pass package.
 6. **Instruction selection**: pick the instruction *form* — which instruction,
-   which addressing mode, which encoding, which immediate width — by size and
-   estimated speed. Selection only selects: it never synthesizes a new
+   which addressing mode, which encoding, which immediate width — by size first,
+   with the target's cost estimates breaking ties (*Optimised for size*, above).
+   Selection only selects: it never synthesizes a new
    instruction sequence, because lowering already guaranteed legal operand
    combinations. Virtual flag registers are absorbed here, into the implicit
    flag effects of the instructions that produce them, so the allocator deals
@@ -160,6 +174,7 @@ src/main/java/.../cli/        command-line entry points
 src/test/java/...             unit tests, golden tests, round-trip tests
 src/test/resources/           golden files: IR samples, expected assembly/bytes
 examples/                     hand-written IR samples and expected output
+docs/ir.md                    the IR surface: syntax and semantics
 ```
 
 ### Building and running
