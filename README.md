@@ -190,10 +190,12 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    pre-coloured nodes, which are not needed: what the machine insists on is handled
    by the copies its own sequences are written with. That an address has three
    registers to live in rather than six is the one place a value's class is narrower
-   than the machine when the value is a word, and a byte value is narrower still:
+   than the machine when the value is a word; a byte value is narrower still:
    it lives in the low half of one of the four registers that has a half, so `si`
-   and `di` cannot hold it (`docs/ir.md` §3.2). An access is the width of the value
-   it moves, so a byte load is one byte and names `al` rather than `ax`.
+   and `di` cannot hold it (`docs/ir.md` §3.2), and a register the allocator never
+   allocates — `sp`, `bp` and the segment registers — is what `movreg` writes instead.
+   An access is the width of the value it moves, so a byte load is one byte and names
+   `al` rather than `ax`.
 8. **Emit** assembly text for the selected target. **Built.**
 9. **Assemble** (optionally, in the same run): the bundled `asm` front end
    encodes instructions, choosing the shortest encoding for each form it is
@@ -317,13 +319,13 @@ Working today:
   opaque and these are not: an interrupt with a declared clobber list leaves the
   rest of the module optimisable, and a value may live across it
   (`docs/ir.md` §11).
-* **The machine's segmentation state**: `movseg ds, 0`, `movseg ss, 0`,
-  `movseg sp, 0x7C00`, `movseg ds, cs` — the state a module sets up before anything else
-  runs, in the sequence the machine needs for each (a segment register takes no immediate,
-  so it goes through `ax`). It is a statement of its own rather than an assignment,
-  because a name in the position an assignment writes cannot say whether it means the
-  machine's register or a variable of that name — which is what keeps `ds` an ordinary
-  name (`docs/ir.md` §8.1).
+* **The machine's own registers**: `movreg ds, 0`, `movreg ss, 0`,
+  `movreg sp, 0x7C00`, `movreg ds, cs`, `movreg bp, 0x1000` — the registers a value cannot
+  live in, which is what makes a standalone write to one safe, in the sequence the machine
+  needs for each (a segment register takes no immediate, so it goes through `ax`). It is a
+  statement of its own rather than an assignment, because a name in the position an
+  assignment writes cannot say whether it means the machine's register or a variable of that
+  name — which is what keeps `ds` an ordinary name (`docs/ir.md` §8.1).
 * **A far jump**, `jmp 0x0000:0x7E00`, which is how a boot loader hands control to a
   kernel — and it is a statement because the compiler then knows nothing after it
   runs (`docs/ir.md` §7.1).
@@ -359,9 +361,12 @@ Working today:
   register is taken, a value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
-Not built yet, and refused with a reason rather than guessed at: a widening into a value
-wider than a register (the answer is two of them, and nothing in the back end can name a
-pair), `setcc`,
+Not built yet, and refused with a reason rather than guessed at: the `with` clause that
+would give a statement the registers it is an interface through (`docs/ir.md` §11), and
+`movreg`'s other direction, reading a register into a value — which is how a boot loader
+would get the drive number the BIOS hands it in `dl` (§8.1). A widening into a value wider
+than a register (the answer is two of them, and nothing in the back end can name a pair),
+`setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
 refused until every definition writes those bytes — a wrong answer nobody is told about

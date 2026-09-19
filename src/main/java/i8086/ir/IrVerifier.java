@@ -178,8 +178,8 @@ public final class IrVerifier {
             checkPad(item);
             return flagsDefined;
         }
-        if (item instanceof Item.MovSeg) {
-            checkMovSeg((Item.MovSeg) item);
+        if (item instanceof Item.MovReg) {
+            checkMovReg((Item.MovReg) item);
             return flagsDefined;
         }
         if (item instanceof Item.FarJump) {
@@ -497,7 +497,7 @@ public final class IrVerifier {
     }
 
     /**
-     * {@code movseg ds, 0}: the state written, and what is put into it ({@code docs/ir.md} §8.1).
+     * {@code movreg ds, 0}: the state written, and what is put into it ({@code docs/ir.md} §8.1).
      *
      * <p>Two kinds of source, and they are checked differently. A segment register is a name the
      * machine has and the parser has already decided means that, so the check here is that the
@@ -505,14 +505,14 @@ public final class IrVerifier {
      * to be the width of the register it goes into: this machine's segmentation state is sixteen
      * bits, so a byte or a double word does not fit.
      */
-    private void checkMovSeg(Item.MovSeg movseg) {
-        if (movseg.segment() != null) {
+    private void checkMovReg(Item.MovReg movreg) {
+        if (movreg.source() != null) {
             // Which names may be written, and which may be copied from, is a fixed fact about the
             // target and is refused where the statement is read; what is left here is the part that
             // depends on the whole module.
             return;
         }
-        Value value = movseg.value();
+        Value value = movreg.value();
         if (value instanceof Value.Name && !names.isVariable(((Value.Name) value).name())) {
             String name = ((Value.Name) value).name();
             require(!names.isLabel(name), value.position(),
@@ -521,7 +521,7 @@ public final class IrVerifier {
         }
         Integer bytes = widthOf(value, Integer.valueOf(SEGMENT_BYTES));
         require(bytes == null || bytes.intValue() == SEGMENT_BYTES, value.position(),
-                "a " + bytes + "-byte value does not fit in '" + movseg.name() + "', which is one "
+                "a " + bytes + "-byte value does not fit in '" + movreg.name() + "', which is one "
                         + "word wide (docs/ir.md §8.1)");
     }
 

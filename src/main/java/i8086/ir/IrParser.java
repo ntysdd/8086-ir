@@ -485,8 +485,8 @@ public final class IrParser {
         if (isWord(first, "var")) {
             return parseVar();
         }
-        if (isWord(first, "movseg")) {
-            return parseMovSeg();
+        if (isWord(first, "movreg")) {
+            return parseMovReg();
         }
         if (isWord(first, "ret")) {
             next();
@@ -734,6 +734,22 @@ public final class IrParser {
         return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers);
     }
 
+    /**
+     * The {@code with} clause of a statement that is an interface, refused as the construct it is.
+     *
+     * <p>It is specified and not built ({@code docs/ir.md} §11), so it is refused by name with the
+     * section rather than left to become a syntax error somewhere further along. Only the statements
+     * that talk to an outside world take one — a machine statement, a far jump and an inline block,
+     * which are where this is asked — and anywhere else a {@code with} is a name like any other.
+     */
+    private void refuseWithClause() {
+        if (isWord(peek(), "with")) {
+            throw new CompileError(peek().position(), "not implemented yet: the 'with' clause, "
+                    + "which gives a statement the registers it is an interface through "
+                    + "(docs/ir.md §11)");
+        }
+    }
+
     private Item parseCompare() {
         Token keyword = next();
         Item.Compare.Kind kind = keyword.isName("test")
@@ -795,44 +811,66 @@ public final class IrParser {
     }
 
     /**
-     * {@code movseg ds, 0}: putting a value into the machine's segmentation state, or copying one
-     * segment register into another ({@code docs/ir.md} §8.1).
+     * {@code movreg ds, 0} — putting a value into one of the machine's own registers
+     * ({@code docs/ir.md} §8.1).
      *
-     * <p>The word is what makes the first operand the machine's rather than a variable's, and it
-     * is why nothing has to be reserved: {@code ds = 0} still assigns a variable called
-     * {@code ds}. Which names may be written is the target's answer, because which registers this
-     * machine has and which of them can be set is a fact about the machine.
+     * <p>Which of the two directions a statement is comes from the first name: one of the registers
+     * a value cannot live in is a write, and anything else is a value, which makes the statement a
+     * read — the direction that is not built yet, and refused as such rather than mis-parsed. A
+     * bare register name is the machine's here and the author's variable of that name is written
+     * {@code $ax}, which is the rule the assembly text has and for the same reason: in this
+     * position a bare name spelled like a register would otherwise be two things (§3.1.1).
      */
-    private Item parseMovSeg() {
+    private Item parseMovReg() {
         Token keyword = next();
-        Token name = expect(TokenKind.IDENT, "a segment register or the stack pointer");
-        List<String> settable = target.segmentationState();
-        require(!name.forced() && settable.contains(name.name()), name.position(),
-                "'" + name.text() + "' is not state a module can set; 'movseg' writes "
-                        + settable + " (docs/ir.md §8.1)");
+        Token name = expect(TokenKind.IDENT, "a machine register, or a variable to read one into");
+        if (name.forced() || !target.stateRegisters().contains(name.name())) {
+            throw new CompileError(name.position(), movRegRefusal(name));
+        }
         expectPunct(",");
-        Item item = movSegFrom(keyword, name);
+        Item item = movRegFrom(keyword, name);
         endOfLine();
         return item;
     }
 
     /**
-     * What a {@code movseg} puts into the state: another segment register, or a value.
+     * Why this {@code movreg} is not something the surface can read: a name that is not state a
+     * module can set, or the direction that is not built yet.
      *
-     * <p>A name the target calls a segment register is the machine's here, and a name the author
-     * wants is written {@code $cs} — the rule the assembly text has, and for the same reason
-     * ({@code docs/ir.md} §3.1.1): in this one position a bare name spelled like a register would
-     * otherwise be two things. Everything else is a value like any other, and the verifier is what
-     * says whether it names a variable.
+     * <p>The two are told apart by what follows the name, because an author who wrote
+     * {@code movreg drive, dl} meant the read and an author who wrote {@code movreg dss, 0} made a
+     * spelling mistake — and the two deserve different sentences.
      */
-    private Item movSegFrom(Token keyword, Token name) {
-        Token source = peek();
-        if (source.is(TokenKind.IDENT) && !source.forced()
-                && target.isSegmentRegister(source.name())) {
-            next();
-            return Item.MovSeg.fromSegment(keyword.position(), name.name(), source.name());
+    private String movRegRefusal(Token name) {
+        Token source = tokenAt(1); // the operand after the comma, which expect() has passed
+        if (!name.forced() && source.is(TokenKind.IDENT) && target.isRegister(source.name())) {
+            return "not implemented yet: 'movreg' reading a register into a value; it writes "
+                    + target.stateRegisters() + " so far (docs/ir.md §8.1)";
         }
-        return Item.MovSeg.fromValue(keyword.position(), name.name(), parseValue());
+        return "'" + name.text() + "' is not a register 'movreg' can write; it writes "
+                + target.stateRegisters() + ": the machine's own registers that a value cannot "
+                + "live in (docs/ir.md §8.1)"
+                + (target.valueRegisters().contains(name.name())
+                ? "; a register a value can live in is written by the 'with' clause of the "
+                + "statement it is an argument of (docs/ir.md §11)"
+                : "");
+    }
+
+    /**
+     * {@code movreg ds, 0}: putting into the machine's state a value, or another register
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>The source is a value like any other, and the verifier is what says whether it names a
+     * variable; a bare name this target calls a register is the machine's, which is how
+     * {@code movreg ds, cs} reaches the target as a copy from a register it wrote itself.
+     */
+    private Item movRegFrom(Token keyword, Token name) {
+        Token source = peek();
+        if (source.is(TokenKind.IDENT) && !source.forced() && target.isRegister(source.name())) {
+            next();
+            return Item.MovReg.fromRegister(keyword.position(), name.name(), source.name());
+        }
+        return Item.MovReg.fromValue(keyword.position(), name.name(), parseValue());
     }
 
     /**
@@ -1321,6 +1359,7 @@ public final class IrParser {
     private Item.InlineAsm parseInlineAsm() {
         Token keyword = expectName("asm");
         List<String> clobbers = parseClobbers();
+        refuseWithClause();
         expectPunct("{");
         skipNewlines();
         List<Instruction> body = new ArrayList<Instruction>();

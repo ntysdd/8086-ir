@@ -75,6 +75,8 @@ public final class CompilerTest {
                 CompilerTest::movesAnotherValueToItsHome);
         suite.add("Compiler sets the machine's segmentation state up",
                 CompilerTest::setsSegmentsUp);
+        suite.add("Compiler writes the base pointer like any other register",
+                CompilerTest::writesTheBasePointer);
         suite.add("Compiler keeps a value out of the register a segment move uses",
                 CompilerTest::keepsValuesOutOfTheSegmentScratch);
         suite.add("Compiler keeps a segment set up that nothing reads",
@@ -684,10 +686,10 @@ public final class CompilerTest {
     private static void setsSegmentsUp() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n"
                 + "$main:\n"
-                + "    movseg ds, 0\n"
-                + "    movseg sp, 0x7c00\n"
-                + "    movseg es, 0xb800\n"
-                + "    movseg ds, cs\n"
+                + "    movreg ds, 0\n"
+                + "    movreg sp, 0x7c00\n"
+                + "    movreg es, 0xb800\n"
+                + "    movreg ds, cs\n"
                 + "    ret\n");
         Assert.assertEquals("org 0x7c00\n\n$main:\n"
                 + "    mov ax, 0\n"
@@ -710,7 +712,7 @@ public final class CompilerTest {
                 + "$main:\n"
                 + "    var x: u16\n"
                 + "    x = word [0x40]\n"
-                + "    movseg ds, 0\n"
+                + "    movreg ds, 0\n"
                 + "    word [0x42] = x\n"
                 + "    ret\n");
         Assert.assertTrue(assembly.contains("mov ax, 0\n    mov ds, ax\n"), assembly);
@@ -726,7 +728,7 @@ public final class CompilerTest {
     private static void keepsSegmentationState() {
         Assert.assertEquals("org 0x100\n\n$main:\n    mov ax, 0x1234\n    mov ds, ax\n    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
-                        + "    movseg ds, 0x1234\n"
+                        + "    movreg ds, 0x1234\n"
                         + "    ret\n"));
     }
 
@@ -1132,6 +1134,29 @@ public final class CompilerTest {
                 + "    ret\n");
         Assert.assertTrue(assembly.contains("    mul "),
                 "a multiply whose flags are read is ordinary: " + assembly);
+    }
+
+    /**
+     * The other register {@code movreg} writes that is not a segment register: {@code bp} takes an
+     * immediate, so there is no sequence and no scratch register, and a value put there is a plain
+     * copy ({@code docs/ir.md} §8.1).
+     */
+    private static void writesTheBasePointer() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    mov bp, 0x1234\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    movreg bp, 0x1234\n"
+                        + "    ret\n"));
+        String fromValue = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                + "$main:\n"
+                + "    var x: u16\n"
+                + "    x = word [0x40]\n"
+                + "    movreg bp, x\n"
+                + "    word [0x42] = x\n"
+                + "    ret\n");
+        Assert.assertTrue(fromValue.contains("    mov bp, "),
+                "a value goes into bp with one move: " + fromValue);
+        Assert.assertTrue(fromValue.contains("    mov word [0x42], "),
+                "and the value it was copied from is untouched afterwards: " + fromValue);
     }
 
     /**

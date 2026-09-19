@@ -185,9 +185,12 @@ The two prefixes are worth stating plainly, and the list that goes with them:
   moment. The vocabulary is still a list with a job: the audit below walks it.
 * **The assembly text has one exception, because that language has registers.** There
   a bare name spelled like a register *is* the register (`mov ax, 1`), so a symbol of
-  that name has to say so and is written `$ax` (`docs/asm.md` §3). The IR surface has
-  no such exception, because it has no registers: `var ax: u16` is a variable, and it
-  is written `$ax` like every other name.
+  that name has to say so and is written `$ax` (`docs/asm.md` §3). The IR surface has no
+  such exception in a value position, because it has no registers there: `var ax: u16`
+  is a variable, and it is written `$ax` like every other name. It has one in the
+  positions where a statement names a register — `movreg`'s source (§8.1) and the
+  register position of a `with` clause (§11) — and there a bare name is the machine's,
+  which is the same rule for the same reason: a name the author wants is written `$ax`.
 * **What cannot be a name** is only what is not a word at all: a name the compiler
   generated, and a spelling no name can have.
 
@@ -1119,46 +1122,73 @@ like every other encoding choice.
 
 ## 8. Storage state and the stack
 
-### 8.1 Segment registers — [decided]
+### 8.1 The machine's own registers — [decided]
 
-A module sets its own segmentation state up, and the surface spells that as a statement of
-its own:
+A module sets its own machine state up, and the surface spells that as a statement of its
+own:
 
 ```
-movseg ds, 0
-movseg ss, 0
-movseg sp, 0x7C00
-movseg es, 0xB800
-movseg ds, cs
+movreg ds, 0
+movreg ss, 0
+movreg sp, 0x7C00
+movreg es, 0xB800
+movreg ds, cs
+movreg bp, 0x1000
 ```
 
-`movseg` takes one of the four names a module may set — `ds`, `es`, `ss`, `sp` — and what
-to put there: a literal, a variable, or another segment register. On this machine most of
-those are a sequence rather than one instruction, because a segment register takes no
-immediate, so `movseg ds, 0` is `mov ax, 0` and then `mov ds, ax`. The target description
-is what says so, like every other choice of instruction.
+`movreg` takes one of the registers a value cannot live in — on this machine `ds`, `es`,
+`ss`, `sp` and `bp` — and what to put there: a literal, a variable, an address, or another
+register the machine has. Most of those are a sequence rather than one instruction, because
+a segment register takes no immediate: `movreg ds, 0` is `mov ax, 0` and then
+`mov ds, ax`, while `movreg sp, 0x7C00` is one instruction. The target description is what
+says so, like every other choice of instruction.
 
-**The word is there because the name cannot say it.** `ds` is the machine's segmentation
-state, and `ds` may also be a variable of the program's, so a statement that begins with
-that name cannot tell the reader which one it is: a place, an `=`, and a name that could
-be either (§3.1). `mov ds, 0` does not settle it either, because `mov d, s` is
-already how this surface spells an assignment (§7.3) — the same two readings, in assembly
-clothing. A word of its own does settle it, and what that buys is that **nothing is
-reserved**: `var ds: u16` declares a variable like any other name, `ds = 0` assigns it,
-and only `movseg` reaches the register. `flags` stays the one predeclared name (§4.1).
+**That list is a rule, and the rule is why this is a statement at all.** A standalone write
+to a register is safe exactly when **no value can be in that register**: then the write
+cannot be overwritten by anything else, and nothing has to be kept anywhere. If a value
+*could* be there, a write that has to survive until some later statement reads it would be
+**pinning** — a value held in a named register across a stretch of code — and that is a
+different question, still open (§12 item 12). So `movreg` writes the machine's own
+registers and no others, and the ones a value can live in are written by the `with` clause
+of the statement that uses them (§11), which does the write and the read inside one item
+and needs nothing pinned.
+
+**The word is there because the name cannot say it.** `ds` is the machine's register, and
+`ds` may also be a variable of the program's, so a statement that begins with that name
+cannot tell the reader which one it is: a place, an `=`, and a name that could be either
+(§3.1). `mov ds, 0` does not settle it either, because `mov d, s` is already how this
+surface spells an assignment (§7.3) — the same two readings, in assembly clothing. A word
+of its own does settle it, and what that buys is that **nothing is reserved**:
+`var ds: u16` declares a variable like any other name, `ds = 0` assigns it, and only
+`movreg` reaches the register. `flags` stays the one predeclared name (§4.1).
 
 A name in the second position is read the way the assembly text reads one (§3.1.1): a bare
-name this machine has a segment register for **is** that register, and a name the author
-wants is written `$cs`. Canonical text therefore has no name that could be two things,
-because the printer writes the `$` on everything the author chose. So `movseg ds, cs`
-copies the code segment — which is how a loader that was loaded somewhere else picks up the
-segment it is actually running in — and a program that has a variable called `cs` writes
-`movseg ds, $cs` to put that variable there.
+name this machine has a register for **is** that register, and a name the author wants is
+written `$cs`. Canonical text therefore has no name that could be two things, because the
+printer writes the `$` on everything the author chose. So `movreg ds, cs` copies the code
+segment — which is how a loader that was loaded somewhere else picks up the segment it is
+actually running in — and a program that has a variable called `cs` writes
+`movreg ds, $cs` to put that variable there.
 
-The four names are the state a module sets up before anything else runs: three segment
-registers, and the stack pointer they are set up with. Writing one is an effect like a
-store and not a definition of a value, so SSA renames nothing about it (§2.3), and
-it leaves the flags alone.
+Writing one of these registers is an effect like a store and not a definition of a value,
+so SSA renames nothing about it (§2.3), and it leaves the flags alone.
+
+**The other direction is specified and not built.** A program also needs to *read* a
+register into a value, and the case that matters is the one a boot loader meets at entry:
+the BIOS hands the drive number over in `dl`, and today nothing outside an inline block can
+name it. That direction is `movreg drive, dl` — a value on the left and a register on the
+right — and it is safe for the same reason the write is: the read *defines* the value, and
+the register is free the moment the copy is made, so there is no interval to keep. Nothing
+is built for it yet; the parser refuses it and says so.
+
+**`bp` is on the list on purpose, and the reason is worth writing down.** The allocator
+does not use it: it is left out of the register classes because it is where a frame pointer
+would go (§8.2), and because taking it now would mean giving it back later. Since no value
+is ever allocated there, a module may use it — and a hand-written block is exactly what
+wants to, since `bp` is the one register the compiler will never touch. The day a function
+that spills exists, that decision is the one to revisit: today nothing spills, so `sp` and
+`bp` are the program's, like every other register in the image it is setting up.
+
 
 ### 8.2 No-spill functions — [decided]
 
@@ -1445,10 +1475,11 @@ which is what an allocator and SSA need and all they need.
 
 Three things about the form are deliberate:
 
-* **No register operands**, which is why these six and not `in`/`out`. A value
-  cannot yet be named as being in a register (§12 item 12), so an operation that
-  reads or writes a named one has nowhere to put it, and inline assembly stays the
-  way to write those.
+* **No register operands outside a clause.** Why these six and not `in`/`out`: an operation that
+  reads or writes a register the machine names has nowhere to put it unless the statement
+  says where, and the `with` clause below is that — for the arguments of an interface. What
+  is still missing after it is a value that has to *stay* in a register across a stretch of
+  code, which is pinning (§12 item 12).
 * **The clobber list is optional, and silence means everything.** Only the program
   knows what an interrupt handler keeps, so a target's honest answer for `int` is
   "all of it", and a value that has to live across one is refused until the author
@@ -1463,6 +1494,47 @@ Three things about the form are deliberate:
   handler was trusted to keep. That is true of every inline-assembly facility there
   has ever been, and the reason the default is the worst case rather than the
   friendliest: silence is the only answer the target can give honestly.
+
+**A statement that is an interface may be given its registers.** A BIOS call wants its
+arguments where the machine wants them, and the surface says so on the statement that
+consumes them:
+
+```
+int 0x13 clobbers(ax, bx, cx, dx) with ah = 0x02, dl = 0x80, bx = buffer
+jmp 0x0000:0x7E00 with dl = drive
+asm clobbers(ax) with al = c {
+    int 0x10
+}
+```
+
+The clause is a list of `register = operand`, the word `with` introduces it, and what it
+means is a sequence: those operands are put into those registers and then the statement
+runs. On this machine a statement that gives a register is the machine statement, the far
+jump and an inline block, because those are the statements with an outside world to talk
+to.
+
+**It is not pinning, and the reason is that all of it happens inside one item.** Nothing can
+be allocated in the middle of a sequence, and the statement defines no value, so nothing can
+take a register between the write and the statement that reads it. A *standalone* write to a
+register could not promise that — which is exactly why §8.1's `movreg` writes only the
+registers a value cannot live in. A value that has to be in a register across a stretch of
+code is still not spellable, and that is §12 item 12.
+
+* **Any register the target has** may be named, because the write and the read are one item:
+  `ah`, `dl`, `bx`, `si` and the segment registers are all ordinary here. This is the
+  difference between the clause and `movreg`, and it is the whole of it.
+* **A bare name in the register position is the machine's**, and the author's variable of
+  that name is written `$ax` — the rule the assembly text has (§3.1.1), and the same one
+  `movreg`'s source follows.
+* **The operands are ordinary operands**: a literal, a variable, a label, an address. The
+  width rule is the one assignments have — both sides the same width, and a literal takes the
+  width of the register it goes into (§3.2).
+* **What the statement leaves in those registers is not a value.** The registers are the
+  statement's, and afterwards they hold whatever it left there — for `int 0x13`, the BIOS's
+  answer. Reading one back into a value is `movreg`'s other direction (§8.1).
+
+**Not built**, and refused as such rather than mis-parsed: a clause is a shape this compiler
+recognises and does not implement yet.
 
 ### 11.1 What to do when a value has to live across a call — [decided]
 
@@ -1553,10 +1625,17 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     sequence and the allocator dropping the copies that turn out to be copies from a
     register into itself, so nothing is pinned and nothing is reserved.
 
-    What is still missing is the direction none of that covers: the *surface* has no
-    way to say "this value has to be in this register here", which is what a BIOS or
-    DOS interface wants and what the item was about in the first place. The machine's
-    own insistence is spelled out by the target; a program's is not spellable yet.
+    **The interface half is now spelled**, by the `with` clause of §11: a statement that
+    talks to the outside world can be given its arguments, and because the write and the
+    read are inside one item, nothing is pinned to give it them. `movreg` (§8.1) is the
+    other direction, reading a register into a value, which needs no pinning either.
+
+    What is still missing is a value that has to **stay** in a register across a stretch
+    of code — a loop that keeps its argument in `dl`, a value the compiler must not move
+    while something outside it runs. That is a pre-coloured live range, and it is the
+    item. What is decided about it stands: it names a register at a boundary rather than
+    letting a program address the register file, and a pinned value cannot be spilled
+    (§8.2).
 13. A **calling convention**: how a call is written at all, where the arguments
     go, what a callee preserves, and who tidies up afterwards. None of it exists —
     the surface has no call, so a module's only interfaces are its entry point and

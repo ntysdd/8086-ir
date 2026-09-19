@@ -356,25 +356,26 @@ public interface Target {
     Expansion widen(SourcePos where, Operand destination, Operand source, boolean signed);
 
     /**
-     * The names of the machine state a module sets up for itself, in the order a diagnostic should
-     * list them: this target's segment registers that can be written, and the stack pointer they
-     * are set up with ({@code docs/ir.md} §8.1).
+     * The registers a {@code movreg} statement may write, and the only ones: this target's machine
+     * state that no value can live in, in the order a diagnostic should list them
+     * ({@code docs/ir.md} §8.1).
      *
-     * <p>These are names the module already has, like the flags, which is what makes
-     * {@code movseg} a statement of its own rather than an assignment: a name a statement writes
-     * cannot say whether it means one of these or a variable the author declared.
+     * <p>The rule is the list's meaning: a standalone write to a register is safe exactly when no
+     * value can be in that register, because otherwise the write would have to survive until some
+     * later statement reads it — which is pinning, and a different question. So this is every
+     * register the allocator never hands out that this target can write.
      */
-    List<String> segmentationState();
+    List<String> stateRegisters();
 
     /**
-     * A sequence that puts an operand into one of {@link #segmentationState()}, or null when this
+     * A sequence that puts an operand into one of {@link #stateRegisters()}, or null when this
      * target cannot set that one.
      *
      * <p>A parameter and not an instruction, on this machine: a segment register takes neither an
      * immediate nor a memory operand, so setting one means going through a general register, and
      * which register that is, is the machine's business. The operand the caller passes may be a
      * value it chose, a literal, or a register it wrote by hand — the last being how
-     * {@code movseg ds, cs} reaches here.
+     * {@code movreg ds, cs} reaches here.
      */
-    Expansion segmentMove(SourcePos where, String name, Operand value);
+    Expansion writeState(SourcePos where, String name, Operand value);
 }

@@ -305,46 +305,48 @@ public abstract class Item {
     }
 
     /**
-     * {@code movseg ds, 0}: putting a value into the machine's segmentation state
+     * {@code movreg ds, 0}: putting a value into the machine's own registers
      * ({@code docs/ir.md} §8.1).
      *
      * <p>It is a statement of its own rather than an assignment, because a name in the position
-     * an assignment writes cannot say whether it means the machine's segment register or a
-     * variable of that name. The word settles it, and what it settles is that nothing has to be
-     * reserved: {@code var ds: u16} is an ordinary variable and {@code ds = 0} assigns it.
+     * an assignment writes cannot say whether it means the machine's register or a variable of that
+     * name. The word settles it, and what it settles is that nothing has to be reserved:
+     * {@code var ds: u16} is an ordinary variable and {@code ds = 0} assigns it.
      *
-     * <p>The source is a value, or a name that is not a variable — which is how a segment
-     * register is named, since this surface has no other way to say {@code mov ds, cs}. Writing
-     * segmentation state is an effect and defines no value, so SSA has nothing to rename about
-     * the statement itself.
+     * <p>The registers it may write are the ones no value can live in, which is what makes a
+     * standalone write safe at all: a write that had to survive until a later statement reads it
+     * would be pinning, and that is a different question ({@code docs/ir.md} §12 item 12). The
+     * source is a value, or a register the machine has — which is how {@code movreg ds, cs} is
+     * said. Writing machine state is an effect and defines no value, so SSA has nothing to rename
+     * about the statement itself.
      */
-    public static final class MovSeg extends Item {
+    public static final class MovReg extends Item {
 
         private final String name;
         private final Value value;
-        private final String segment;
+        private final String source;
 
-        /** {@code movseg ds, 0}: a value, a literal or a variable, is put there. */
-        public static MovSeg fromValue(SourcePos position, String name, Value value) {
-            return new MovSeg(position, name, value, null);
+        /** {@code movreg ds, 0}: a value, a literal or a variable, is put there. */
+        public static MovReg fromValue(SourcePos position, String name, Value value) {
+            return new MovReg(position, name, value, null);
         }
 
         /**
-         * {@code movseg ds, cs}: another segment register is copied.
+         * {@code movreg ds, cs}: another register the machine has is copied.
          *
          * <p>The name is the machine's either way, which is why it is not a value the rest of the
-         * surface could do arithmetic with: reading a segment register into a variable is a
-         * different thing, and nothing has asked for it yet.
+         * surface could do arithmetic with: reading a register into a variable is a different
+         * thing, and nothing has asked for it yet.
          */
-        public static MovSeg fromSegment(SourcePos position, String name, String segment) {
-            return new MovSeg(position, name, null, segment);
+        public static MovReg fromRegister(SourcePos position, String name, String source) {
+            return new MovReg(position, name, null, source);
         }
 
-        private MovSeg(SourcePos position, String name, Value value, String segment) {
+        private MovReg(SourcePos position, String name, Value value, String source) {
             super(position);
             this.name = name;
             this.value = value;
-            this.segment = segment;
+            this.source = source;
         }
 
         /** The name of the state written: one of the target's segment registers, or its stack. */
@@ -357,9 +359,9 @@ public abstract class Item {
             return value;
         }
 
-        /** The segment register copied, or null when a value is put there instead. */
-        public String segment() {
-            return segment;
+        /** The register copied, or null when a value is put there instead. */
+        public String source() {
+            return source;
         }
     }
 

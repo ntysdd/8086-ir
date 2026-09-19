@@ -47,15 +47,15 @@ final class Renamer {
             return new Item.Eval(item.position(),
                     rename(((Item.Eval) item).operation(), versions));
         }
-        if (item instanceof Item.MovSeg) {
+        if (item instanceof Item.MovReg) {
             // The state being written is the machine's and is not renamed; what is put there is a
             // value like any other.
-            Item.MovSeg movseg = (Item.MovSeg) item;
-            if (movseg.value() == null) {
+            Item.MovReg movreg = (Item.MovReg) item;
+            if (movreg.value() == null) {
                 return item;
             }
-            return Item.MovSeg.fromValue(item.position(), movseg.name(),
-                    rename(movseg.value(), versions));
+            return Item.MovReg.fromValue(item.position(), movreg.name(),
+                    rename(movreg.value(), versions));
         }
         return item;
     }

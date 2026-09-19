@@ -108,7 +108,7 @@ public final class Effects {
                 || item instanceof Item.InlineAsm || item instanceof Item.Machine) {
             return true;
         }
-        if (item instanceof Item.MovSeg) {
+        if (item instanceof Item.MovReg) {
             // Setting up a segment register or the stack pointer is state the program observes,
             // the same way a store to memory is (docs/ir.md §2.3, §8.1).
             return true;
@@ -151,12 +151,12 @@ public final class Effects {
             valueNames(compare.right(), found);
         } else if (item instanceof Item.Eval) {
             operationNames(((Item.Eval) item).operation(), found);
-        } else if (item instanceof Item.MovSeg) {
+        } else if (item instanceof Item.MovReg) {
             // What is written is the machine's state and not a name of the module's, so only the
             // value being put there is an occurrence — and it is read, like any other operand.
-            Item.MovSeg movseg = (Item.MovSeg) item;
-            if (movseg.value() != null) {
-                valueNames(movseg.value(), found);
+            Item.MovReg movreg = (Item.MovReg) item;
+            if (movreg.value() != null) {
+                valueNames(movreg.value(), found);
             }
         }
         return found;

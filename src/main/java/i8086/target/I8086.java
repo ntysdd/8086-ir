@@ -451,14 +451,23 @@ public final class I8086 implements Target {
             Arrays.asList("ax", "cx", "dx", "bx", "si", "di"));
 
     /**
-     * The state a module sets up before anything else runs: the segment registers this machine can
-     * write, and the stack pointer they are set up with ({@code docs/ir.md} §8.1).
+     * The registers a {@code movreg} statement may write, and the only ones it may write: the
+     * machine state a value cannot live in ({@code docs/ir.md} §8.1).
      *
-     * <p>These four and not {@code cs}, which is a segment register too and is not on the list: it
-     * says where the program is running, so changing it is a jump rather than a move.
+     * <p>The rule is what the list means, not the list itself: a standalone write to a register is
+     * safe exactly when no value can be in that register, because otherwise the write would have to
+     * survive until some later statement that reads it — which is pinning, and a different
+     * question ({@code docs/ir.md} §12 item 12). So these are the machine's registers that the
+     * allocator never hands out: the three segment registers this machine can write, the stack
+     * pointer, and {@code bp}, which is left out of the allocator's classes on purpose.
+     *
+     * <p>{@code cs} is not here: it says where the program is running, so changing it is a jump
+     * rather than a move. The registers a <em>value</em> can live in are not here either — writing
+     * one is the {@code with} clause of the statement that uses it, which does the write and the
+     * read inside one item and needs nothing pinned.
      */
-    private static final List<String> SEGMENTATION_STATE = Collections.unmodifiableList(
-            Arrays.asList("ds", "es", "ss", "sp"));
+    private static final List<String> STATE_REGISTERS = Collections.unmodifiableList(
+            Arrays.asList("ds", "es", "ss", "sp", "bp"));
 
     /**
      * The low half of each register that has one, which is where a byte value lives
@@ -819,8 +828,8 @@ public final class I8086 implements Target {
     }
 
     @Override
-    public List<String> segmentationState() {
-        return SEGMENTATION_STATE;
+    public List<String> stateRegisters() {
+        return STATE_REGISTERS;
     }
 
     /**
@@ -847,23 +856,24 @@ public final class I8086 implements Target {
     }
 
     /**
-     * Setting a segment register, or the stack pointer, from an operand.
+     * Setting one of the machine's own registers, from an operand.
      *
-     * <p>{@code sp} takes the operand directly — {@code mov sp, x} is one instruction — and a
-     * segment register does not: this machine has no {@code mov ds, immediate} and no
+     * <p>{@code sp} and {@code bp} take the operand directly — {@code mov sp, x} is one instruction
+     * — and a segment register does not: this machine has no {@code mov ds, immediate} and no
      * {@code mov ds, memory}, so the value goes through {@code ax} first. The copy is stated even
      * when it turns out to be unnecessary, which is how the rest of this class writes a sequence:
      * the allocator is the one that finds out, and drops a copy of a register into itself.
      */
     @Override
-    public Expansion segmentMove(SourcePos where, String name, Operand value) {        List<Instruction> instructions = new ArrayList<Instruction>();
-        if (name.equals("sp")) {
-            instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
+    public Expansion writeState(SourcePos where, String name, Operand value) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        if (SEGMENT_REGISTERS.contains(name)) {
+            Operand scratch = new Operand.Name(where, SEGMENT_SCRATCH);
+            instructions.add(instruction(where, "mov", scratch, value));
+            instructions.add(instruction(where, "mov", new Operand.Name(where, name), scratch));
             return new Expansion(instructions, true);
         }
-        Operand scratch = new Operand.Name(where, SEGMENT_SCRATCH);
-        instructions.add(instruction(where, "mov", scratch, value));
-        instructions.add(instruction(where, "mov", new Operand.Name(where, name), scratch));
+        instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
         return new Expansion(instructions, true);
     }
 

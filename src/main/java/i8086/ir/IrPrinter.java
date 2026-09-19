@@ -91,8 +91,8 @@ public final class IrPrinter {
             printPad(text, (Item.Pad) item, target);
         } else if (item instanceof Item.Var) {
             printVar(text, (Item.Var) item, target);
-        } else if (item instanceof Item.MovSeg) {
-            printMovSeg(text, (Item.MovSeg) item, target);
+        } else if (item instanceof Item.MovReg) {
+            printMovReg(text, (Item.MovReg) item, target);
         } else if (item instanceof Item.Assign) {
             printAssign(text, (Item.Assign) item, target);
         } else if (item instanceof Item.Eval) {
@@ -156,19 +156,19 @@ public final class IrPrinter {
     }
 
     /**
-     * {@code movseg ds, 0}: the machine's own state, written the way the parser reads it back.
+     * {@code movreg ds, 0}: the machine's own state, written the way the parser reads it back.
      *
      * <p>The state written is printed bare, because it is the machine's name and not the author's —
      * which is what makes the round trip work for a program that also declares a variable called
      * {@code ds}, and that is canonical text's job ({@code docs/ir.md} §3.1.1). A dump of a derived
      * form has no target to ask, and writes what it has.
      */
-    private static void printMovSeg(StringBuilder text, Item.MovSeg movseg, Target target) {
-        text.append(INDENT).append("movseg ").append(movseg.name()).append(", ");
-        if (movseg.segment() != null) {
-            text.append(movseg.segment());
+    private static void printMovReg(StringBuilder text, Item.MovReg movreg, Target target) {
+        text.append(INDENT).append("movreg ").append(movreg.name()).append(", ");
+        if (movreg.source() != null) {
+            text.append(movreg.source());
         } else {
-            text.append(printValue(movseg.value(), target));
+            text.append(printValue(movreg.value(), target));
         }
         text.append('\n');
     }

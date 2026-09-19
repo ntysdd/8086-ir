@@ -244,8 +244,8 @@ public final class InstructionSelector {
             out.add(new Instruction(item.position(), machine.mnemonic(), given));
             return;
         }
-        if (item instanceof Item.MovSeg) {
-            emitMovSeg((Item.MovSeg) item);
+        if (item instanceof Item.MovReg) {
+            emitMovReg((Item.MovReg) item);
             return;
         }
         if (item instanceof Item.FarJump) {
@@ -352,24 +352,24 @@ public final class InstructionSelector {
     }
 
     /**
-     * {@code movseg ds, 0}: the machine's segmentation state, which the target turns into a
+     * {@code movreg ds, 0}: the machine's segmentation state, which the target turns into a
      * sequence ({@code docs/ir.md} §8.1).
      *
      * <p>A copied segment register reaches the target as a register the selector wrote by hand —
      * the same way a sequence names {@code ax} or {@code cl} — because that is all it is: a
      * register, inside a sequence the target declared.
      */
-    private void emitMovSeg(Item.MovSeg movseg) {
+    private void emitMovReg(Item.MovReg movreg) {
         // The verifier has already said that the name is one this target has and that the source is
         // a value or a segment register; what is left is the target's own answer about how (or
         // whether) it can set it.
-        Operand value = movseg.segment() != null
-                ? new Operand.Name(movseg.position(), movseg.segment())
-                : operandOf(movseg.value());
-        Expansion sequence = target.segmentMove(movseg.position(), movseg.name(), value);
+        Operand value = movreg.source() != null
+                ? new Operand.Name(movreg.position(), movreg.source())
+                : operandOf(movreg.value());
+        Expansion sequence = target.writeState(movreg.position(), movreg.name(), value);
         if (sequence == null) {
-            throw new CompileError(movseg.position(),
-                    "this target has no way to set '" + movseg.name() + "' (docs/ir.md §8.1)");
+            throw new CompileError(movreg.position(),
+                    "this target has no way to set '" + movreg.name() + "' (docs/ir.md §8.1)");
         }
         out.addAll(sequence.instructions());
     }

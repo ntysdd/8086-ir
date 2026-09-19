@@ -217,7 +217,7 @@ public final class IrVerifierTest {
      */
     private static void refusesALabelAsSegmentationState() {
         CompileError refused = Assert.assertRefused("test.ir:6:16",
-                () -> verify("    movseg ds, msg\nmsg: db 1\n"));
+                () -> verify("    movreg ds, msg\nmsg: db 1\n"));
         Assert.assertTrue(refused.getMessage().contains("is a label, which is an address"),
                 refused.getMessage());
     }
@@ -228,7 +228,7 @@ public final class IrVerifierTest {
      */
     private static void refusesAWideSegmentationValue() {
         CompileError refused = Assert.assertRefused("test.ir:8:16",
-                () -> verify("    var wide: u32\n    var x: u16\n    movseg ds, wide\n"));
+                () -> verify("    var wide: u32\n    var x: u16\n    movreg ds, wide\n"));
         Assert.assertTrue(refused.getMessage().contains("4-byte value does not fit"),
                 refused.getMessage());
     }

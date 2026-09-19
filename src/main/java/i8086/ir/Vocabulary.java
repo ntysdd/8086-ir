@@ -37,21 +37,23 @@ public final class Vocabulary {
      * name, and {@link #words} walks them to check that.
      */
     private static final Set<String> STRUCTURE = new LinkedHashSet<String>(Arrays.asList(
-            "var", "ret", "asm", "jmp", "cmp", "test", "movseg",
+            "var", "ret", "asm", "jmp", "cmp", "test", "movreg",
             "target", "org", "entry",
             ".if", ".elseif", ".else", ".endif", ".while", ".endw"));
 
     /**
      * The words that are only ever meaningful where a name is not written: after
      * {@code =} nothing makes {@code eval} an operation, {@code to} means something
-     * only inside {@code pad}, and {@code in} and {@code writethrough} only after the
-     * type of a declaration and the home it applies to ({@code docs/ir.md} §3.1.2).
+     * only inside {@code pad}, {@code in} and {@code writethrough} only after the type of a
+     * declaration and the home it applies to ({@code docs/ir.md} §3.1.2), and {@code with}
+     * only in front of the register list of a statement that is an interface (§11).
      * A plain name may be one of these — that is the liberal input side — and
      * {@link #words} walks them for the same reason it walks {@link #STRUCTURE}: a
      * word the surface knows is exactly what a name may be.
      */
     private static final Set<String> ELSEWHERE = new LinkedHashSet<String>(Arrays.asList(
-            "eval", "expr", "volatile", "clobbers", "pad", "to", "in", "writethrough"));
+            "eval", "expr", "volatile", "clobbers", "pad", "to", "in", "writethrough",
+            "with"));
 
     private Vocabulary() {
     }

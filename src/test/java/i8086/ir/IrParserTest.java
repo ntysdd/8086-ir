@@ -48,8 +48,10 @@ public final class IrParserTest {
         suite.add("Ir parser reads a home and prints it back", IrParserTest::roundTripsHomes);
         suite.add("Ir parser reads a segment move and prints it back",
                 IrParserTest::roundTripsSegmentMoves);
-        suite.add("Ir parser refuses a name movseg cannot write",
+        suite.add("Ir parser refuses a name movreg cannot write",
                 IrParserTest::refusesStateMovsegCannotWrite);
+        suite.add("Ir parser names the 'with' clause it does not implement",
+                IrParserTest::refusesTheWithClause);
         suite.add("Ir parser refuses a mode with no home to apply to",
                 IrParserTest::refusesWritethroughAlone);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
@@ -324,7 +326,7 @@ public final class IrParserTest {
     }
 
     /**
-     * {@code movseg} and the four names a module may set, including the two ways a source can look:
+     * {@code movreg} and the four names a module may set, including the two ways a source can look:
      * a value, and another segment register ({@code docs/ir.md} §8.1).
      *
      * <p>The name written is the machine's, so it is printed bare — which is what makes the round
@@ -337,22 +339,22 @@ public final class IrParserTest {
                 + "entry $main\n"
                 + "\n"
                 + "$main:\n"
-                + "    movseg ds, 0\n"
-                + "    movseg es, 0xb800\n"
-                + "    movseg ss, 0\n"
-                + "    movseg sp, 0x7c00\n"
-                + "    movseg ds, cs\n"
+                + "    movreg ds, 0\n"
+                + "    movreg es, 0xb800\n"
+                + "    movreg ss, 0\n"
+                + "    movreg sp, 0x7c00\n"
+                + "    movreg ds, cs\n"
                 + "    ret\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
 
         Module module = parse(program);
-        Item.MovSeg immediate = (Item.MovSeg) module.items().get(1);
+        Item.MovReg immediate = (Item.MovReg) module.items().get(1);
         Assert.assertEquals("ds", immediate.name());
         Assert.assertEquals(0L, ((Value.Number) immediate.value()).value());
-        Item.MovSeg copied = (Item.MovSeg) module.items().get(5);
+        Item.MovReg copied = (Item.MovReg) module.items().get(5);
         Assert.assertEquals("ds", copied.name());
-        Assert.assertEquals("cs", copied.segment());
-        Assert.assertNull(copied.value(), "a copied segment is not a value");
+        Assert.assertEquals("cs", copied.source());
+        Assert.assertNull(copied.value(), "a copied register is not a value");
 
         // The author's name wins where it is written as theirs, and the machine's where it is a bare
         // name a segment register could be: the `$` is what says which, exactly as it does in the
@@ -364,26 +366,57 @@ public final class IrParserTest {
                 + "$main:\n"
                 + "    var $ds: u16\n"
                 + "    $ds = 1\n"
-                + "    movseg ds, $ds\n"
+                + "    movreg ds, $ds\n"
                 + "    ret\n";
         Assert.assertEquals(shadowed, IrPrinter.print(parse(shadowed)));
-        Item.MovSeg fromVariable = (Item.MovSeg) parse(shadowed).items().get(3);
+        Item.MovReg fromVariable = (Item.MovReg) parse(shadowed).items().get(3);
         Assert.assertEquals("ds", ((Value.Name) fromVariable.value()).name());
-        Assert.assertNull(fromVariable.segment(), "a variable is a value and not a segment");
+        Assert.assertNull(fromVariable.source(), "a variable is a value and not a register");
     }
 
-    /** A name that is not state this machine has, refused where it is written. */
+    /**
+     * The clause that gives a statement the registers it is an interface through is specified and
+     * not built ({@code docs/ir.md} §11), so it is refused by name and with its section — at the
+     * three statements that could take one, and everywhere the clause has a position.
+     */
+    private static void refusesTheWithClause() {
+        Assert.assertRefused("test.ir:4:10",
+                () -> parse("target 8086\norg 0\nentry a\nint 0x13 with ah = 2\n"));
+        Assert.assertRefused("test.ir:4:14",
+                () -> parse("target 8086\norg 0\nentry a\njmp 0:0x7E00 with dl = 1\n"));
+        CompileError refused = Assert.assertRefused("test.ir:4:18",
+                () -> parse("target 8086\norg 0\nentry a\nasm clobbers(ax) with al = 1 {\n"
+                        + "    int 0x10\n}\n"));
+        Assert.assertTrue(refused.getMessage().startsWith("not implemented yet: the 'with' clause"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("docs/ir.md §11"),
+                "and points at the section that specifies it: " + refused.getMessage());
+    }
+
+    /** A name that is not a register this statement can write, refused where it is written. */
     private static void refusesStateMovsegCannotWrite() {
         CompileError cs = Assert.assertRefused("test.ir:4:8",
-                () -> parse("target 8086\norg 0\nentry a\nmovseg cs, 0\n"));
-        Assert.assertTrue(cs.getMessage().contains("is not state a module can set"),
+                () -> parse("target 8086\norg 0\nentry a\nmovreg cs, 0\n"));
+        Assert.assertTrue(cs.getMessage().contains("is not a register 'movreg' can write"),
                 cs.getMessage());
-        Assert.assertTrue(cs.getMessage().contains("ds, es, ss, sp"),
-                "and says which names it can write: " + cs.getMessage());
+        Assert.assertTrue(cs.getMessage().contains("ds, es, ss, sp, bp"),
+                "and says which registers it can write: " + cs.getMessage());
+
+        // A register a *value* can live in is the other statement's business, and the refusal says
+        // so, because that is exactly the question an author writing this line is asking.
         CompileError register = Assert.assertRefused("test.ir:4:8",
-                () -> parse("target 8086\norg 0\nentry a\nmovseg ax, 0\n"));
-        Assert.assertTrue(register.getMessage().contains("is not state a module can set"),
+                () -> parse("target 8086\norg 0\nentry a\nmovreg ax, 0\n"));
+        Assert.assertTrue(register.getMessage().contains("'with' clause"),
                 register.getMessage());
+
+        // And the other direction is a construct that is specified and not built, which is said as
+        // such rather than being mis-parsed (docs/ir.md §8.1).
+        CompileError read = Assert.assertRefused("test.ir:4:8",
+                () -> parse("target 8086\norg 0\nentry a\nmovreg drive, dl\n"));
+        Assert.assertTrue(read.getMessage().startsWith("not implemented yet:"),
+                read.getMessage());
+        Assert.assertTrue(read.getMessage().contains("reading a register into a value"),
+                read.getMessage());
     }
 
     private static void reproducesCanonical() {

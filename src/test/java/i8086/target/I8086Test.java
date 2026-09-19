@@ -31,6 +31,8 @@ public final class I8086Test {
     public static void register(Suite suite) {
         suite.add("I8086 says which register can hold a byte", I8086Test::byteHalves);
         suite.add("I8086 widens a byte with the instructions it has", I8086Test::widensBytes);
+        suite.add("I8086 writes only registers a value cannot live in",
+                I8086Test::writableStateHoldsNoValues);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
         suite.add("I8086 says an instruction that writes nothing destroys nothing",
@@ -39,6 +41,33 @@ public final class I8086Test {
                 I8086Test::namesStatementOperations);
         suite.add("I8086 says why a mnemonic is not a statement",
                 I8086Test::explainsStatementRefusals);
+    }
+
+    /**
+     * The registers {@code movreg} may write are exactly the ones a value cannot live in, which is
+     * what makes a standalone write to them safe: nothing else can be in the register, so the write
+     * does not have to survive a stretch of code to be read, and nothing has to be pinned
+     * ({@code docs/ir.md} §8.1, §12 item 12).
+     *
+     * <p>That is the rule the list means, and this is the test that says so — if the allocator's
+     * classes ever grow, the list has to move with them.
+     */
+    private static void writableStateHoldsNoValues() {
+        Target target = Targets.byName("8086");
+        for (String register : target.stateRegisters()) {
+            Assert.assertTrue(target.isRegister(register),
+                    "'" + register + "' is a register this machine has");
+            Assert.assertFalse(target.valueRegisters().contains(register),
+                    "'" + register + "' is not somewhere a value may live");
+            Assert.assertFalse(target.addressRegisters().contains(register),
+                    "'" + register + "' is not somewhere an address may live");
+            Assert.assertNotNull(target.writeState(AT, register, number(1)),
+                    "and this target can write it: " + register);
+        }
+        for (String register : target.valueRegisters()) {
+            Assert.assertFalse(target.stateRegisters().contains(register),
+                    "a register a value lives in is not on the list: " + register);
+        }
     }
 
     /**
