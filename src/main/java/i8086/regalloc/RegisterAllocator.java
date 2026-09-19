@@ -48,9 +48,11 @@ import java.util.Set;
  * ({@code docs/ir.md} §3.1.2), so a cell is one more colour a value can be given — after
  * the registers, because a value that fits in one stays in one and the bytes are never
  * touched. A value given a cell is loaded out of it wherever it is read and stored back
- * into it where it is written, through a register picked for that one access, so the
- * value does not hold a register for its life and the pressure it was causing is gone.
- * That is {@link #withHomes}, and it is where the cost of a home actually lands.
+ * into it where it is written, through a register picked for that access, so the value does
+ * not hold a register for its life and the pressure it was causing is gone. That register is
+ * the one thing a value in a cell still needs, and it is needed at a point rather than for a
+ * life — which is why {@link #colour} decides where values live and what they are moved
+ * through in one attempt, and {@link #withHomes} is where the cost of a home lands.
  */
 public final class RegisterAllocator {
 
@@ -99,6 +101,15 @@ public final class RegisterAllocator {
     /** The liveness of the selection, built once for the graph and the rewrite both. */
     private Liveness liveness;
 
+    /**
+     * The register each value in a cell is moved through, per point.
+     *
+     * <p>One map per point, because that is where the answer is decided: what has to be free to
+     * read or write a cell is a fact about the point, and the attempt that places the values is
+     * the one that can tell whether it holds. Empty for a point that touches no cell.
+     */
+    private final List<Map<String, String>> scratches = new ArrayList<Map<String, String>>();
+
     private RegisterAllocator(Target target) {
         this.target = target;
     }
@@ -112,6 +123,9 @@ public final class RegisterAllocator {
         this.selection = selection;
         groupNames(selection);
         this.liveness = Liveness.of(selection, target);
+        for (int point = 0; point < selection.pieces().size(); point++) {
+            scratches.add(new LinkedHashMap<String, String>());
+        }
         takeHomes(selection);
         keepValuesOutOfWrittenCells();
         colour();
@@ -350,12 +364,21 @@ public final class RegisterAllocator {
      * Every value a colour: a register, or the cell it may live in.
      *
      * <p>Registers first — a value that fits in one stays in one and its home is never touched —
-     * and a home only for a value with no register left. That much is one pass, and one pass is
-     * not enough: the values are coloured one at a time, so a value that *could* have lived in a
-     * home may take the last register on its way past, and a value with no home then has
-     * nowhere to go. So a pass that ends that way is thrown away and run again with one more
-     * value sent to its home, which is a value that has one and is the reason the other could
-     * not be coloured. Each attempt pins one more, so the loop ends.
+     * and a home only for a value with no register left. One pass is not enough, for two
+     * reasons, and both are the same shape: the decision is made value by value, while what the
+     * program needs is a property of a point.
+     *
+     * <p>A value that <em>could</em> have lived in a home may take the last register on its way
+     * past, and a value with no home then has nowhere to go. And a value in a home needs a
+     * register at every point that reads or writes it — that is how it is got in and out of the
+     * cell — which the value's own colour says nothing about. So an attempt that fails either way
+     * is thrown away and run again with one more value sent to its home: the value that is in the
+     * way, which is a value with a home of its own, since a register can only be freed here by
+     * one. Each attempt pins one more, so the loop ends.
+     *
+     * <p>What comes out of a successful attempt is the registers, the cells, and — per point — the
+     * register each value in a cell is moved through, because the attempt that decided where the
+     * values live is the one that can tell whether they can be got at.
      */
     private void colour() {
         buildGraph();
@@ -365,15 +388,44 @@ public final class RegisterAllocator {
             assigned.clear();
             inHome.clear();
             inHome.putAll(pinned);
+            for (Map<String, String> at : scratches) {
+                at.clear();
+            }
+
             String failed = assign(order);
-            if (failed == null) {
+            if (failed != null) {
+                String value = pinnedFor(failed, order);
+                if (value == null) {
+                    throw noRegister(failed);
+                }
+                pinned.put(value, groupHomes.get(value));
+                continue;
+            }
+
+            Stuck stuck = assignScratches();
+            if (stuck == null) {
                 return;
             }
-            String value = pinnedFor(failed, order);
+            String value = pinnedAt(stuck.point, order);
             if (value == null) {
-                throw noRegister(failed);
+                throw noScratch(stuck);
             }
             pinned.put(value, groupHomes.get(value));
+        }
+    }
+
+    /**
+     * Where an attempt to place everything stops: the point that could not be served, and the
+     * value in a home that could not be moved at it.
+     */
+    private static final class Stuck {
+
+        private final int point;
+        private final String value;
+
+        Stuck(int point, String value) {
+            this.point = point;
+            this.value = value;
         }
     }
 
@@ -819,13 +871,12 @@ public final class RegisterAllocator {
         String defined = Effects.writtenVariable(piece.item());
         String definedValue = defined == null ? null : groupOf(defined);
 
-        Map<String, String> cells = new LinkedHashMap<String, String>();
+        Set<String> cells = new LinkedHashSet<String>();
         for (Instruction instruction : instructions) {
             for (String name : mentioned(instruction)) {
                 String value = groupOf(name);
-                String cell = inHome.get(value);
-                if (cell != null) {
-                    cells.put(value, cell);
+                if (inHome.containsKey(value)) {
+                    cells.add(value);
                 }
             }
         }
@@ -833,28 +884,22 @@ public final class RegisterAllocator {
             return instructions;
         }
 
-        Map<String, String> scratches = new LinkedHashMap<String, String>();
-        Set<String> taken = new LinkedHashSet<String>();
-        for (String value : cells.keySet()) {
-            String register = scratch(value, piece, point, taken);
-            scratches.put(value, register);
-            taken.add(register);
-        }
-
+        Map<String, String> at = scratches.get(point);
         int storeAfter = lastWriter(instructions, definedValue, cells);
         List<Instruction> out = new ArrayList<Instruction>();
         Set<String> loaded = new LinkedHashSet<String>();
-        for (int at = 0; at < instructions.size(); at++) {
-            Instruction instruction = instructions.get(at);
-            for (String value : readsHere(instruction, definedValue, cells.keySet())) {
+        for (int index = 0; index < instructions.size(); index++) {
+            Instruction instruction = instructions.get(index);
+            for (String value : readsHere(instruction, definedValue, cells)) {
                 if (loaded.add(value)) {
-                    out.add(load(instruction.position(), scratches.get(value), cells.get(value)));
+                    out.add(load(instruction.position(), scratchOf(point, value),
+                            inHome.get(value)));
                 }
             }
-            out.add(withScratches(instruction, scratches));
-            if (at == storeAfter) {
-                out.add(store(instruction.position(), cells.get(definedValue),
-                        scratches.get(definedValue)));
+            out.add(withScratches(instruction, at));
+            if (index == storeAfter) {
+                out.add(store(instruction.position(), inHome.get(definedValue),
+                        scratchOf(point, definedValue)));
             }
         }
         return out;
@@ -869,8 +914,8 @@ public final class RegisterAllocator {
      * out of {@code ax} at the end, and an addition adds in place.
      */
     private int lastWriter(List<Instruction> instructions, String definedValue,
-                           Map<String, String> cells) {
-        if (definedValue == null || !cells.containsKey(definedValue)) {
+                           Set<String> cells) {
+        if (definedValue == null || !cells.contains(definedValue)) {
             return -1;
         }
         int last = -1;
@@ -929,22 +974,50 @@ public final class RegisterAllocator {
     }
 
     /**
-     * The register a value in a cell is moved through at this point.
+     * Gives every value in a cell the register it is moved through at each point that mentions it,
+     * and answers with the first point it cannot be done at, or null when it can be done at all of
+     * them.
      *
-     * <p>It has to be a register no value alive here is in, because the value in the cell is
-     * not the only thing that needs registers, and a register a point destroys, because a
-     * sequence the target declared may need {@code ax} or {@code dx} for itself. Two values in
-     * cells at one point get two registers, since they are both live across the instruction
-     * that computes with them.
+     * <p>This is where the local cost of a home is settled, and it is asked *inside* the attempt
+     * that decides where values live rather than after it. The reason is that the two questions
+     * are the same question asked at different scales: a value in a cell needs no register for its
+     * life, but it needs one at each point that reads or writes it, and whether one is free there
+     * is a property of that point — of which values are alive and which registers the point
+     * destroys — and of nothing about the value itself.
      *
-     * <p>Which one it is comes from the target's own order, so it is a property of the program
-     * and of nothing else. A value used as an address is moved through an address register, the
-     * same rule a value in a register follows.
+     * <p>What has to be free is a register no value alive at the point is in, because that value
+     * would be destroyed by the load or the store, and one the point does not destroy, because a
+     * sequence the target declared may need {@code ax} or {@code dx} itself. Two values in cells at
+     * one point get two registers, since both are live across the instruction that computes with
+     * them. Which registers are tried is the target's order, so which one is chosen is a property
+     * of the program.
      */
-    private String scratch(String value, Selection.Piece piece, int point, Set<String> taken) {
-        Set<String> busy = registersInUse(point);
-        busy.addAll(destroyed(piece));
-        busy.addAll(taken);
+    private Stuck assignScratches() {
+        for (int point = 0; point < liveness.points(); point++) {
+            Selection.Piece piece = selection.pieces().get(point);
+            Map<String, String> at = scratches.get(point);
+            Set<String> busy = registersInUse(point);
+            busy.addAll(destroyed(piece));
+            for (Instruction instruction : piece.instructions()) {
+                for (String name : mentioned(instruction)) {
+                    String value = groupOf(name);
+                    if (!inHome.containsKey(value) || at.containsKey(value)) {
+                        continue;
+                    }
+                    String register = freeRegisterFor(value, busy);
+                    if (register == null) {
+                        return new Stuck(point, value);
+                    }
+                    at.put(value, register);
+                    busy.add(register);
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The first register of the class this value needs that nothing in {@code busy} is using. */
+    private String freeRegisterFor(String value, Set<String> busy) {
         List<String> allowed = addresses.contains(value) ? target.addressRegisters()
                 : target.valueRegisters();
         for (String candidate : allowed) {
@@ -952,7 +1025,22 @@ public final class RegisterAllocator {
                 return candidate;
             }
         }
-        throw noScratch(value, piece);
+        return null;
+    }
+
+    /**
+     * The register a value in a cell is moved through at a point.
+     *
+     * <p>Every pair this is asked about was decided by {@link #assignScratches}, which ran before
+     * anything was rewritten — so a pair with no answer here is a bug in this class rather than a
+     * program it cannot compile.
+     */
+    private String scratchOf(int point, String value) {
+        String register = scratches.get(point).get(value);
+        if (register == null) {
+            throw new IllegalStateException("no register was decided to move '" + value + "'");
+        }
+        return register;
     }
 
     /** The instruction with every value that lives in a cell written as its scratch register. */
@@ -1036,20 +1124,53 @@ public final class RegisterAllocator {
     }
 
     /**
-     * Why a value could not be moved through a register at this point.
+     * Why a value in a cell could not be moved through a register at a point.
      *
-     * <p>The home is there so that the value does not need a register for its whole life, and
-     * this is the moment it still needs one. Every register is either holding a value that is
-     * alive here or destroyed here, so there is nowhere to put the value while it is being read
-     * or written — which is a refusal and not a silent use of somewhere else
-     * ({@code docs/ir.md} §8.2).
+     * <p>The home is there so that the value does not need a register for its whole life, and this
+     * is a moment it still needs one: every register is either holding a value that is alive here
+     * or destroyed here, so there is nowhere to put the value while it is read or written. What
+     * this allocator would do about that anywhere else is nothing — it does not invent storage,
+     * and a register can only be freed here by moving a value the program itself gave somewhere to
+     * wait, which none of the values alive here has. So the program is refused, with the point it
+     * was refused at and the values that were in the way ({@code docs/ir.md} §3.1.2, §8.2).
      */
-    private CompileError noScratch(String value, Selection.Piece piece) {
-        return new CompileError(piece.position(),
-                "there is no register free to move '" + selection.variableOf(value) + "' between "
-                        + "its home '" + inHome.get(value) + "' and the machine here: every "
-                        + "register is either holding a value that is alive at this point or "
-                        + "destroyed by it (docs/ir.md §3.1.2, §8.2)");
+    private CompileError noScratch(Stuck stuck) {
+        Set<String> alive = groupOf(liveness.liveAt(stuck.point));
+        List<String> blockers = new ArrayList<String>();
+        for (String other : alive) {
+            if (assigned.containsKey(other)) {
+                blockers.add(selection.variableOf(other));
+            }
+        }
+        return new CompileError(selection.pieces().get(stuck.point).position(),
+                "there is no register free to move '" + selection.variableOf(stuck.value)
+                        + "' between its home '" + inHome.get(stuck.value) + "' and the machine "
+                        + "here: " + blockers + " are alive at this point and hold every register "
+                        + "the machine has, and a register is freed here only by moving a value "
+                        + "into a home the program declared, which none of them has "
+                        + "(docs/ir.md §3.1.2, §8.2)");
+    }
+
+    /**
+     * A value to move into its home so that a value in a cell can be got at where it is needed.
+     *
+     * <p>This is {@link #pinnedFor}'s trade asked at a point rather than at a value: what has to
+     * change is which values hold the registers here, and the only value that can give one up is
+     * one alive at this point with a home of its own to go to. The first such value in the
+     * colouring order is taken, which is a rule rather than a preference — the same rule, for the
+     * same reason: this allocator has no cost model ({@code docs/ir.md} §3.1.2).
+     */
+    private String pinnedAt(int point, List<String> order) {
+        Set<String> alive = groupOf(liveness.liveAt(point));
+        for (String value : order) {
+            if (!alive.contains(value) || inHome.containsKey(value)) {
+                continue;
+            }
+            if (usableHome(value) != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /**

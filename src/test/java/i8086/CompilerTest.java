@@ -71,6 +71,8 @@ public final class CompilerTest {
                 CompilerTest::refusesToKeepAValueWhereTheProgramWrites);
         suite.add("Compiler refuses a value no register is free to move",
                 CompilerTest::refusesWhenNoRegisterIsFreeToMoveAValue);
+        suite.add("Compiler moves another value to its home to free a register",
+                CompilerTest::movesAnotherValueToItsHome);
         suite.add("Compiler refuses a byte value a whole register cannot hold",
                 CompilerTest::refusesAByteValueItsHomeCannotHold);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
@@ -683,20 +685,33 @@ public final class CompilerTest {
     }
 
     /**
-     * Seven values alive at one point, one of them in a home. Six hold the six registers, so
-     * there is no register left to move the seventh between its cell and the machine — and
-     * without one, nothing can read or write the cell at all. A refusal, and the message says
-     * which kind ({@code docs/ir.md} §8.2).
+     * Seven values alive at one point, one of them in a home — and, when asked for, a home for one
+     * of the other six as well.
+     *
+     * <p>Seven values and six registers is more than the machine has, and a value in a home still
+     * needs a register at the point it is read or written. So the only way this compiles is by
+     * moving one of the six into a home of its own: without a second home there is nothing to move
+     * and the program is refused, and with one the allocator moves it. Which is what "no spill"
+     * means here — the compiler does not invent storage, so the only register it can free is one a
+     * value is waiting in on the program's own instructions.
      *
      * <p>The flags are what keeps {@code eval} from becoming {@code expr}: a value computed with
-     * {@code expr} is put into a register of its own first, and then this would be a program
-     * about temporaries rather than about homes.
+     * {@code expr} is put into a register of its own first, and then this would be a program about
+     * temporaries rather than about homes.
      */
-    private static void refusesWhenNoRegisterIsFreeToMoveAValue() {
+    private static String sevenValuesAtOnePoint(boolean secondHome) {
         StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n"
-                + "$cell: pad 2\n\n$main:\n");
+                + "$cell: pad 2\n");
+        if (secondHome) {
+            source.append("$spare: pad 2\n");
+        }
+        source.append("\n$main:\n");
         for (char name = 'a'; name <= 'f'; name++) {
-            source.append("    var ").append(name).append(": u16\n");
+            source.append("    var ").append(name).append(": u16");
+            if (secondHome && name == 'f') {
+                source.append(" in $spare");
+            }
+            source.append('\n');
         }
         source.append("    var h: u16 in $cell\n");
         for (char name = 'a'; name <= 'f'; name++) {
@@ -708,17 +723,29 @@ public final class CompilerTest {
                 .append("    jz done\n")
                 .append("done:\n");
         for (char name = 'a'; name <= 'f'; name++) {
-            source.append("    word [0x").append(name - 'a' + 0x4e).append("] = ")
-                    .append(name).append("\n");
+            source.append("    word [0x").append(name - 'a' + 0x4e).append("] = ").append(name)
+                    .append('\n');
         }
         source.append("    word [0x60] = h\n    ret\n");
+        return source.toString();
+    }
 
+    private static void refusesWhenNoRegisterIsFreeToMoveAValue() {
         CompileError refused = Assert.assertThrows(CompileError.class,
-                () -> Compiler.compile("t.ir", source.toString()));
+                () -> Compiler.compile("t.ir", sevenValuesAtOnePoint(false)));
         Assert.assertTrue(refused.getMessage().contains("no register free to move"),
                 refused.getMessage());
         Assert.assertTrue(refused.getMessage().contains("its home 'cell'"),
                 "and the refusal names the home it could not use: " + refused.getMessage());
+    }
+
+    private static void movesAnotherValueToItsHome() {
+        String assembly = Compiler.compile("t.ir", sevenValuesAtOnePoint(true));
+        int freed = assembly.indexOf("mov word [$spare], ");
+        int needed = assembly.indexOf("mov word [$cell], ");
+        Assert.assertTrue(freed >= 0, "a value waits in the second home: " + assembly);
+        Assert.assertTrue(needed > freed,
+                "and it was moved there before the register was needed: " + assembly);
     }
 
     /**

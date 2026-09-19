@@ -411,11 +411,13 @@ A home is a resource like a register, and it is handed out the same way: the val
 it holds may not be alive at the same time as another value that is given it, and the
 allocator colours a graph to decide (*README*, step 7). A value is given its home only
 when no register is left for it, which is what keeps the bytes of a program that does not
-need them untouched — and when that leaves a value with no home of its own, the allocator
-sends a value it interferes with to its home and colours the graph again, so the number
-of values that end up in memory is a greedy answer rather than a provably smallest one.
-What is *not* optimal is the cost: which of several values goes to memory when only some
-of them fit is a question about how often each is read, and that is a heuristic.
+need them untouched — and an attempt that cannot place every value, or cannot get at a
+value it placed in a home, is thrown away and run again with one more value sent to its
+home: a value in the way that has one. So the number of values that end up in memory is a
+greedy answer rather than a provably smallest one, and the register a value in a home needs
+at one of its points is found the same way, by moving another value out of the way. What is
+*not* optimal is the cost: which of several values goes to memory when only some of them
+fit is a question about how often each is read, and that is a heuristic.
 
 The accesses the allocator writes have to stay distinguishable from an authored
 `[0x40] = x` — not in the syntax, which says nothing about it, but for the pass that
@@ -461,8 +463,10 @@ and every read of it is then a load and its one definition is followed by a stor
 a register picked for that one access. Two things stop a home from being used, and both
 are refusals rather than guesses. A home the program writes while the value is alive
 cannot hold the value, which is the rule two paragraphs above. And moving a value in and
-out of a home needs a register at the point it is read or written, so a program whose
-registers are all taken there is refused. `writethrough` is still **refused** until every
+out of a home needs a register at the point it is read or written: the allocator frees one
+where it can, by moving a value alive at that point into a home of its own, and refuses the
+program only when no value in the way has one to go to. `writethrough` is still **refused**
+until every
 definition writes the cell, because compiling it as if the bytes were never written is a
 wrong answer the program is not told about, and a hard error is what this compiler gives
 instead. A value that is not the width of a register cannot use a home either: the access
