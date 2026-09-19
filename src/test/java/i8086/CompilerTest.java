@@ -52,6 +52,8 @@ public final class CompilerTest {
         suite.add("Compiler gives a dead value's register away", CompilerTest::reusesRegisters);
         suite.add("Compiler gives a register back across a call",
                 CompilerTest::redefinesAroundACall);
+        suite.add("Compiler does not hold a register for a value that is dead across a label",
+                CompilerTest::keepsADeadValueOffTheLabelsRegister);
         suite.add("Compiler keeps a value that crosses a merge in one register",
                 CompilerTest::loopCarriedValue);
         suite.add("Compiler keeps a value out of a register an inline block destroys",
@@ -209,12 +211,12 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    inc ax\n"
-                + "    mov cx, ax\n"
-                + "    shl cx, 1\n"
-                + "    shl cx, 1\n"
-                + "    add ax, cx\n"
-                + "    add ax, 1\n"
+                + "    inc cx\n"
+                + "    mov ax, cx\n"
+                + "    shl ax, 1\n"
+                + "    shl ax, 1\n"
+                + "    add cx, ax\n"
+                + "    add cx, 1\n"
                 + "    jc $l0\n"
                 + "\n"
                 + "$l0:\n"
@@ -300,38 +302,54 @@ public final class CompilerTest {
     }
 
     /**
-     * A value that is never read again gives its register away: both land in
-     * {@code ax}, which is right because the first is finished with by the time the
-     * second is wanted.
+     * A value that is never read again gives its register away, and on this machine that
+     * has to be visible somewhere: a value used as an address has three registers to live
+     * in and not six, so four of them one after another fit only because each one's
+     * register is free by the time the next one is wanted.
      *
-     * <p>Both are kept rather than deleted because the branches read the flags their
-     * additions left. What the test is about is the register, not the survival.
+     * <p>Both halves are in the output. The four pointers are all in {@code bx} and the
+     * four loads all in {@code ax}, which is the reuse; and the test would be a refusal
+     * rather than a program if a register were kept for a value nobody reads again.
      *
-     * <p>The two values are computed from two different names on purpose. A value
-     * computed from the same name as the one before it would not need a register of its
-     * own at all — the copy that defines it dies at that copy, so the two share one
-     * (see {@code RegisterAllocator#groupNames}) — and then there would be no second
-     * value to give the first one's register to.
+     * <p>Each load is stored because a value nobody reads is a value the optimiser is
+     * right to delete — the first version of this test had four dead loads and compiled to
+     * one.
      */
     private static void reusesRegisters() {
         Assert.assertEquals("org 0x100\n"
-                + "\n"
-                + "$main:\n"
-                + "    add ax, 1\n"
-                + "    jc $l0\n"
-                + "    add ax, 2\n"
-                + "    jc $l0\n"
-                + "\n"
-                + "$l0:\n"
-                + "    ret\n",
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $msg1\n"
+                        + "    mov ax, [bx]\n"
+                        + "    mov [0x40], ax\n"
+                        + "    mov bx, $msg2\n"
+                        + "    mov ax, [bx]\n"
+                        + "    mov [0x41], ax\n"
+                        + "    mov bx, $msg3\n"
+                        + "    mov ax, [bx]\n"
+                        + "    mov [0x42], ax\n"
+                        + "    mov bx, $msg4\n"
+                        + "    mov ax, [bx]\n"
+                        + "    mov [0x43], ax\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$msg1: dw 1\n"
+                        + "\n"
+                        + "$msg2: dw 2\n"
+                        + "\n"
+                        + "$msg3: dw 3\n"
+                        + "\n"
+                        + "$msg4: dw 4\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
-                        + "    var a: u16\n    var b: u16\n    var u: u16\n    var v: u16\n"
-                        + "    a = eval(u + 1)\n"
-                        + "    jc $l0\n"
-                        + "    b = eval(v + 2)\n"
-                        + "    jc $l0\n"
-                        + "$l0:\n"
-                        + "    ret\n"));
+                        + "    var p1: u16\n    var p2: u16\n    var p3: u16\n    var p4: u16\n"
+                        + "    var x: u16\n"
+                        + "    p1 = msg1\n    x = [p1]\n    volatile [0x40] = x\n"
+                        + "    p2 = msg2\n    x = [p2]\n    volatile [0x41] = x\n"
+                        + "    p3 = msg3\n    x = [p3]\n    volatile [0x42] = x\n"
+                        + "    p4 = msg4\n    x = [p4]\n    volatile [0x43] = x\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg1: dw 1\nmsg2: dw 2\nmsg3: dw 3\nmsg4: dw 4\n"));
     }
 
     /**
@@ -415,6 +433,46 @@ public final class CompilerTest {
                         + "    n = 7\n"
                         + "    volatile [0x41] = n\n"
                         + "    ret\n"));
+    }
+
+    /**
+     * A value that is dead across a label does not hold a register across it, which is the
+     * difference between knowing where a value is alive and reading that off the distance
+     * between its first and last mention.
+     *
+     * <p>Four pointers, each defined before a label and read after it, and never two of them
+     * alive at once. Reading a life off the instruction stream gave each of them the whole
+     * function — the allocator before this one did exactly that, because a straight line
+     * cannot tell which side of a label anything is on — so four values that each want one of
+     * three address registers were refused. This program is the smallest one that says so,
+     * and it says it by compiling: all four pointers are in the same register, one after
+     * another, because each is finished with before the next is defined.
+     */
+    private static void keepsADeadValueOffTheLabelsRegister() {
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var i: u16\n    var x: u16\n");
+        for (int number = 1; number <= 4; number++) {
+            source.append("    var p").append(number).append(": u16\n");
+        }
+        source.append("    i = 0\n");
+        for (int number = 1; number <= 4; number++) {
+            source.append("    p").append(number).append(" = msg").append(number).append('\n')
+                    .append("    cmp i, 0\n")
+                    .append("    jz next").append(number).append('\n')
+                    .append("next").append(number).append(":\n")
+                    .append("    x = [p").append(number).append("]\n")
+                    .append("    volatile [0x4").append(number).append("] = x\n");
+        }
+        source.append("    ret\n\nmsg1: dw 1\nmsg2: dw 2\nmsg3: dw 3\nmsg4: dw 4\n");
+
+        String assembly = Compiler.compile("t.ir", source.toString());
+        for (int number = 1; number <= 4; number++) {
+            Assert.assertTrue(assembly.contains("    mov bx, $msg" + number + "\n"), assembly);
+        }
+        Assert.assertFalse(assembly.contains("    mov si, "),
+                "one address register is enough for all four: " + assembly);
+        Assert.assertFalse(assembly.contains("    mov di, "),
+                "and a second is not reached for: " + assembly);
     }
 
     /**
@@ -602,10 +660,15 @@ public final class CompilerTest {
                 + "    s = eval(a + b)\n"
                 + "    volatile [0x40] = s\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    mov cl, 8\n    shl dx, cl\n"),
-                "the shifted value is not in the register the count arrives in: " + assembly);
+        // What the rule about what an instruction destroys is for: `mov cl, 8` writes a
+        // register no value was given, so the value the shift is about may not be there —
+        // whichever register that turns out to be, which is the allocator's answer and not
+        // this test's.
+        Assert.assertTrue(assembly.contains("    mov cl, 8\n    shl "), assembly);
         Assert.assertFalse(assembly.contains("shl cx, cl"),
-                "and nothing shifts the value that was destroyed: " + assembly);
+                "nothing shifts the value that was destroyed: " + assembly);
+        Assert.assertFalse(assembly.contains("shl cl, cl"),
+                "and the count is still the count: " + assembly);
     }
 
     /**
@@ -628,19 +691,23 @@ public final class CompilerTest {
      * <p>Two things in the output are the point. The copies the sequence is written
      * with are gone where the allocator found them unnecessary: the answer goes into
      * {@code ax} and stays there, so the copy back out is a copy from a register into
-     * itself and was dropped. And neither operand is in {@code ax} or {@code dx}, the
-     * two registers a multiply uses: {@code a} is in {@code cx} and {@code b} in
-     * {@code bx}, so what the sequence copies into {@code ax} is a real copy.
+     * itself and was dropped. And neither operand is in {@code ax} or {@code dx}, the two
+     * registers a multiply uses, so what the sequence copies into {@code ax} is a real
+     * copy.
+     *
+     * <p>Which registers they are instead is not the test's business — the allocator
+     * decides that by colouring a graph, and the names in it are the program's, not this
+     * test's.
      */
     private static void multiplies() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, bx\n"
-                        + "    inc cx\n"
-                        + "    add bx, 2\n"
-                        + "    mov ax, cx\n"
-                        + "    mul bx\n"
+                        + "    mov bx, cx\n"
+                        + "    inc bx\n"
+                        + "    add cx, 2\n"
+                        + "    mov ax, bx\n"
+                        + "    mul cx\n"
                         + "    mov [0x40], ax\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", twoValues("*")));
@@ -650,12 +717,12 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, bx\n"
-                        + "    inc cx\n"
-                        + "    add bx, 2\n"
-                        + "    mov ax, cx\n"
+                        + "    mov bx, cx\n"
+                        + "    inc bx\n"
+                        + "    add cx, 2\n"
+                        + "    mov ax, bx\n"
                         + "    xor dx, dx\n"
-                        + "    div bx\n"
+                        + "    div cx\n"
                         + "    mov [0x40], ax\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", twoValues("/")));
@@ -666,12 +733,12 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, bx\n"
-                        + "    inc cx\n"
-                        + "    add bx, 2\n"
-                        + "    mov ax, cx\n"
+                        + "    mov bx, cx\n"
+                        + "    inc bx\n"
+                        + "    add cx, 2\n"
+                        + "    mov ax, bx\n"
                         + "    xor dx, dx\n"
-                        + "    div bx\n"
+                        + "    div cx\n"
                         + "    mov ax, dx\n"
                         + "    mov [0x40], ax\n"
                         + "    ret\n",
@@ -686,9 +753,9 @@ public final class CompilerTest {
     private static void readsDivisionSignedness() {
         String signed = Compiler.compile("t.ir", signedValues());
         String unsigned = Compiler.compile("t.ir", twoValues("/"));
-        Assert.assertTrue(signed.contains("    cwd\n    idiv bx\n"),
+        Assert.assertTrue(signed.contains("    cwd\n    idiv "),
                 "a signed division sign-extends the dividend: " + signed);
-        Assert.assertTrue(unsigned.contains("    xor dx, dx\n    div bx\n"),
+        Assert.assertTrue(unsigned.contains("    xor dx, dx\n    div "),
                 "and an unsigned one clears it: " + unsigned);
     }
 

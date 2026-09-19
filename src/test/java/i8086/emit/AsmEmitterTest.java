@@ -224,12 +224,12 @@ public final class AsmEmitterTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov ax, 1\n"
-                + "    add ax, 1\n"
-                + "    mov cx, ax\n"
-                + "    shl cx, 1\n"
-                + "    shl cx, 1\n"
-                + "    add ax, cx\n"
+                + "    mov cx, 1\n"
+                + "    add cx, 1\n"
+                + "    mov ax, cx\n"
+                + "    shl ax, 1\n"
+                + "    shl ax, 1\n"
+                + "    add cx, ax\n"
                 + "    ret\n", assembly);
     }
 
@@ -251,15 +251,15 @@ public final class AsmEmitterTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov ax, 0\n"
-                + "    mov cx, 3\n"
+                + "    mov cx, 0\n"
+                + "    mov ax, 3\n"
                 + "    jmp ..@lbl1\n"
                 + "\n"
                 + "..@lbl0:\n"
-                + "    add ax, 1\n"
+                + "    add cx, 1\n"
                 + "\n"
                 + "..@lbl1:\n"
-                + "    cmp ax, cx\n"
+                + "    cmp cx, ax\n"
                 + "    jc ..@lbl0\n"
                 + "    ret\n", assembly);
     }

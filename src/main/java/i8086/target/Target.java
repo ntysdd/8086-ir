@@ -107,6 +107,24 @@ public interface Target {
     }
 
     /**
+     * Whether control reaches the instruction after this one.
+     *
+     * <p>What a walk over the instructions has to know, and the same kind of question
+     * {@link #isBranch(String)} is: a conditional branch goes both ways, a jump goes one
+     * way, and something that leaves — a return, a halt, an interrupt return — goes
+     * nowhere this module can see. An interrupt is a call: it comes back unless the
+     * handler does not, and that is not a promise this compiler can make on the
+     * program's behalf, so it carries on ({@code docs/ir.md} §11).
+     *
+     * <p>The default is the one thing the vocabulary already says: everything except the
+     * unconditional jump carries on, because a condition was the only other way to go
+     * somewhere.
+     */
+    default boolean fallsThrough(String mnemonic) {
+        return !isBranch(mnemonic) || condition(mnemonic) != null;
+    }
+
+    /**
      * The operation a mnemonic names when it begins a statement, or null when this
      * target does not accept the instruction-shaped form ({@code docs/ir.md} §7.3).
      *

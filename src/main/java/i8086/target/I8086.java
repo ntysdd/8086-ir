@@ -632,6 +632,24 @@ public final class I8086 implements Target {
         return "jmp";
     }
 
+    /**
+     * Three instructions leave and everything else carries on.
+     *
+     * <p>{@code ret} returns, {@code iret} returns from an interrupt and {@code hlt}
+     * waits for one; whether it is ever woken is not something this module can know, so
+     * nothing after a halt is reached by falling into it. {@code int} is not one of
+     * them: a handler returns, and a handler that does not is a program that never comes
+     * back — which is the same thing the machine does either way
+     * ({@code docs/ir.md} §11).
+     */
+    @Override
+    public boolean fallsThrough(String mnemonic) {
+        if (mnemonic.equals("ret") || mnemonic.equals("hlt") || mnemonic.equals("iret")) {
+            return false;
+        }
+        return Target.super.fallsThrough(mnemonic);
+    }
+
     @Override
     public List<Form> compareForms(Item.Compare.Kind kind) {
         return kind == Item.Compare.Kind.TEST ? TEST_FORMS : COMPARE_FORMS;

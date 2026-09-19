@@ -987,7 +987,11 @@ Because variables are virtual registers, the meaning is exact:
 **[open]** the spelling of the marker — and a fact worth knowing while it is open:
 **nothing spills today**, marker or not. There is no frame and no spill slot in the
 compiler at all, so every function currently behaves as a no-spill one, and a
-program that needs more registers than six is refused (`README.md`, *Status*).
+program that needs more registers than six is refused (`README.md`, *Status*). The
+refusal is not a heuristic giving up: the allocator colours a graph, so "six is not
+enough" is a theorem about that graph, and the message names the values that were
+alive at the same time — which is the answer to "why not", and the thing a program
+has to change.
 
 **[decided] each definition is one life.** The form gives every definition a name of
 its own, and the allocator is told only which names have to share a register: the ones

@@ -55,29 +55,23 @@ public final class Selection {
     }
 
     private final List<Piece> pieces;
-    private final boolean controlFlow;
     private final List<List<String>> registerGroups;
     private final Map<String, String> variables;
 
-    public Selection(List<Piece> pieces, boolean controlFlow) {
-        this(pieces, controlFlow, Collections.<List<String>>emptyList(),
+    public Selection(List<Piece> pieces) {
+        this(pieces, Collections.<List<String>>emptyList(),
                 Collections.<String, String>emptyMap());
     }
 
-    public Selection(List<Piece> pieces, boolean controlFlow, List<List<String>> registerGroups,
+    public Selection(List<Piece> pieces, List<List<String>> registerGroups,
                      Map<String, String> variables) {
         this.pieces = Collections.unmodifiableList(new ArrayList<Piece>(pieces));
-        this.controlFlow = controlFlow;
         List<List<String>> groups = new ArrayList<List<String>>();
         for (List<String> group : registerGroups) {
             groups.add(Collections.unmodifiableList(new ArrayList<String>(group)));
         }
         this.registerGroups = Collections.unmodifiableList(groups);
         this.variables = Collections.unmodifiableMap(new LinkedHashMap<String, String>(variables));
-    }
-
-    public Selection(List<Piece> pieces) {
-        this(pieces, false);
     }
 
     public List<Piece> pieces() {
@@ -111,18 +105,6 @@ public final class Selection {
     public String variableOf(String name) {
         String variable = variables.get(name);
         return variable == null ? name : variable;
-    }
-
-    /**
-     * Whether any of the instructions goes somewhere.
-     *
-     * <p>What has to know is the allocator: a register given away inside a loop
-     * body would be read again by the next time round, and the intervals it works
-     * with are linear. The selector is what knows, because the selector is what
-     * emitted them.
-     */
-    public boolean controlFlow() {
-        return controlFlow;
     }
 
     /** Every instruction, in order, with the pieces flattened away. */

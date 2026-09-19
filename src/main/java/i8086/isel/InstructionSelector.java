@@ -83,7 +83,6 @@ public final class InstructionSelector {
     private final SsaForm form;
     private int temps;
     private List<Instruction> out;
-    private boolean controlFlow;
 
     public InstructionSelector(SsaForm form, Target target) {
         this.target = target;
@@ -121,15 +120,10 @@ public final class InstructionSelector {
                 Item item = statement.item();
                 out = new ArrayList<Instruction>();
                 select(item);
-                for (Instruction instruction : out) {
-                    if (target.isBranch(instruction.mnemonic())) {
-                        controlFlow = true;
-                    }
-                }
                 pieces.add(new Selection.Piece(item, out));
             }
         }
-        return new Selection(pieces, controlFlow, groups, variables());
+        return new Selection(pieces, groups, variables());
     }
 
     /**

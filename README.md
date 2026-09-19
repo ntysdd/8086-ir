@@ -180,11 +180,17 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    constrained register file, with pre-coloured physical registers for implicit
    operands and sub-register-aware live ranges. Spilling uses frame-relative
    stack slots.
-   **Partly built, and simpler than that.** It is linear scan over intervals, with
-   no spilling at all: needing more registers than the machine has is a hard error
-   (`docs/ir.md` §8.2), which is a promise rather than a shortfall. What the target
-   says an instruction destroys is respected, and addresses are kept in the
-   registers that can hold one. There are no sub-registers, so a byte value has
+   **Built, and simpler than that.** The graph is real: a value is a node, two values
+   alive at the same point are an edge, and the registers are the colours, which are
+   asked for one at a time from the target's register class. It is coloured greedily
+   in a perfect elimination ordering, so the number of registers a program needs is
+   the number it uses and the number it cannot have is said plainly. What is *not*
+   here is spilling — needing more registers than the machine has is a hard error
+   (`docs/ir.md` §8.2), which is a promise rather than a shortfall — and
+   pre-coloured nodes, which are not needed: what the machine insists on is handled
+   by the copies its own sequences are written with. That an address has three
+   registers to live in rather than six is the one place a value's class is narrower
+   than the machine, and there are still no sub-registers, so a byte value has
    nowhere to live — which is why a byte access is refused.
 8. **Emit** assembly text for the selected target. **Built.**
 9. **Assemble** (optionally, in the same run): the bundled `asm` front end
@@ -322,9 +328,10 @@ Working today:
   its answer in `dx`, and writing `cl` counts as writing `cx`), which registers an
   address may live in, and what to expand when the machine insists on a register of
   its own. The allocator does not spill — too many live values is a hard error, which
-  is the promise [`docs/ir.md`](docs/ir.md) §8.2 makes — and it drops the copies of a
-  register into itself that turn out to be unnecessary, which are the ones a copy whose
-  source dies at it makes unnecessary.
+  is the promise [`docs/ir.md`](docs/ir.md) §8.2 makes, and it is decided by colouring
+  a graph rather than guessed at — and it drops the copies of a register into itself
+  that turn out to be unnecessary, which are the ones a copy whose source dies at it
+  makes unnecessary.
 * **The assembly text** of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it — in the dialect NASM reads, so that `nasm -f bin` turns it into the image. The
   four differences from our own dialect, which is what an inline block is written

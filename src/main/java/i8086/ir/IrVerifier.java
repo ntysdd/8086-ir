@@ -3,6 +3,7 @@ package i8086.ir;
 import i8086.CompileError;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
+import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.target.Target;
 
@@ -314,21 +315,41 @@ public final class IrVerifier {
                     "'" + clobber + "' is neither a register nor '" + Names.FLAGS + "'");
         }
         for (Instruction instruction : block.body()) {
-            if (!instruction.isLabel()) {
+            if (instruction.isLabel()) {
+                String name = instruction.mnemonic();
+                // Block-local in what it can be read by, but a name in the image all the
+                // same: the emitted text is one flat assembly file, so two of anything
+                // cannot share a name (docs/asm.md §3).
+                require(!names.isVariable(name), instruction.position(),
+                        "'" + name + "' is a variable, so it cannot label a place in a block");
+                require(!names.isLabel(name), instruction.position(),
+                        "'" + name + "' is already a label, and a label inside a block shares the "
+                                + "image's names (docs/ir.md §9)");
+                require(blockLabels.add(name), instruction.position(),
+                        "'" + name + "' is already a label inside a block; block labels are local in "
+                                + "what can read them, not in what they are called (docs/ir.md §9)");
                 continue;
             }
-            String name = instruction.mnemonic();
-            // Block-local in what it can be read by, but a name in the image all the
-            // same: the emitted text is one flat assembly file, so two of anything
-            // cannot share a name (docs/asm.md §3).
-            require(!names.isVariable(name), instruction.position(),
-                    "'" + name + "' is a variable, so it cannot label a place in a block");
-            require(!names.isLabel(name), instruction.position(),
-                    "'" + name + "' is already a label, and a label inside a block shares the "
-                            + "image's names (docs/ir.md §9)");
-            require(blockLabels.add(name), instruction.position(),
-                    "'" + name + "' is already a label inside a block; block labels are local in "
-                            + "what can read them, not in what they are called (docs/ir.md §9)");
+            // A branch inside a block reaches the block's own labels and nothing else.
+            //
+            // Not for the block's sake — it is opaque either way — but for the graph: the
+            // edges a block has are the ones the module can see, and a jump out of one is
+            // an edge nothing here would draw. A value alive across that edge would look
+            // dead on the other side of it. Writing the jump as a statement is the same
+            // jump and an edge the module has (docs/ir.md §9).
+            if (!target.isBranch(instruction.mnemonic())) {
+                continue;
+            }
+            for (Operand operand : instruction.operands()) {
+                if (operand instanceof Operand.Name) {
+                    String name = ((Operand.Name) operand).name();
+                    require(!names.isLabel(name), operand.position(),
+                            "'" + name + "' is a label of the module, and a block's branches "
+                                    + "reach the block's own labels: write the jump as a statement "
+                                    + "after the block, where the graph has the edge "
+                                    + "(docs/ir.md §9)");
+                }
+            }
         }
     }
 
