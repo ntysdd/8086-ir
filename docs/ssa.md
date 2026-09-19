@@ -214,6 +214,14 @@ properties of the form rather than of any one pass:
   The second is why dead value elimination reads a form with a block in it as
   "everything is used": keeping a value costs registers, and removing one the
   block reads costs the program.
+* **A pass may not throw away information the IR still needs.** The clearest case
+  is a width: `[0x32] = x` is sixteen bits because `x` is, so replacing that `x`
+  with a literal leaves a statement with no width at all
+  ([`docs/ir.md`](ir.md) §3.4). A pass that folds may only do it where something
+  else in the statement still says how wide it is — which is the same reason a
+  comparison of two known values keeps one of them. The verifier is what catches
+  it when a pass gets this wrong, and it does so by refusing the pass's own output,
+  which is the first invariant doing its job rather than an inconvenience.
 
 ## 8. Leaving SSA — [decided]
 

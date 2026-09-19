@@ -3,7 +3,9 @@ package i8086.pass;
 import i8086.asm.Numbers;
 import i8086.ir.Expression;
 import i8086.ir.Item;
+import i8086.ir.MemoryOperand;
 import i8086.ir.Operation;
+import i8086.ir.Place;
 import i8086.ir.Type;
 import i8086.ir.Value;
 import i8086.ssa.Block;
@@ -194,6 +196,12 @@ public final class ConstantPropagation implements Pass {
     }
 
     private static Item replaceConstants(Item item, Map<String, Long> constants, SsaForm form) {
+        if (widthComesFromAValue(item)) {
+            // Not one value in this statement may become a literal, for the reason
+            // below. What is given up is small: the fold that would have happened is
+            // one this statement cannot describe.
+            return item;
+        }
         if (item instanceof Item.Assign) {
             Item.Assign assign = (Item.Assign) item;
             return new Item.Assign(item.position(), assign.place(),
@@ -250,6 +258,53 @@ public final class ConstantPropagation implements Pass {
                     replaceConstants(convert.operand(), constants, form));
         }
         return value;
+    }
+
+    /**
+     * Whether this statement takes its width from a value rather than from a place.
+     *
+     * <p>A memory operand with no {@code byte}, {@code word} or {@code dword} prefix
+     * has no width of its own: {@code [0x32] = x} is sixteen bits because {@code x} is,
+     * and so is {@code cmp [0x32], x} ({@code docs/ir.md} §3.4). Replacing that
+     * {@code x} with a literal leaves the statement with no width at all — which the
+     * verifier then refuses, correctly, because what it is handed really is not the
+     * program that was written. So the values here stay as they are until the operand
+     * says its width itself.
+     *
+     * <p>The other half of the same rule is already written out a few lines above: a
+     * comparison of two values that are both known keeps one of them, for exactly this
+     * reason.
+     */
+    private static boolean widthComesFromAValue(Item item) {
+        if (item instanceof Item.Assign) {
+            return unsizedMemory(((Item.Assign) item).place());
+        }
+        if (item instanceof Item.Compare) {
+            Item.Compare compare = (Item.Compare) item;
+            return unsizedMemory(compare.left()) || unsizedMemory(compare.right());
+        }
+        if (item instanceof Item.Eval) {
+            for (Value operand : ((Item.Eval) item).operation().operands()) {
+                if (unsizedMemory(operand)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean unsizedMemory(Place place) {
+        return place instanceof Place.Memory
+                && unsizedMemory(((Place.Memory) place).operand());
+    }
+
+    private static boolean unsizedMemory(Value value) {
+        return value instanceof Value.Memory
+                && unsizedMemory(((Value.Memory) value).operand());
+    }
+
+    private static boolean unsizedMemory(MemoryOperand operand) {
+        return operand.size() == null;
     }
 
     private static Operation replaceConstants(Operation operation, Map<String, Long> constants,

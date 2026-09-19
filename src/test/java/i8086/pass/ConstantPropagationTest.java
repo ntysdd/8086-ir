@@ -38,6 +38,10 @@ public final class ConstantPropagationTest {
                 ConstantPropagationTest::keepsFlagsThatAreRead);
         suite.add("A comparison always keeps one side to take its width from",
                 ConstantPropagationTest::keepsAComparisonWide);
+        suite.add("A store with no width of its own keeps the value stating it",
+                ConstantPropagationTest::keepsAnUnsizedStoreWide);
+        suite.add("A store that says its width folds its value",
+                ConstantPropagationTest::foldsIntoASizedStore);
         suite.add("Division is not folded, so a trap stays where the program put it",
                 ConstantPropagationTest::doesNotFoldDivision);
         suite.add("A shift by the width is not folded", ConstantPropagationTest::doesNotFoldWideShift);
@@ -176,6 +180,32 @@ public final class ConstantPropagationTest {
                         + "    cmp i, n\n"
                         + "    jc l0\n"
                         + "l0:\n"
+                        + "    ret\n"));
+    }
+
+    private static void keepsAnUnsizedStoreWide() {
+        // '[0x32] = x' is sixteen bits because x is (docs/ir.md §3.4). Writing 20 in
+        // place of x would leave the statement with no width at all, which is a
+        // program the verifier refuses — so the pass does not write it. The sized
+        // spelling below is where the fold happens instead.
+        String body = "    var x: i16\n"
+                + "    x = 20\n"
+                + "    [0x32] = x\n"
+                + "    ret\n";
+        Assert.assertEquals(before(body), after(body));
+    }
+
+    private static void foldsIntoASizedStore() {
+        Assert.assertEquals("; SSA form of target 8086, entry main\n"
+                        + "\n"
+                        + "block0 (main):\n"
+                        + "    var x: i16\n"
+                        + "    x#1 = 0x14\n"
+                        + "    word [0x32] = 0x14\n"
+                        + "    ret\n",
+                after("    var x: i16\n"
+                        + "    x = 20\n"
+                        + "    word [0x32] = x\n"
                         + "    ret\n"));
     }
 
