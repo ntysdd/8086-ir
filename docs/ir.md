@@ -291,15 +291,37 @@ the allocator does with the value. It is for a home that somebody else reads —
 handler, the next stage, or a program that patches the image. It costs a store per
 definition, which is what asking for it means.
 
-**A program may also write a home itself, and that is a save.** `tries = left` stores
-`left`'s value into those bytes wherever the value happens to be living, and it is a
-store like any other: it happens, and from then on those bytes hold that value. What
-it is *not* is a promise that the value stays there — in the default mode the allocator
-may put another variable in that cell afterwards, because a cell the compiler is
-allowed to use is a cell it is allowed to reuse. A save that has to last says so, and
-there are two ways to say it: make that variable's home `writethrough`, or save into a
-cell that **no variable declares as a home at all**, which the compiler never writes,
-so what the program puts there is what stays there.
+**A program may also write a home itself, and that is a save — and a save is kept.**
+`tries = left` stores `left`'s value into those bytes wherever the value happens to be
+living, and it is a store like any other. What is worth stating is what happens
+afterwards, because a home is shared between the program and the allocator, and when
+they disagree **the program's write is the one that stands**:
+
+* **A cell no variable declares as a home is the program's alone.** The compiler has no
+  reason to write it and no permission to, so what the program puts there stays until
+  the program writes it again.
+* **A `writethrough` home holds that variable's current value**, which is what that mode
+  is, so a value saved there lasts until the variable is next assigned. The cell is the
+  variable's and not the program's, which is the other half of why the mode is exclusive
+  (the rule below).
+* **Any other home is the program's from its first save.** The allocator may put a value
+  in such a cell only where that value's life **contains no write by the program to those
+  bytes** — so a cell the program saves into stops being scratch from that point on, and
+  nothing the allocator does can displace what was saved. What that costs is the
+  allocator's freedom, and the price is paid where it can be seen: a value whose only
+  home is a cell the program writes past, and which cannot be held in a register there,
+  is refused with a message naming the cell and the write — and the fix is a cell the
+  program does not share with a variable in the first place.
+
+In one sentence: **what the program writes into a home stays there until the program
+writes it again** — except in `writethrough`, where the cell belongs to the variable
+and holds its current value.
+
+The same rule read the other way round is what keeps the allocator honest: a value
+living in a cell does **not** survive a write of something else to those bytes, so the
+allocator may not have one living there across such a write. It has to be in a register
+there instead, or the program is refused — never a quiet wrong answer, which is the same
+promise §8.2 makes about the stack.
 
 **A write to a home is half of a volatile write.** That covers the stores
 `writethrough` demands and the ones a program writes itself, `tries = left` among them.
@@ -311,14 +333,6 @@ assume, and today the only one available is the one §3.4 already states — the
 access written twice — so a store of the same value to the same home with nothing in
 between is the store that may go. Everything else stands: the bytes are written, in
 the order the program writes them, and nothing else may be moved across one.
-
-One consequence of that is the allocator's to keep, and it is worth naming: a value
-that is living in a home does **not** survive a write of something else to those
-bytes. The program may write them — they are its own bytes — but the allocator may not
-still believe the cell holds that value, so the value has to be in a register across
-such a write, or the write has to be one the compiler can prove redundant. A value
-that can do neither is refused rather than miscompiled, which is the same promise
-§8.2 makes about the stack: this compiler does not quietly do the wrong thing.
 
 Three rules, and what each is for:
 
