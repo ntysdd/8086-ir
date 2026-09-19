@@ -223,7 +223,7 @@ dap:   pad 16
 
 main:
     var left: u16 in tries               ; a home for left: these bytes, if it needs
-    var packet: u16 in dap through       ; and one that is kept current
+    var packet: u16 in dap writethrough    ; and one that is kept current
     left = 4
 again:
     int 0x13                             ; a handler this compiler has never seen
@@ -285,21 +285,40 @@ about what somebody else reading those bytes would see; it says where the value 
 when it has to go somewhere. **[open]** the spelling of the second mode, and whether
 it belongs on the declaration at all — §12 item 18.
 
-`through` is the second mode, and it says the home is to be **kept current**: every
-write to that variable goes to the home, whenever it happens and whatever else the
-allocator does with the value. It is for a home that somebody else reads — a handler,
-the next stage, or a program that patches the image. It costs a store per definition,
-which is what asking for it means.
+`writethrough` is the second mode, and it says the home is to be **kept current**:
+every write to that variable goes to the home, whenever it happens and whatever else
+the allocator does with the value. It is for a home that somebody else reads — a
+handler, the next stage, or a program that patches the image. It costs a store per
+definition, which is what asking for it means.
 
-**A write through a home is half of a volatile write.** It is never removed, never
-duplicated, and never moved across another access to memory, all of which a volatile
-write is too (§3.4), with one difference: the compiler **may** leave it out when it
-can prove the home already holds that value, and a volatile write never may. That
-proof is the compiler's to make and nobody else's to assume, and today the only one
-available is the one §3.4 already states — the same access written twice — so a store
-of the same value to the same home with nothing in between is the store that may go.
-Everything else stands: the bytes are written on every definition, in the order the
-program writes them, and nothing else may be moved across one.
+**A program may also write a home itself, and that is a save.** `tries = left` stores
+`left`'s value into those bytes wherever the value happens to be living, and it is a
+store like any other: it happens, and from then on those bytes hold that value. What
+it is *not* is a promise that the value stays there — in the default mode the allocator
+may put another variable in that cell afterwards, because a cell the compiler is
+allowed to use is a cell it is allowed to reuse. A save that has to last says so, and
+there are two ways to say it: make that variable's home `writethrough`, or save into a
+cell that **no variable declares as a home at all**, which the compiler never writes,
+so what the program puts there is what stays there.
+
+**A write to a home is half of a volatile write.** That covers the stores
+`writethrough` demands and the ones a program writes itself, `tries = left` among them.
+Such a write is never removed, never duplicated, and never moved across another access
+to memory, all of which a volatile write is too (§3.4), with one difference: the
+compiler **may** leave it out when it can prove the home already holds that value, and
+a volatile write never may. That proof is the compiler's to make and nobody else's to
+assume, and today the only one available is the one §3.4 already states — the same
+access written twice — so a store of the same value to the same home with nothing in
+between is the store that may go. Everything else stands: the bytes are written, in
+the order the program writes them, and nothing else may be moved across one.
+
+One consequence of that is the allocator's to keep, and it is worth naming: a value
+that is living in a home does **not** survive a write of something else to those
+bytes. The program may write them — they are its own bytes — but the allocator may not
+still believe the cell holds that value, so the value has to be in a register across
+such a write, or the write has to be one the compiler can prove redundant. A value
+that can do neither is refused rather than miscompiled, which is the same promise
+§8.2 makes about the stack: this compiler does not quietly do the wrong thing.
 
 Three rules, and what each is for:
 
@@ -313,20 +332,31 @@ Three rules, and what each is for:
   (§2.2). The check is the verifier's rather than the parser's, because the item may
   be declared after the code that names it — the same reason a `dw` list of labels
   is checked by the verifier (§10.2).
-* **A home is one cell, so values in it may not be alive at the same time.** This is
-  the rule registers are handed out by, and it is the allocator's to keep, because it
-  is the allocator that decides which values go to a home. Two variables may name the
-  same bytes — a 16-bit value and the two bytes it is made of — and nothing is
-  inferred about that in either direction: a write through `x` is not assumed visible
-  through a read of `place`, and a read of `x` is not folded to something written
-  earlier. That is the rule §3.4 already takes about two accesses, and here it is the
-  feature rather than a limitation, because a program that asks for a home is saying
-  it wants those bytes written. What the bytes *are* is what the image says (`pad`
-  counts as zeros, §10.2), and a program that wants a value there has to write one.
+* **A home is one cell, and more than one variable may use it — in the default mode.**
+  This is the rule registers are handed out by, and it is the allocator's to keep,
+  because it is the allocator that decides which values go to a home. Sharing is what a
+  cell is for: values that are not alive at the same time reuse it, which is how one
+  two-byte cell serves a whole program, and it is what hand-written boot code does with
+  its scratch. What sharing cannot do is keep a *reader* of those bytes informed:
+  `writethrough` says the cell **is** the variable's current value, and two variables
+  cannot both be that — a reader could not tell whose value it was looking at, and one
+  variable's write would break the other's promise. So a cell that is anyone's
+  `writethrough` home belongs to that variable alone: another variable naming it is
+  refused, and that is a check the verifier can make rather than something the
+  allocator works around. The versions of *one* variable may of course share it — that
+  is what makes the promise hold, since only one of them is alive at a time. Two
+  variables may also name the same bytes without either using them as a home, which is
+  the union trick and is none of the allocator's business: nothing is inferred about
+  two accesses in either direction — a write through `x` is not assumed visible through
+  a read of `place`, and a read of `x` is not folded to something written earlier. That
+  is the rule §3.4 already takes, and here it is the feature rather than a limitation,
+  because a program that asks for a home is saying it wants those bytes written. What
+  the bytes *are* is what the image says (`pad` counts as zeros, §10.2), and a program
+  that wants a value there has to write one.
 * **Its writes are effects.** A store to a home is never removed, never duplicated,
   and never moved across another access to memory, which is what the home is for —
-  and in `through` mode that is true of every write to the variable, not only of the
-  ones the allocator chose to put in memory. A read whose value nobody uses changes
+  and in `writethrough` mode that is true of every write to the variable, not only of
+  the ones the allocator chose to put in memory. A read whose value nobody uses changes
   nothing and may go, as a plain read of memory may today; `volatile` keeps the
   meaning §3.4 gives it and stays the way to say that a read is itself an effect.
   **[open]** a home whose *bytes* something else writes — a timer's tick counter, a
@@ -377,7 +407,7 @@ current says so. The address of a virtual register is still refused, for the rea
 allocator's choice and so it does not reach a home, which makes whether a home's
 address may be written as a value **[open]** — §12 item 16.
 
-The words `in` and `through` join the surface, and **they are words rather than
+The words `in` and `writethrough` join the surface, and **they are words rather than
 reservations** (§3.1). A variable may still be called either of them: `var in: u16`
 declares one, a declaration whose home is a data item called `in` is written
 `var x: u16 in in`, and the printer writes that back as `var x: u16 in $in` — the
@@ -1471,15 +1501,16 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     and wrong for a label the author named `ax` and branched to — a program the
     surface allows, because nothing is reserved (§3.1). Reading a program back needs
     the spelling to be enough on its own, and here it is not.
-18. The spelling of the mode that keeps a home current: `through` in §3.1.2, which is a
-    proposal. What is decided is that there are two modes and what each of them means —
-    the home is used when the registers run out, or the home is written on every
-    definition — because a home that somebody else reads has to be told apart from one
-    that is only the allocator's own business. Whether the second is a word on the
-    declaration (`in place through`), a property of the home itself (a `pad` that says
-    it is kept current), or a declaration of its own is what is open.
-19. A home whose bytes something else writes. `through` keeps the *memory* current on
-    every write, which is what a reader outside the module needs, and says nothing
+18. The spelling of the mode that keeps a home current: `writethrough` in §3.1.2, which
+    is a proposal. What is decided is that there are two modes and what each of them
+    means — the home is used when the registers run out, or the home is written on every
+    definition — and that the second one is exclusive to the variable that asked for it,
+    because a reader of those bytes has to know whose value it is looking at. Whether
+    the mode is a word on the declaration (`in place writethrough`), a property of the
+    home itself (a `pad` that says it is kept current), or a declaration of its own is
+    what is open.
+19. A home whose bytes something else writes. `writethrough` keeps the *memory* current
+    on every write, which is what a reader outside the module needs, and says nothing
     about the other direction: the compiler may still hold a copy of a value it read.
     For a cell a handler or a device updates — the timer's counter at 0x046C, a byte a
     handler rewrites — no copy may be held at all, which is what `volatile` means for
