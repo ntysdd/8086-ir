@@ -24,12 +24,22 @@ import java.util.Set;
  *       it is refused rather than guessed ({@code docs/ir.md} §3.4, §3.5).
  * </ul>
  *
- * <p>What this does not yet check is anything about flags: whether a branch
- * reads a flag value that is actually defined ({@code docs/ir.md} §4.3), and
- * whether what an inline block says it clobbers is true. That needs
- * {@code cmp}, the conditions and {@code eval}/{@code expr}, none of which are
- * parseable yet — so no module can slip past by being unparsable, and this is a
- * gap in what is checked, not a hole in what is accepted.
+ * <p>And it checks the flags ({@code docs/ir.md} §4.3), as far as anything can
+ * yet: a branch that reads a flag value nothing has defined is refused, because
+ * reading an undefined flag must be a hard error and not a jump in an arbitrary
+ * direction. Two rules make that decidable without a control flow graph, and
+ * both are conservative on purpose:
+ *
+ * <ul>
+ *   <li>Only what the surface can do so far defines the flags — {@code cmp} and
+ *       {@code test} — plus an inline block that does not say it clobbers them.
+ *   <li>A label clears them, because another path may arrive there, and nothing
+ *       here knows which one did.
+ * </ul>
+ *
+ * <p>The one thing still not checked anywhere is the other half of §9: a block
+ * has to declare the flags it <em>reads</em>, and the surface has no syntax for
+ * that yet, so a block that reads a flag it does not declare cannot be caught.
  *
  * <p>Every message names the position it was found at ({@code AGENTS.md},
  * invariant 7), and the target is passed in rather than looked up so that this
@@ -106,13 +116,66 @@ public final class IrVerifier {
     // --- items -------------------------------------------------------------
 
     private void checkItems() {
+        boolean flagsDefined = false;
         for (Item item : module.items()) {
             if (item instanceof Item.Assign) {
+                // A move does not touch the flags, so they survive it (§4.2).
                 checkAssign((Item.Assign) item);
+            } else if (item instanceof Item.Compare) {
+                checkCompare((Item.Compare) item);
+                flagsDefined = true;
             } else if (item instanceof Item.InlineAsm) {
                 checkInlineAsm((Item.InlineAsm) item);
+                if (((Item.InlineAsm) item).clobbers().contains(FLAGS)) {
+                    flagsDefined = false;
+                }
+            } else if (item instanceof Item.Jump) {
+                checkLabelTarget(((Item.Jump) item).target(), item.position());
+            } else if (item instanceof Item.Branch) {
+                Item.Branch branch = (Item.Branch) item;
+                checkLabelTarget(branch.target(), item.position());
+                require(flagsDefined, branch.position(),
+                        "this branch reads the flags, but nothing on the way here defines them; "
+                                + "only 'cmp' and 'test' do so far, and a label clears them, "
+                                + "because another path may arrive there (docs/ir.md §4.3)");
+            }
+            if (namesSomething(item)) {
+                flagsDefined = false;
             }
         }
+    }
+
+    /** Whether an item leads with a name, and so can be branched to. */
+    private static boolean namesSomething(Item item) {
+        return item instanceof Item.Label
+                || (item instanceof Item.Data && ((Item.Data) item).label() != null);
+    }
+
+    private void checkCompare(Item.Compare compare) {
+        checkValue(compare.left());
+        checkValue(compare.right());
+        Integer left = widthOf(compare.left());
+        Integer right = widthOf(compare.right());
+        if (left != null && right != null) {
+            require(left.equals(right), compare.right().position(),
+                    "a " + left + "-byte value cannot be compared with a " + right
+                            + "-byte one; both sides of a comparison have one width");
+        }
+    }
+
+    private void checkLabelTarget(String target, SourcePos where) {
+        if (labels.contains(target)) {
+            return;
+        }
+        require(!variables.containsKey(target), where,
+                "'" + target + "' is a variable, so it names no place to branch to");
+        throw new CompileError(where,
+                "the branch target '" + target + "' is never defined as a label");
+    }
+
+    /** Checks a name that is read, whether it is a variable or a label. */
+    private void checkValue(Value value) {
+        widthOf(value);
     }
 
     private void checkAssign(Item.Assign assign) {

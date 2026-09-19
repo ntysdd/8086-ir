@@ -72,8 +72,9 @@ memory access. Whether the allocator keeps it in a register or spills it to the
 frame is invisible at this level.
 
 A name may not be a word the surface already uses for something else — a type
-prefix such as `byte`, or a data directive such as `db`. Such a declaration is
-refused, because the meaning of the word would then depend on where you looked.
+prefix such as `byte`, a data directive such as `db`, a statement word such as
+`jmp`, or a condition such as `jc`. Such a declaration is refused, because the
+meaning of the word would then depend on where you looked.
 
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 
@@ -202,6 +203,12 @@ jg   L        ; signed greater
 
 Because the mnemonic names the condition exactly, branches need no signedness
 inference at all — the assembler mnemonic *is* the override.
+
+A condition has **one canonical spelling**, which is the one the printer writes.
+The 8086 spells sixteen conditions thirty ways: `jb`, `jc` and `jnae` are one
+test of the carry flag, `je` and `jz` are one test of the zero flag. All thirty
+are accepted and normalised, so a condition is one word in the IR and the
+question "is this the same test" has an answer that does not need a table.
 
 Turning a flag into a value uses the `setcc` family:
 

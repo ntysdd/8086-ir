@@ -172,6 +172,98 @@ public abstract class Item {
     }
 
     /**
+     * {@code cmp a, b} or {@code test a, b}: set the flags from two values and
+     * produce nothing.
+     *
+     * <p>This is the only thing that defines flags so far. When arithmetic
+     * arrives it will define them too, and a branch that reads flags nobody has
+     * defined is a hard error ({@code docs/ir.md} §4.3).
+     */
+    public static final class Compare extends Item {
+
+        /** Which of the two comparisons this is. */
+        public enum Kind {
+            CMP("cmp"),
+            TEST("test");
+
+            private final String spelling;
+
+            Kind(String spelling) {
+                this.spelling = spelling;
+            }
+
+            public String spelling() {
+                return spelling;
+            }
+        }
+
+        private final Kind kind;
+        private final Value left;
+        private final Value right;
+
+        public Compare(SourcePos position, Kind kind, Value left, Value right) {
+            super(position);
+            this.kind = kind;
+            this.left = left;
+            this.right = right;
+        }
+
+        public Kind kind() {
+            return kind;
+        }
+
+        public Value left() {
+            return left;
+        }
+
+        public Value right() {
+            return right;
+        }
+    }
+
+    /** {@code jmp label}: go there, whatever the flags say. */
+    public static final class Jump extends Item {
+
+        private final String target;
+
+        public Jump(SourcePos position, String target) {
+            super(position);
+            this.target = target;
+        }
+
+        public String target() {
+            return target;
+        }
+    }
+
+    /**
+     * {@code jc label} and the rest of the family: branch on the current flags.
+     *
+     * <p>The condition is stored in the canonical spelling its target answered
+     * with, so {@code jb}, {@code jc} and {@code jnae} all become {@code jc}.
+     * That keeps one condition one word, and it is the word the printer writes.
+     */
+    public static final class Branch extends Item {
+
+        private final String condition;
+        private final String target;
+
+        public Branch(SourcePos position, String condition, String target) {
+            super(position);
+            this.condition = condition;
+            this.target = target;
+        }
+
+        public String condition() {
+            return condition;
+        }
+
+        public String target() {
+            return target;
+        }
+    }
+
+    /**
      * An inline assembly block: the escape hatch for register-based interfaces
      * ({@code docs/ir.md} §9).
      *

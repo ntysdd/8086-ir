@@ -53,9 +53,23 @@ public final class IrPrinter {
             printVar(text, (Item.Var) item);
         } else if (item instanceof Item.Assign) {
             printAssign(text, (Item.Assign) item);
+        } else if (item instanceof Item.Compare) {
+            printCompare(text, (Item.Compare) item);
+        } else if (item instanceof Item.Jump) {
+            text.append(INDENT).append("jmp ").append(((Item.Jump) item).target()).append('\n');
+        } else if (item instanceof Item.Branch) {
+            Item.Branch branch = (Item.Branch) item;
+            text.append(INDENT).append(branch.condition()).append(' ')
+                    .append(branch.target()).append('\n');
         } else {
             printInlineAsm(text, (Item.InlineAsm) item);
         }
+    }
+
+    private static void printCompare(StringBuilder text, Item.Compare compare) {
+        text.append(INDENT).append(compare.kind().spelling()).append(' ')
+                .append(printValue(compare.left())).append(", ")
+                .append(printValue(compare.right())).append('\n');
     }
 
     private static void printVar(StringBuilder text, Item.Var var) {

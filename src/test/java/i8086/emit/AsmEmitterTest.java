@@ -54,6 +54,8 @@ public final class AsmEmitterTest {
         suite.add("Asm emitter is deterministic", AsmEmitterTest::isDeterministic);
         suite.add("Asm emitter refuses what it cannot generate code for yet",
                 AsmEmitterTest::refusesVariables);
+        suite.add("Asm emitter refuses a branch it cannot generate code for",
+                AsmEmitterTest::refusesBranch);
     }
 
     private static String emit(String source) {
@@ -118,5 +120,13 @@ public final class AsmEmitterTest {
         Assert.assertEquals("test.ir:5:5", refused.position().toString());
         Assert.assertTrue(refused.getMessage().contains("cannot write code for"),
                 "the refusal says what is missing: " + refused.getMessage());
+    }
+
+    private static void refusesBranch() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> emit("target 8086\norg 0\nentry a\na:\n    jmp a\n"));
+        Assert.assertEquals("test.ir:5:5", refused.position().toString());
+        Assert.assertTrue(refused.getMessage().contains("cannot write code for a jump"),
+                "the refusal names the item: " + refused.getMessage());
     }
 }

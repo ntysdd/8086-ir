@@ -49,6 +49,23 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesBadSegment);
         suite.add("Ir verifier refuses a clobber that is not a register",
                 IrVerifierTest::refusesBadClobber);
+        suite.add("Ir verifier accepts a branch after a comparison",
+                IrVerifierTest::acceptsBranchAfterCompare);
+        suite.add("Ir verifier keeps flags across an inline block that spares them",
+                IrVerifierTest::acceptsFlagsAcrossSparedBlock);
+        suite.add("Ir verifier refuses a branch with no flags behind it",
+                IrVerifierTest::refusesBranchWithoutFlags);
+        suite.add("Ir verifier clears the flags at a label", IrVerifierTest::refusesBranchAfterLabel);
+        suite.add("Ir verifier refuses a branch after a block that clobbers flags",
+                IrVerifierTest::refusesBranchAfterClobber);
+        suite.add("Ir verifier accepts a jump without any flags", IrVerifierTest::acceptsJumpWithoutFlags);
+        suite.add("Ir verifier refuses a branch to a label that is never defined",
+                IrVerifierTest::refusesBranchToNothing);
+        suite.add("Ir verifier refuses a branch to a variable", IrVerifierTest::refusesBranchToVariable);
+        suite.add("Ir verifier refuses a comparison of two widths",
+                IrVerifierTest::refusesCompareWidths);
+        suite.add("Ir verifier refuses a comparison against nothing",
+                IrVerifierTest::refusesCompareUnknown);
     }
 
     private static void verify(String body) {
@@ -144,5 +161,49 @@ public final class IrVerifierTest {
 
     private static void refusesBadClobber() {
         refuses("test.ir:6:5", "    asm clobbers(zz) {\n        int 0x21\n    }\n");
+    }
+
+    // --- flags (§4.3) ------------------------------------------------------\n
+    private static void acceptsBranchAfterCompare() {
+        verify("    var x: u16\n    cmp x, 0\n    jz done\n    test x, 1\n    jnz done\n"
+                + "done:\n    ret\n");
+    }
+
+    private static void acceptsFlagsAcrossSparedBlock() {
+        verify("    var x: u16\n    cmp x, 0\n    asm clobbers(ax, dx) {\n        mov ah, 9\n    }\n"
+                + "    jz done\ndone:\n    ret\n");
+    }
+
+    private static void refusesBranchWithoutFlags() {
+        refuses("test.ir:7:5", "    var x: u16\n    jz main\n");
+    }
+
+    private static void refusesBranchAfterLabel() {
+        refuses("test.ir:9:5", "    var x: u16\n    cmp x, 0\nhere:\n    jnz here\n");
+    }
+
+    private static void refusesBranchAfterClobber() {
+        refuses("test.ir:11:5", "    var x: u16\n    cmp x, 0\n    asm clobbers(flags) {\n"
+                + "        int 0x21\n    }\n    jz main\n");
+    }
+
+    private static void acceptsJumpWithoutFlags() {
+        verify("    var x: u16\n    jmp done\ndone:\n    ret\n");
+    }
+
+    private static void refusesBranchToNothing() {
+        refuses("test.ir:8:5", "    var x: u16\n    cmp x, 0\n    jz nowhere\n");
+    }
+
+    private static void refusesBranchToVariable() {
+        refuses("test.ir:8:5", "    var x: u16\n    cmp x, 0\n    jz x\n");
+    }
+
+    private static void refusesCompareWidths() {
+        refuses("test.ir:8:17", "    var narrow: u8\n    var wide: u16\n    cmp narrow, wide\n");
+    }
+
+    private static void refusesCompareUnknown() {
+        refuses("test.ir:6:9", "    cmp nothing, 0\n");
     }
 }

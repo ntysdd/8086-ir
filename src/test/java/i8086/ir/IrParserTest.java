@@ -68,6 +68,16 @@ public final class IrParserTest {
         suite.add("Ir parser refuses an unterminated statement", IrParserTest::refusesTrailingToken);
         suite.add("Ir parser names the constructs it does not implement yet",
                 IrParserTest::namesUnimplemented);
+        suite.add("Ir parser reads comparisons and branches",
+                IrParserTest::readsComparisonsAndBranches);
+        suite.add("Ir parser normalises condition aliases",
+                IrParserTest::normalisesConditionAliases);
+        suite.add("Ir printer round-trips comparisons and branches",
+                IrParserTest::roundTripsComparisonsAndBranches);
+        suite.add("Ir parser refuses an unknown condition", IrParserTest::refusesUnknownCondition);
+        suite.add("Ir parser refuses a branch without a target",
+                IrParserTest::refusesBranchWithoutTarget);
+        suite.add("Ir parser refuses a condition as a name", IrParserTest::refusesConditionAsName);
     }
 
     private static Module parse(String source) {
@@ -313,20 +323,84 @@ public final class IrParserTest {
                 () -> parse("target 8086\norg 0\nentry a\n    var byte: u16\n"));
     }
 
+    private static void refusesUnknownCondition() {
+        Assert.assertRefused("test.ir:4:1",
+                () -> parse("target 8086\norg 0\nentry a\njx a\n"));
+    }
+
+    private static void refusesBranchWithoutTarget() {
+        Assert.assertRefused("test.ir:4:3",
+                () -> parse("target 8086\norg 0\nentry a\njz\n"));
+    }
+
+    private static void refusesConditionAsName() {
+        Assert.assertRefused("test.ir:4:9",
+                () -> parse("target 8086\norg 0\nentry a\n    var jc: u16\n"));
+    }
+
     private static void refusesTrailingToken() {
         Assert.assertRefused("test.ir:4:5",
                 () -> parse("target 8086\norg 0\nentry a\nret 1\n"));
     }
 
     private static void namesUnimplemented() {
-        CompileError comparison = Assert.assertRefused("test.ir:4:1",
-                () -> parse("target 8086\norg 0\nentry a\ncmp x, y\n"));
-        Assert.assertTrue(comparison.getMessage().startsWith("not implemented yet:"),
-                "a comparison says so: " + comparison.getMessage());
+        CompileError arithmetic = Assert.assertRefused("test.ir:4:9",
+                () -> parse("target 8086\norg 0\nentry a\n    x = eval(a + b)\n"));
+        Assert.assertTrue(arithmetic.getMessage().startsWith("not implemented yet:"),
+                "arithmetic says so: " + arithmetic.getMessage());
 
         CompileError sugar = Assert.assertRefused("test.ir:4:1",
                 () -> parse("target 8086\norg 0\nentry a\n.if 1\n"));
         Assert.assertTrue(sugar.getMessage().contains("docs/ir.md"),
                 "and points at the section that specifies it: " + sugar.getMessage());
+    }
+
+    private static void readsComparisonsAndBranches() {
+        Module module = parse("target 8086\norg 0\nentry main\n"
+                + "main:\n"
+                + "    var x: u16\n"
+                + "    cmp x, 0\n"
+                + "    test x, 1\n"
+                + "    jmp main\n"
+                + "    jz main\n");
+
+        Item.Compare cmp = (Item.Compare) module.items().get(2);
+        Assert.assertEquals(Item.Compare.Kind.CMP, cmp.kind());
+        Assert.assertEquals("x", ((Value.Name) cmp.left()).name());
+        Assert.assertEquals(0L, ((Value.Number) cmp.right()).value());
+
+        Assert.assertEquals(Item.Compare.Kind.TEST,
+                ((Item.Compare) module.items().get(3)).kind());
+        Assert.assertEquals("main", ((Item.Jump) module.items().get(4)).target());
+        Assert.assertEquals("main", ((Item.Branch) module.items().get(5)).target());
+    }
+
+    private static void normalisesConditionAliases() {
+        Module module = parse("target 8086\norg 0\nentry main\n"
+                + "main:\n"
+                + "    jb main\n"
+                + "    jnae main\n"
+                + "    jnc main\n"
+                + "    je main\n");
+        Assert.assertEquals("jc", ((Item.Branch) module.items().get(1)).condition());
+        Assert.assertEquals("jc", ((Item.Branch) module.items().get(2)).condition());
+        Assert.assertEquals("jnc", ((Item.Branch) module.items().get(3)).condition());
+        Assert.assertEquals("jz", ((Item.Branch) module.items().get(4)).condition());
+    }
+
+    private static void roundTripsComparisonsAndBranches() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry main\n"
+                + "\n"
+                + "main:\n"
+                + "    var x: u16\n"
+                + "    cmp x, 0\n"
+                + "    jz done\n"
+                + "    jmp main\n"
+                + "\n"
+                + "done:\n"
+                + "    ret\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
     }
 }

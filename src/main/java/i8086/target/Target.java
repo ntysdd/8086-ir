@@ -1,5 +1,7 @@
 package i8086.target;
 
+import java.util.List;
+
 /**
  * What the rest of the compiler is allowed to know about a machine.
  *
@@ -28,4 +30,23 @@ public interface Target {
      * which the surface lets a module set directly ({@code docs/ir.md} §8.1).
      */
     boolean isSegmentRegister(String name);
+
+    /**
+     * The condition a branch word names, in its canonical spelling, or null when
+     * the word names no condition this target has.
+     *
+     * <p>The condition is returned as a spelling rather than as an enum because
+     * that is what the surface writes and what the printer writes back: the
+     * compiler has no business inventing a second name for a flag test. Words
+     * that mean the same thing — {@code jb}, {@code jc} and {@code jnae} are one
+     * test — all answer with the same canonical word, so the answer is also the
+     * identity of the condition ({@code docs/ir.md} §4.4).
+     */
+    String condition(String word);
+
+    /**
+     * Every condition this target has, in a fixed order, for a diagnostic that
+     * has to list them.
+     */
+    List<String> conditions();
 }

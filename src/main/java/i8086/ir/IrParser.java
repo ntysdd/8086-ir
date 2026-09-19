@@ -8,10 +8,14 @@ import i8086.asm.Size;
 import i8086.asm.Token;
 import i8086.asm.TokenKind;
 import i8086.asm.Tokenizer;
+import i8086.target.Target;
 import i8086.target.Targets;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Reads the IR surface into a {@link Module}.
@@ -29,9 +33,21 @@ public final class IrParser {
 
     private static final int MAX_ORIGIN = 0xFFFF;
 
+    /**
+     * Words the surface already uses for something else, which therefore cannot
+     * name anything. The list is the IR's own vocabulary; the conditions and the
+     * type prefixes come from the target and from {@link Size}, because those are
+     * not this file's facts to know.
+     */
+    private static final Set<String> STATEMENT_WORDS = new LinkedHashSet<String>(Arrays.asList(
+            "var", "ret", "asm", "jmp", "cmp", "test",
+            "target", "org", "entry",
+            "eval", "expr", "movzx", "movsx"));
+
     private final String file;
     private final List<Token> tokens;
     private int index;
+    private Target target;
 
     private IrParser(String file, List<Token> tokens) {
         this.file = file;
@@ -89,9 +105,11 @@ public final class IrParser {
         require(name.is(TokenKind.IDENT) || name.is(TokenKind.NUMBER), name.position(),
                 "expected a target name after 'target', but found " + name.describe());
         next();
-        require(Targets.isKnown(name.name()), name.position(),
+        Target known = Targets.byName(name.name());
+        require(known != null, name.position(),
                 "unsupported target '" + name.text() + "'; the known targets are "
                         + Targets.knownNames());
+        target = known;
         return name.name();
     }
 
@@ -138,12 +156,39 @@ public final class IrParser {
         if (first.isName("asm")) {
             return parseInlineAsm();
         }
+        if (first.isName("jmp")) {
+            next();
+            String where = expect(TokenKind.IDENT, "a label to jump to").name();
+            endOfLine();
+            return new Item.Jump(first.position(), where);
+        }
+        if (first.isName("cmp") || first.isName("test")) {
+            return parseCompare();
+        }
+        if (first.is(TokenKind.IDENT) && target.condition(first.name()) != null) {
+            next();
+            String where = expect(TokenKind.IDENT, "a label to branch to").name();
+            endOfLine();
+            return new Item.Branch(first.position(), target.condition(first.name()), where);
+        }
         if (first.is(TokenKind.IDENT)) {
             throw notImplemented(first, statementDescription(first));
         }
         throw new CompileError(first.position(),
-                "expected a label, a data definition, 'var', an assignment, 'ret' or 'asm', "
-                        + "but found " + first.describe());
+                "expected a label, a data definition, 'var', an assignment, 'ret', 'asm', "
+                        + "'cmp', 'jmp' or a condition, but found " + first.describe());
+    }
+
+    private Item parseCompare() {
+        Token keyword = next();
+        Item.Compare.Kind kind = keyword.isName("test")
+                ? Item.Compare.Kind.TEST
+                : Item.Compare.Kind.CMP;
+        Value left = parseValue();
+        expectPunct(",");
+        Value right = parseValue();
+        endOfLine();
+        return new Item.Compare(keyword.position(), kind, left, right);
     }
 
     private Item parseVar() {
@@ -167,9 +212,12 @@ public final class IrParser {
      * meaning depends on where you look. Better to say so at the declaration.
      */
     private void requireNameable(Token name) {
-        require(Size.named(name.name()) == null && Size.fromDirective(name.name()) == null,
-                name.position(),
-                "'" + name.text() + "' is a word of the syntax, so it cannot name anything");
+        boolean reserved = Size.named(name.name()) != null
+                || Size.fromDirective(name.name()) != null
+                || STATEMENT_WORDS.contains(name.name())
+                || target.condition(name.name()) != null;
+        require(!reserved, name.position(),
+                "'" + name.text() + "' is a word of the surface, so it cannot name anything");
     }
 
     private Item parseAssignment() {
@@ -187,6 +235,9 @@ public final class IrParser {
         Token first = peek();
         if (startsMemoryOperand()) {
             return new Value.Memory(first.position(), parseMemoryOperand());
+        }
+        if (first.is(TokenKind.IDENT) && isUnimplementedValueWord(first.name())) {
+            throw notImplemented(first, statementDescription(first));
         }
         if (first.is(TokenKind.NUMBER)) {
             next();
@@ -263,15 +314,29 @@ public final class IrParser {
         return new MemoryOperand(start.position(), size, segment, base, displacement);
     }
 
+    /**
+     * Words that begin a value and are specified but not built yet. Naming the
+     * construct is more use than "expected a value", because the writer wrote
+     * something the language has and the compiler cannot do yet.
+     */
+    private static boolean isUnimplementedValueWord(String name) {
+        return name.equals("eval") || name.equals("expr")
+                || name.equals("movzx") || name.equals("movsx")
+                || name.equals("byte") || name.equals("word") || name.equals("dword");
+    }
+
     private static String statementDescription(Token first) {
         String name = first.name();
-        if (name.equals("cmp") || name.equals("test")) {
-            return "'" + name + "' (docs/ir.md §4.4)";
-        }
         if (name.equals("eval") || name.equals("expr")) {
             return "'" + name + "' (docs/ir.md §5)";
         }
-        if (name.equals("setcc") || name.startsWith("set")) {
+        if (name.equals("movzx") || name.equals("movsx")) {
+            return "the conversion '" + name + "' (docs/ir.md §3.5)";
+        }
+        if (Size.named(name) != null) {
+            return "a size prefix inside a value, which is not a value (docs/ir.md §3.5)";
+        }
+        if (name.startsWith("set")) {
             return "the setcc family (docs/ir.md §4.4)";
         }
         if (name.startsWith(".if") || name.startsWith(".else")

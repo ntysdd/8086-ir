@@ -73,6 +73,9 @@ public final class AsmEmitter {
     private static CompileError notYet(Item item) {
         String what = item instanceof Item.Var ? "a variable declaration"
                 : item instanceof Item.Assign ? "an assignment"
+                : item instanceof Item.Compare ? "a comparison"
+                : item instanceof Item.Jump ? "a jump"
+                : item instanceof Item.Branch ? "a branch"
                 : "this item";
         return new CompileError(item.position(),
                 "the emitter cannot write code for " + what + " yet: instruction selection and "
