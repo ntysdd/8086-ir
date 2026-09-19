@@ -22,14 +22,21 @@ public final class MemoryOperand {
 
     private final SourcePos position;
     private final Size size;
+    private final boolean isVolatile;
     private final String segment;
     private final String base;
     private final long displacement;
 
     public MemoryOperand(SourcePos position, Size size, String segment, String base,
                          long displacement) {
+        this(position, size, false, segment, base, displacement);
+    }
+
+    public MemoryOperand(SourcePos position, Size size, boolean isVolatile, String segment,
+                         String base, long displacement) {
         this.position = position;
         this.size = size;
+        this.isVolatile = isVolatile;
         this.segment = segment;
         this.base = base;
         this.displacement = displacement;
@@ -38,6 +45,24 @@ public final class MemoryOperand {
     /** Where the operand was written, for diagnostics. */
     public SourcePos position() {
         return position;
+    }
+
+    /**
+     * Whether the access is marked {@code volatile}.
+     *
+     * <p>A volatile access is one the program needs to happen: reading a register
+     * of a device can clear it, and a write to one can start something. So it is
+     * never removed, never duplicated and never reordered against another volatile
+     * access ({@code AGENTS.md}, invariant 3), and the compiler may assume nothing
+     * about its value.
+     *
+     * <p>A plain access carries none of that. It is still an access — a store is
+     * an effect and a load of something a store may have written is not free — but
+     * it is one the compiler is allowed to reason about, and to remove when nothing
+     * observes it.
+     */
+    public boolean isVolatile() {
+        return isVolatile;
     }
 
     /**

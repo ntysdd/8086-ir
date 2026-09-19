@@ -280,6 +280,7 @@ public final class IrVerifier {
      */
     private Integer widthOfExpression(Expression expression, Integer implied, ExpressionForm form) {
         if (expression instanceof Expression.Leaf) {
+            requireNoVolatile(((Expression.Leaf) expression).value());
             return widthOfLeaf(((Expression.Leaf) expression).value(), implied, form);
         }
         if (expression instanceof Expression.Complement) {
@@ -478,6 +479,7 @@ public final class IrVerifier {
         Operator operator = operation.operator();
         Integer width = null;
         for (Value operand : operation.operands()) {
+            requireNoVolatile(operand);
             Integer own = widthOf(operand, width == null ? implied : width);
             if (width == null) {
                 width = own;
@@ -497,6 +499,30 @@ public final class IrVerifier {
                             + "is written out by hand (docs/ir.md §6.2)");
         }
         return width;
+    }
+
+    /**
+     * Refuses a volatile access written where an expression put it.
+     *
+     * <p>{@code docs/ir.md} §3.4 keeps volatile accesses out of {@code eval} and
+     * {@code expr}: an expression is something the optimiser may reorder, share and
+     * duplicate, and an access that must happen exactly once cannot be any of those
+     * things. Keeping them apart is what makes "volatile is never removed,
+     * duplicated or reordered" a rule about statements rather than a rule every
+     * optimisation has to remember.
+     *
+     * <p>A comparison is not an expression in that sense — {@code cmp} is one
+     * operation written on its own line — so a volatile load may be compared
+     * against something. What it may not be is an operand of something the compiler
+     * is free to take apart.
+     */
+    private void requireNoVolatile(Value value) {
+        if (value instanceof Value.Memory && ((Value.Memory) value).operand().isVolatile()) {
+            throw new CompileError(value.position(),
+                    "a volatile access is a statement of its own: it must happen exactly once, "
+                            + "and an expression is something the compiler may take apart "
+                            + "(docs/ir.md §3.4)");
+        }
     }
 
     private void checkAddress(MemoryOperand operand) {

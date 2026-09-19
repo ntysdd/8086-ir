@@ -81,19 +81,22 @@ public final class DeadValueElimination implements Pass {
         }
     }
 
-    /** Whether a statement does anything anybody can observe. */
+    /**
+     * Whether a statement does anything anybody can observe.
+     *
+     * <p>Two different questions, asked together because the answer is the same. An
+     * item that is not code — a declaration, a label, a data definition — is not
+     * something to remove; an item that has an effect is not something that may be
+     * removed. Neither is a value definition; those are removable exactly when
+     * nothing reads them.
+     */
     private static boolean needed(SsaStatement statement, Uses uses) {
         Item item = statement.item();
-        if (item instanceof Item.Branch || item instanceof Item.Jump
-                || item instanceof Item.Return) {
-            return true;
-        }
         if (item instanceof Item.Label || item instanceof Item.Var
-                || item instanceof Item.Data || item instanceof Item.InlineAsm) {
+                || item instanceof Item.Data) {
             return true;
         }
-        if (item instanceof Item.Assign
-                && ((Item.Assign) item).place() instanceof Place.Memory) {
+        if (Effects.hasEffect(item)) {
             return true;
         }
         if (statement.definedFlags() != null && uses.isUsed(statement.definedFlags())) {

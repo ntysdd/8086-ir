@@ -173,7 +173,8 @@ public final class IrPrinter {
 
     /**
      * Prints a memory operand the way {@code docs/ir.md} §3.4 writes one,
-     * {@code word [p + 2]}, with spaces around the sign.
+     * {@code word [p + 2]}, with spaces around the sign, and {@code volatile} in
+     * front when the access is one the program needs to happen.
      *
      * <p>The assembly text writes the same shape without them, {@code [bx+si+2]},
      * as {@code docs/asm.md} §4 shows. They are two surfaces with two spellings,
@@ -181,6 +182,9 @@ public final class IrPrinter {
      */
     private static String printMemoryOperand(MemoryOperand operand) {
         StringBuilder text = new StringBuilder();
+        if (operand.isVolatile()) {
+            text.append("volatile ");
+        }
         if (operand.size() != null) {
             text.append(operand.size().spelling()).append(' ');
         }

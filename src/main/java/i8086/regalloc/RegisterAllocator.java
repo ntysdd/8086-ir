@@ -1,6 +1,7 @@
 package i8086.regalloc;
 
 import i8086.CompileError;
+import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
 import i8086.ir.Item;
@@ -60,6 +61,9 @@ public final class RegisterAllocator {
     /** The registers each value may not be given, because something destroys them. */
     private final Map<String, Set<String>> keepOut = new LinkedHashMap<String, Set<String>>();
 
+    /** The values that are used as an address somewhere, and so need one of those registers. */
+    private final Set<String> addresses = new LinkedHashSet<String>();
+
     /** The instruction from which each register is free again. */
     private final Map<String, Integer> freeFrom = new LinkedHashMap<String, Integer>();
 
@@ -92,23 +96,60 @@ public final class RegisterAllocator {
         return new Selection(pieces, selection.controlFlow());
     }
 
-    /** Where each value is first and last mentioned, over the whole run. */
+    /**
+     * Where each value is first and last mentioned, over the whole run, and which
+     * values are used as an address.
+     *
+     * <p>A value inside the brackets of a memory operand is mentioned like any other
+     * operand, and it is the one place where what a value <em>is</em> changes where
+     * it may live: an address has three registers to choose from and not six, because
+     * {@code [ax]} is not something this machine can say.
+     */
     private void findSpans(Selection selection) {
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
             for (Instruction instruction : piece.instructions()) {
+                for (String name : mentioned(instruction)) {
+                    if (!firstSeen.containsKey(name)) {
+                        firstSeen.put(name, Integer.valueOf(index));
+                    }
+                    lastSeen.put(name, Integer.valueOf(index));
+                }
                 for (Operand operand : instruction.operands()) {
-                    if (operand instanceof Operand.Virtual) {
-                        String name = ((Operand.Virtual) operand).name();
-                        if (!firstSeen.containsKey(name)) {
-                            firstSeen.put(name, Integer.valueOf(index));
+                    if (operand instanceof Operand.Memory) {
+                        for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
+                            if (atom.isVirtual()) {
+                                addresses.add(atom.name());
+                            }
                         }
-                        lastSeen.put(name, Integer.valueOf(index));
                     }
                 }
                 index++;
             }
         }
+    }
+
+    /**
+     * Every value an instruction mentions, brackets and all.
+     *
+     * <p>A memory operand holds names rather than operands, so walking
+     * {@code operands()} alone would miss the address a load reads through — and a
+     * value no walk sees is a value with no register and no interval.
+     */
+    private static List<String> mentioned(Instruction instruction) {
+        List<String> names = new ArrayList<String>();
+        for (Operand operand : instruction.operands()) {
+            if (operand instanceof Operand.Virtual) {
+                names.add(((Operand.Virtual) operand).name());
+            } else if (operand instanceof Operand.Memory) {
+                for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
+                    if (atom.isVirtual()) {
+                        names.add(atom.name());
+                    }
+                }
+            }
+        }
+        return names;
     }
 
     /**
@@ -189,15 +230,43 @@ public final class RegisterAllocator {
         }
     }
 
+    /**
+     * Rewrites an instruction with every value replaced by the register it lives in.
+     *
+     * <p>The names inside a memory operand are resolved too: an address is a value
+     * like any other, and by the time an instruction is printed there is no such
+     * thing as a name that has not been decided. A name that is not one of the
+     * module's values is a label, and a label is not a register — it is left as it
+     * is, for the assembler.
+     */
     private Instruction resolve(Instruction instruction, int index) {
         List<Operand> operands = new ArrayList<Operand>();
         for (Operand operand : instruction.operands()) {
-            operands.add(operand instanceof Operand.Virtual
-                    ? ((Operand.Virtual) operand).resolvedTo(registerFor((Operand.Virtual) operand,
-                            index))
-                    : operand);
+            if (operand instanceof Operand.Virtual) {
+                operands.add(((Operand.Virtual) operand)
+                        .resolvedTo(registerFor((Operand.Virtual) operand, index)));
+            } else if (operand instanceof Operand.Memory) {
+                operands.add(resolve((Operand.Memory) operand, index));
+            } else {
+                operands.add(operand);
+            }
         }
         return new Instruction(instruction.position(), instruction.mnemonic(), operands);
+    }
+
+    private Operand resolve(Operand.Memory operand, int index) {
+        List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
+        for (Operand.Memory.Atom atom : operand.atoms()) {
+            if (!atom.isVirtual()) {
+                // A number, or a name the assembler owns: neither is ours to give a
+                // register to.
+                atoms.add(atom);
+            } else {
+                atoms.add(Operand.Memory.Atom.ofName(
+                        registerFor(atom.name(), operand.position(), index)));
+            }
+        }
+        return new Operand.Memory(operand.position(), operand.size(), operand.segment(), atoms);
     }
 
     /**
@@ -208,7 +277,10 @@ public final class RegisterAllocator {
      * registers its operands already hold are still theirs.
      */
     private String registerFor(Operand.Virtual operand, int index) {
-        String name = operand.name();
+        return registerFor(operand.name(), operand.position(), index);
+    }
+
+    private String registerFor(String name, SourcePos where, int index) {
         String register = assigned.get(name);
         if (register != null) {
             return register;
@@ -217,9 +289,11 @@ public final class RegisterAllocator {
         Integer death = lastSeen.get(name);
         int diesAt = death == null ? index : death.intValue();
         Set<String> forbidden = keepOut.get(name);
+        List<String> usable = addresses.contains(name) ? target.addressRegisters()
+                : target.valueRegisters();
 
         String taken = null;
-        for (String candidate : target.valueRegisters()) {
+        for (String candidate : usable) {
             if (forbidden != null && forbidden.contains(candidate)) {
                 continue;
             }
@@ -233,8 +307,12 @@ public final class RegisterAllocator {
             }
         }
         if (taken == null) {
-            throw new CompileError(operand.position(),
+            throw new CompileError(where,
                     "there is no register left for '" + name + "'"
+                            + (addresses.contains(name)
+                            ? ", which is used as an address and so can only live in one of "
+                            + target.addressRegisters()
+                            : "")
                             + (forbidden == null ? "" : ", because an inline assembly block it "
                             + "lives across destroys " + forbidden)
                             + ": this allocation does not spill, because a program that needs "

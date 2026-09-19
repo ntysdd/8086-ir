@@ -164,8 +164,40 @@ x        = volatile [p]     ; volatile load — always a statement of its own
   (§3.2), not a wider load. `[decided]` the prefixes; conversions are §3.5.
 * `volatile` loads and stores are never nested inside `eval(...)` or
   `expr(...)`. Keeping them out of expressions is what keeps "volatile is never
-  removed, duplicated or reordered" entirely out of reach of expression
-  optimisation, instead of relying on every optimisation to remember it.
+  removed, duplicated or reordered" out of reach of expression optimisation,
+  instead of relying on every optimisation to remember it. The verifier refuses
+  one written inside an expression, and `Effects.hasEffect` is what a pass asks
+  before deleting a statement — so the rule holds for the passes that exist and
+  for the ones that do not yet.
+
+#### What the compiler may assume about two accesses — [open]
+
+Nothing here says whether two memory accesses can be the same memory. That
+question is the whole of what would make a load redundant, and it is unanswered,
+so the answer the compiler takes is the safe one: **two accesses may alias unless
+they are the same access written twice**.
+
+What that costs, concretely:
+
+* A load is **removable** when nothing reads its value and it is not volatile.
+  That needs no aliasing question at all, and it is what the optimiser does today:
+  `x = [msg]` with `x` dead goes, and `volatile [0x40]` beside it stays.
+* A load is **reusable** — replaced by an earlier load of the same address — only
+  if no store in between can write that address. A near pointer on this machine can
+  point anywhere in the segment, so a store through a *variable* may alias
+  anything, including a data label. Without an analysis that can say otherwise, no
+  load is reusable.
+* A load from a **fixed address** whose bytes are in the image — `msg: dw 0x1234`
+  and `x = [msg]` — could be folded to the value in the image, because the program
+  has not run yet. A store written before it may still have changed those bytes, so
+  even this waits for the same answer.
+
+The analysis that would answer it is not designed here. What is decided is the
+shape it has to take: it is a question about *addresses*, asked through the target
+(§2.1), and the surface must be able to say when a pointer is known to point at
+one thing — an address into the image and an address of a device register are not
+the same kind of address, and a language that cannot tell them apart has to be as
+careful as if they were the same.
 
 ### 3.5 Conversions — [decided]
 
@@ -798,6 +830,10 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     the meaning or whether it is one of the things a program may not do. So the
     optimiser folds no such shift and refuses none either: the machine's answer is
     what the program gets, which is the honest thing while the question is open.
+15. What the compiler may assume about two accesses being the same memory (§3.4,
+    under *What the compiler may assume about two accesses*). Until it is answered,
+    a load is reusable only when it is written twice in a row, and a load from the
+    image is not folded to the bytes in the image.
 
 ## 13. Non-goals for v1
 

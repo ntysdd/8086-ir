@@ -168,7 +168,11 @@ public final class SsaVerifier {
             for (SsaStatement statement : form.statements(block)) {
                 for (Effects.Occurrence occurrence : Effects.occurrences(statement.item())) {
                     String name = occurrence.name();
-                    if (form.isVersion(name) || form.isUndef(name) || names.isLabel(name)) {
+                    if (name == null || form.isVersion(name) || form.isUndef(name)
+                            || names.isLabel(name)) {
+                        // No name at all is an access with nothing in the brackets:
+                        // there is no value to have a version, and the address is the
+                        // assembler's to resolve.
                         continue;
                     }
                     if (names.isVariable(name)) {
@@ -271,8 +275,9 @@ public final class SsaVerifier {
                     continue;
                 }
                 if (!form.isValue(occurrence.name())) {
-                    // A label used as an address: an address is not a value and has
-                    // no versions. That it is a label at all is checkNames' business.
+                    // A label used as an address, or nothing at all: an address is not
+                    // a value and has no versions. That it is a name at all is
+                    // checkNames' business.
                     continue;
                 }
                 checkUse(current, occurrence.name(), occurrence.position());

@@ -263,18 +263,26 @@ Working today:
   list, keeping a value that is still to be read out of the registers the block
   destroys; when there is control flow, a value that lives across a label keeps one
   register rather than reusing it, which is right rather than clever.
+* **Loads and stores**, 16 bits wide: a load through a value, a load from a fixed
+  address, a store of either kind, and an address given one of the three registers
+  this machine can put inside brackets. `volatile` is implemented and honoured: a
+  read marked volatile happens even when nothing uses the value, while a plain read
+  nobody uses is removed. A byte or double-word access is refused, because a value
+  lives in a whole register and nothing here can name half of one.
 * The bundled assembler is planned but not built: the assembly the emitter writes
   cannot be turned into bytes yet.
 
-Not built yet, and refused with a reason rather than guessed at: instruction
-selection for loads and stores, conversions, `setcc`, an instruction whose
-operands are implicit (`mul`, `div`, a shift by a count in a register), and the
-assembler. SSA construction does not yet materialise a flag value that has to
-survive an instruction defining those flags, because the target does not state
-its flag effects per flag yet — and nothing asks it to. The optimiser is three
-passes and not the ten the pipeline describes; and while a module contains an
-inline assembly block, nothing in it may be removed, because a block cannot say
-what it reads yet.
+Not built yet, and refused with a reason rather than guessed at: conversions,
+`setcc`, an instruction whose operands are implicit (`mul`, `div`, a shift by a
+count in a register), accesses narrower or wider than a register, and the
+assembler — so the assembly this compiler writes cannot be turned into bytes yet,
+which makes it a listing rather than a program. SSA construction does not yet
+materialise a flag value that has to survive an instruction defining those flags,
+because the target does not state its flag effects per flag yet — and nothing asks
+it to. The optimiser is three passes and not the ten the pipeline describes; while
+a module contains an inline assembly block nothing in it may be removed, because a
+block cannot say what it reads yet; and no load is reusable, because nothing yet
+says when two accesses are the same memory ([`docs/ir.md`](docs/ir.md) §3.4).
 
 Planned milestones:
 
@@ -287,8 +295,8 @@ Planned milestones:
    elimination and unread flags; the rest of the list in *Implementation
    approach* is not written.
 5. 8086 instruction selection and register allocation. **Partly done**: enough
-   for arithmetic, comparisons and control flow; loads, stores and conversions
-   are refused with a reason.
+   for arithmetic, comparisons, control flow, and 16-bit loads and stores;
+   conversions and narrow accesses are refused with a reason.
 6. `sim` interpreter, and an end-to-end example that assembles and runs.
 7. A second backend on top of the existing target description, to prove that
    the boundary holds without touching pass code.

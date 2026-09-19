@@ -46,16 +46,26 @@ public final class Effects {
     /**
      * A name an item mentions: a variable, a label used as an address, or a
      * version once the module has been renamed.
+     *
+     * <p>The name may be absent. A volatile access written as a bare displacement
+     * — {@code volatile [0x1234]} — has no name to report, and the item's effect
+     * does not depend on one.
      */
     public static final class Occurrence {
 
         private final String name;
         private final boolean written;
+        private final boolean isVolatile;
         private final SourcePos position;
 
         Occurrence(String name, boolean written, SourcePos position) {
+            this(name, written, false, position);
+        }
+
+        Occurrence(String name, boolean written, boolean isVolatile, SourcePos position) {
             this.name = name;
             this.written = written;
+            this.isVolatile = isVolatile;
             this.position = position;
         }
 
@@ -68,9 +78,45 @@ public final class Effects {
             return written;
         }
 
+        /** Whether the access this name was found in is marked {@code volatile}. */
+        public boolean isVolatile() {
+            return isVolatile;
+        }
+
         public SourcePos position() {
             return position;
         }
+    }
+
+    /**
+     * Whether this item does something the compiler may not remove, whoever reads
+     * what.
+     *
+     * <p>Four kinds of thing: a store, because writing memory is an effect; a block
+     * of assembly, because the compiler cannot see inside it; control flow, which is
+     * the shape of the program; and a volatile access, which the program needs to
+     * happen even when nobody uses the value it produces
+     * ({@code AGENTS.md}, invariant 3).
+     *
+     * <p>This is the rule a pass asks before deleting a statement, so it lives here
+     * rather than inside one pass: a second answer to "does this have an effect"
+     * would be a second thing to be wrong.
+     */
+    public static boolean hasEffect(Item item) {
+        if (item instanceof Item.Branch || item instanceof Item.Jump
+                || item instanceof Item.Return || item instanceof Item.InlineAsm) {
+            return true;
+        }
+        if (item instanceof Item.Assign
+                && ((Item.Assign) item).place() instanceof Place.Memory) {
+            return true;
+        }
+        for (Occurrence occurrence : occurrences(item)) {
+            if (occurrence.isVolatile()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -260,8 +306,13 @@ public final class Effects {
     }
 
     private static void operandNames(MemoryOperand operand, List<Occurrence> found) {
-        if (operand.base() != null) {
-            found.add(new Occurrence(operand.base(), false, operand.position()));
+        if (operand.base() != null || operand.isVolatile()) {
+            // An access with a base mentions a name, which may or may not be a
+            // variable. An access with none mentions nothing — but if it is
+            // volatile the item still has an effect, so it is reported with no name
+            // at all rather than left out.
+            found.add(new Occurrence(operand.base(), false, operand.isVolatile(),
+                    operand.position()));
         }
     }
 

@@ -63,6 +63,13 @@ public final class InstructionPrinter {
         List<Operand.Memory.Atom> atoms = memory.atoms();
         for (int i = 0; i < atoms.size(); i++) {
             Operand.Memory.Atom atom = atoms.get(i);
+            if (atom.isVirtual()) {
+                // An address waiting for a register is as unprintable as an operand
+                // that is one, and for the same reason: an instruction is printable
+                // exactly when every register in it has been decided.
+                throw new IllegalStateException("register allocation has not run: '"
+                        + atom.name() + "' is still a virtual address");
+            }
             String value = atom.isNumber() ? Numbers.spelling(atom.number()) : atom.name();
             if (i == 0) {
                 if (atom.isSubtracted()) {

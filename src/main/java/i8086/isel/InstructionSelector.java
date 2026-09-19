@@ -4,9 +4,12 @@ import i8086.CompileError;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.asm.Size;
 import i8086.ir.Expression;
 import i8086.ir.Item;
+import i8086.ir.MemoryOperand;
 import i8086.ir.Module;
+import i8086.ir.Names;
 import i8086.ir.Operation;
 import i8086.ir.Operator;
 import i8086.ir.Place;
@@ -36,9 +39,16 @@ import java.util.List;
  * given the flags up — {@code docs/ir.md} §5.2 — so a smaller instruction that
  * leaves different flags is available there and not in {@code eval}.
  *
- * <p>What is not built yet is refused, with a position and a reason: memory
- * operands, conversions, comparisons, branches, and multiplications this machine
- * has no shift trick for.
+ * <p>Memory is where the shapes stop being uniform. An address is not a value: what
+ * may stand inside the brackets is three registers on this machine, so a value used
+ * as one has fewer places to live than a value that is only computed with, and the
+ * operand shapes a form states are what say which is which. A load or a store is
+ * therefore not "an operator with forms" but its own shape, and the forms for it
+ * come from the target like everything else.
+ *
+ * <p>What is not built yet is refused, with a position and a reason: conversions,
+ * an access narrower or wider than a register, a store of something that has to be
+ * computed first, and multiplications this machine has no shift trick for.
  */
 public final class InstructionSelector {
 
@@ -46,16 +56,18 @@ public final class InstructionSelector {
     private static final String TEMP_PREFIX = "$t";
 
     private final Target target;
+    private final Names names;
     private int temps;
     private List<Instruction> out;
     private boolean controlFlow;
 
-    public InstructionSelector(Target target) {
+    public InstructionSelector(Module module, Target target) {
         this.target = target;
+        this.names = Names.of(module);
     }
 
     public static Selection select(Module module, Target target) {
-        return new InstructionSelector(target).run(module);
+        return new InstructionSelector(module, target).run(module);
     }
 
     private Selection run(Module module) {
@@ -119,10 +131,130 @@ public final class InstructionSelector {
     }
 
     private void selectAssign(Item.Assign assign) {
-        if (!(assign.place() instanceof Place.Name)) {
-            throw notYet(assign, "a store into memory");
+        if (assign.place() instanceof Place.Memory) {
+            selectStore(assign);
+            return;
         }
-        emitValue(assign.value(), ((Place.Name) assign.place()).name(), flagsMayBeRead(assign.value()));
+        String destination = ((Place.Name) assign.place()).name();
+        if (isLabel(assign.value())) {
+            emitLabelAddress(destination, (Value.Name) assign.value());
+            return;
+        }
+        emitValue(assign.value(), destination, flagsMayBeRead(assign.value()));
+    }
+
+    /**
+     * Writes a value into memory.
+     *
+     * <p>What can go there is what the machine can write in one instruction: a
+     * register or a literal. Anything else is a value that has to be computed first,
+     * and the surface has a way to say that — put it in a variable — so a store of a
+     * computation is refused rather than given a temporary nobody wrote.
+     */
+    private void selectStore(Item.Assign assign) {
+        Place.Memory place = (Place.Memory) assign.place();
+        Value value = assign.value();
+        boolean literal = value instanceof Value.Number;
+        if (!literal && !(value instanceof Value.Name)) {
+            throw new CompileError(assign.position(),
+                    "a store of a value that has to be computed first is not something this "
+                            + "compiler can emit yet: put the value in a variable and store that "
+                            + "(docs/ir.md §5.3)");
+        }
+        requireWordAccess(place.operand(), "store");
+
+        List<Operand> operands = operands(memory(place.operand()), operandOf(value));
+        Form form = smallest(literal ? target.storeLiteralForms() : target.storeForms(),
+                operands);
+        if (form == null) {
+            throw noFormFor("a store", assign.position(), operands);
+        }
+        out.add(new Instruction(assign.position(), form.mnemonic(), operands));
+    }
+
+    /**
+     * Reads a value out of memory.
+     *
+     * <p>The load is where the width of the access has to be said out loud: the
+     * register it goes into says it for a word, and the surface says it with a
+     * prefix when the access is narrower than the register. A byte load into a
+     * sixteen-bit register would need the low half of one, and nothing here knows
+     * how to name half a register yet — so it is refused with that as the reason.
+     */
+    private void emitLoad(Value.Memory load, String destination) {
+        requireWordAccess(load.operand(), "load");
+        List<Operand> operands = operands(virtual(destination, load.position()),
+                memory(load.operand()));
+        Form form = smallest(target.loadForms(), operands);
+        if (form == null) {
+            throw noFormFor("a load", load.position(), operands);
+        }
+        out.add(new Instruction(load.position(), form.mnemonic(), operands));
+    }
+
+    /**
+     * Refuses an access narrower or wider than a register.
+     *
+     * <p>The reason is worth stating rather than hiding: the machine can do a byte
+     * load, into {@code al}, and this back end has no way to name {@code al} — the
+     * allocator deals in whole registers, and half of one is not a register it can
+     * hand out. That is the piece of the target description that is missing, and the
+     * message says so.
+     */
+    private static void requireWordAccess(MemoryOperand operand, String what) {
+        if (operand.size() != null && operand.size() != Size.WORD) {
+            throw new CompileError(operand.position(),
+                    "a " + operand.size().spelling() + " " + what + " is not something this "
+                            + "compiler can emit yet: a value lives in a whole register, and "
+                            + "nothing here can name half of one (docs/ir.md §3.4)");
+        }
+    }
+
+    /** {@code p = msg}: the address of a label, as an immediate. */
+    private void emitLabelAddress(String destination, Value.Name label) {
+        out.add(new Instruction(label.position(), "mov",
+                operands(virtual(destination, label.position()),
+                        new Operand.Offset(label.position(), label.name()))));
+    }
+
+    /** The memory operand an instruction carries, from the one the IR wrote. */
+    private Operand memory(MemoryOperand operand) {
+        List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
+        if (operand.base() != null) {
+            // A base that is a variable is a value waiting for a register; a base
+            // that is a label is a name the assembler resolves. The syntax cannot
+            // tell them apart, and this is where the answer is known.
+            atoms.add(names.isVariable(operand.base())
+                    ? Operand.Memory.Atom.ofVirtual(operand.base())
+                    : Operand.Memory.Atom.ofName(operand.base()));
+        }
+        if (operand.base() == null || operand.displacement() != 0) {
+            atoms.add(Operand.Memory.Atom.ofNumber(operand.displacement()));
+        }
+        return new Operand.Memory(operand.position(), operand.size(), operand.segment(), atoms);
+    }
+
+    /** The smallest form whose operand shapes fit, or null when none does. */
+    private static Form smallest(List<Form> forms, List<Operand> operands) {
+        Form best = null;
+        for (Form form : forms) {
+            if (writtenOperands(form, operands) == null) {
+                continue;
+            }
+            if (best == null || form.bytes() < best.bytes()) {
+                best = form;
+            }
+        }
+        return best;
+    }
+
+    private static CompileError noFormFor(String what, SourcePos where, List<Operand> operands) {
+        return new CompileError(where,
+                "this target has no form for " + what + " with these operands: " + operands);
+    }
+
+    private boolean isLabel(Value value) {
+        return value instanceof Value.Name && names.isLabel(((Value.Name) value).name());
     }
 
     /**
@@ -190,6 +322,10 @@ public final class InstructionSelector {
         }
         if (value instanceof Value.Expr) {
             emitExpression(((Value.Expr) value).expression(), destination);
+            return;
+        }
+        if (value instanceof Value.Memory) {
+            emitLoad((Value.Memory) value, destination);
             return;
         }
         if (value instanceof Value.Convert) {

@@ -28,6 +28,8 @@ public final class IrVerifierTest {
         suite.add("Ir verifier accepts the flag set in a clobber list",
                 IrVerifierTest::acceptsFlagsClobber);
         suite.add("Ir verifier refuses an unknown name", IrVerifierTest::refusesUnknownName);
+        suite.add("Ir verifier refuses a volatile access inside an expression",
+                IrVerifierTest::refusesVolatileInAnExpression);
         suite.add("Ir verifier refuses a label as a destination",
                 IrVerifierTest::refusesLabelAsDestination);
         suite.add("Ir verifier refuses a label defined twice", IrVerifierTest::refusesDuplicateLabel);
@@ -53,8 +55,7 @@ public final class IrVerifierTest {
                 IrVerifierTest::acceptsBranchAfterCompare);
         suite.add("Ir verifier keeps flags across an inline block that spares them",
                 IrVerifierTest::acceptsFlagsAcrossSparedBlock);
-        suite.add("Ir verifier refuses a branch with no flags behind it",
-                IrVerifierTest::refusesBranchWithoutFlags);
+        suite.add("Ir verifier refuses a branch with no flags behind it",                IrVerifierTest::refusesBranchWithoutFlags);
         suite.add("Ir verifier clears the flags at a label", IrVerifierTest::refusesBranchAfterLabel);
         suite.add("Ir verifier refuses a branch after a block that clobbers flags",
                 IrVerifierTest::refusesBranchAfterClobber);
@@ -134,6 +135,18 @@ public final class IrVerifierTest {
 
     private static void refusesUnknownName() {
         refuses("test.ir:6:5", "    nothing = 1\n");
+    }
+
+    /**
+     * A volatile access must happen exactly once, and an expression is exactly what a
+     * compiler is allowed to take apart: reorder, share, duplicate. So the two are
+     * kept apart by the surface rather than by every optimisation remembering
+     * ({@code docs/ir.md} §3.4).
+     */
+    private static void refusesVolatileInAnExpression() {
+        refuses("test.ir:8:18", "    var x: u16\n    var p: u16\n"
+                + "    x = eval(x + volatile [p])\n");
+        verify("    var x: u16\n    var p: u16\n    x = volatile [p]\n");
     }
 
     private static void refusesLabelAsDestination() {

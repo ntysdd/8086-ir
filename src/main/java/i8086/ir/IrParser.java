@@ -786,8 +786,34 @@ public final class IrParser {
             }
             return tokenAt(1).is(TokenKind.IDENT) && tokenAt(2).is(":") && tokenAt(3).is("[");
         }
+        if (isVolatileWord(token)) {
+            // 'volatile [p]', and 'volatile word [p]' after it.
+            return tokenAt(1).is("[") || startsMemoryOperandAt(1);
+        }
         return token.is(TokenKind.IDENT) && isNameFollowing(TokenKind.PUNCT, ":")
                 && tokenAt(2).is("[");
+    }
+
+    /** The same question, asked from a token a little further along. */
+    private boolean startsMemoryOperandAt(int offset) {
+        Token token = tokenAt(offset);
+        if (token.is("[")) {
+            return true;
+        }
+        if (token.is(TokenKind.IDENT) && Size.named(token.name()) != null) {
+            if (tokenAt(offset + 1).is("[")) {
+                return true;
+            }
+            return tokenAt(offset + 1).is(TokenKind.IDENT) && tokenAt(offset + 2).is(":")
+                    && tokenAt(offset + 3).is("[");
+        }
+        return token.is(TokenKind.IDENT) && tokenAt(offset + 1).is(TokenKind.PUNCT)
+                && tokenAt(offset + 1).text().equals(":") && tokenAt(offset + 2).is("[");
+    }
+
+    /** Whether this token is the word that marks an access as one that must happen. */
+    private static boolean isVolatileWord(Token token) {
+        return token.is(TokenKind.IDENT) && token.name().equals("volatile");
     }
 
     private Token tokenAt(int offset) {
@@ -797,9 +823,14 @@ public final class IrParser {
 
     private MemoryOperand parseMemoryOperand() {
         Token start = peek();
+        boolean isVolatile = isVolatileWord(start);
+        if (isVolatile) {
+            next();
+        }
         Size size = null;
-        if (start.is(TokenKind.IDENT) && Size.named(start.name()) != null) {
-            size = Size.named(start.name());
+        Token afterVolatile = peek();
+        if (afterVolatile.is(TokenKind.IDENT) && Size.named(afterVolatile.name()) != null) {
+            size = Size.named(afterVolatile.name());
             next();
         }
         String segment = null;
@@ -829,7 +860,8 @@ public final class IrParser {
             displacement = subtract ? -number.value() : number.value();
         }
         expectPunct("]");
-        return new MemoryOperand(start.position(), size, segment, base, displacement);
+        return new MemoryOperand(start.position(), size, isVolatile, segment, base,
+                displacement);
     }
 
     private static String statementDescription(Token first) {

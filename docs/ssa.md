@@ -242,10 +242,11 @@ shape the input had and the shape the back end was written for
   ([`docs/ir.md`](ir.md) §4.2), and until it does there is nothing to ask. Nothing
   needs it today: no pass reasons about flags across an instruction that
   clobbers them.
-* **Promoting memory.** Loads and stores are not renamed and no pass lifts them
-  into values. Variables are virtual registers already, so this is about memory
-  reached through a pointer, and it is what would let a value stored and loaded
-  again be recognised as the same value.
+* **Promoting memory.** Loads and stores are emitted and reasoned about — a store
+  is an effect, a volatile access is one too, and a plain load nobody reads is
+  removed — but no pass lifts a load into a value. Doing that is the aliasing
+  question ([`docs/ir.md`](ir.md) §3.4, §12 item 15) and not a missing loop: until
+  something can say when two accesses are the same memory, a load is not reusable.
 * **An inline block that says what it reads.** Until it can, a module containing
   one is optimised conservatively (§4, §7). That is the missing half of
   {@code docs/ir.md} §9.

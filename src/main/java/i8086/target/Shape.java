@@ -16,13 +16,32 @@ public enum Shape {
     REGISTER,
 
     /** A literal, which some forms insist on. */
-    IMMEDIATE;
+    IMMEDIATE,
 
-    /** Which shape an operand has. A memory operand has none yet: selection does
-     * not handle one, and saying {@code REGISTER} here would let it try. */
+    /**
+     * A memory operand: an address rather than a value.
+     *
+     * <p>What may be inside the brackets is the target's constraint — which
+     * registers may hold an address, and whether a displacement needs one — so this
+     * says only that the operand <em>is</em> an address, and the target says the
+     * rest ({@link Target#addressRegisters()}).
+     */
+    MEMORY;
+
+    /**
+     * Which shape an operand has.
+     *
+     * <p>An {@link i8086.asm.Operand.Offset} is an immediate: it is the address of a
+     * label, and the assembler is what turns one into bytes. A memory operand has a
+     * shape of its own, because a form that takes one is not a form that takes a
+     * register.
+     */
     public static Shape of(Operand operand) {
-        if (operand instanceof Operand.Number) {
+        if (operand instanceof Operand.Number || operand instanceof Operand.Offset) {
             return IMMEDIATE;
+        }
+        if (operand instanceof Operand.Memory) {
+            return MEMORY;
         }
         if (operand instanceof Operand.Virtual || operand instanceof Operand.Name) {
             return REGISTER;

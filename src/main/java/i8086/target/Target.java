@@ -114,6 +114,31 @@ public interface Target {
     List<String> valueRegisters();
 
     /**
+     * The registers a value may be addressed through.
+     *
+     * <p>An address is not a value with extra rules; it is a value that has to
+     * live somewhere the machine can put inside the brackets. Which registers those
+     * are is this target's business: on the 8086 it is {@code bx}, {@code si} and
+     * {@code di}, and a program that needs an address in {@code ax} is a program
+     * with an instruction this machine does not have.
+     *
+     * <p>The allocator is the one that has to know, because it is the one handing
+     * out registers: a value used as an address gets a register from here, and a
+     * value used as an address <em>and</em> as an ordinary value gets one that is in
+     * both lists.
+     */
+    List<String> addressRegisters();
+
+    /** The forms that read a value out of memory into a register. */
+    List<Form> loadForms();
+
+    /** The forms that write a register into memory. */
+    List<Form> storeForms();
+
+    /** The forms that write a literal into memory. */
+    List<Form> storeLiteralForms();
+
+    /**
      * The forms that do this operator, smallest first is not promised — the
      * caller sorts — but every form is one the machine really has.
      *

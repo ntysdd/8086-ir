@@ -117,6 +117,25 @@ public final class I8086 implements Target {
             Arrays.asList(new Form("test", shapes(Shape.REGISTER, Shape.REGISTER), 2),
                     new Form("test", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3)));
 
+    /**
+     * Reading a value out of memory, and writing one back.
+     *
+     * <p>One instruction, {@code mov}, and the shape of the operand is what decides
+     * which addressing mode it is: an address with no register in it is a direct
+     * reference the assembler fills in, and one with a register is what the register
+     * holds. The bytes are the smallest each can be — {@code mov ax, [bx]} is two —
+     * and which encoding is used, displacement and all, is the assembler's decision
+     * ({@code README.md}, step 9).
+     */
+    private static final List<Form> LOAD_FORMS = Collections.unmodifiableList(
+            Arrays.asList(new Form("mov", shapes(Shape.REGISTER, Shape.MEMORY), 2)));
+
+    private static final List<Form> STORE_FORMS = Collections.unmodifiableList(
+            Arrays.asList(new Form("mov", shapes(Shape.MEMORY, Shape.REGISTER), 2)));
+
+    private static final List<Form> STORE_LITERAL_FORMS = Collections.unmodifiableList(
+            Arrays.asList(new Form("mov", shapes(Shape.MEMORY, Shape.IMMEDIATE), 4)));
+
     private static Set<String> names(String... names) {
         return Collections.unmodifiableSet(new LinkedHashSet<String>(Arrays.asList(names)));
     }
@@ -134,6 +153,21 @@ public final class I8086 implements Target {
      */
     private static final List<String> VALUE_REGISTERS = Collections.unmodifiableList(
             Arrays.asList("ax", "cx", "dx", "bx", "si", "di"));
+
+    /**
+     * The registers that can be inside the brackets.
+     *
+     * <p>These three and no others: {@code [ax]}, {@code [cx]} and {@code [dx]} are
+     * not things this machine can say. {@code bp} can address memory too, but it
+     * reads through {@code SS} rather than {@code DS}, so using it as a general
+     * address register would quietly change which segment a program touches.
+     *
+     * <p>What this means for the allocator is that a value used as an address has a
+     * smaller set of registers to live in than a value that is only ever computed
+     * with, and a value used as both has to be one of these three.
+     */
+    private static final List<String> ADDRESS_REGISTERS = Collections.unmodifiableList(
+            Arrays.asList("bx", "si", "di"));
 
     /**
      * What the machine has for each operator, and what each one costs.
@@ -244,6 +278,26 @@ public final class I8086 implements Target {
     @Override
     public List<String> valueRegisters() {
         return VALUE_REGISTERS;
+    }
+
+    @Override
+    public List<String> addressRegisters() {
+        return ADDRESS_REGISTERS;
+    }
+
+    @Override
+    public List<Form> loadForms() {
+        return LOAD_FORMS;
+    }
+
+    @Override
+    public List<Form> storeForms() {
+        return STORE_FORMS;
+    }
+
+    @Override
+    public List<Form> storeLiteralForms() {
+        return STORE_LITERAL_FORMS;
     }
 
     @Override

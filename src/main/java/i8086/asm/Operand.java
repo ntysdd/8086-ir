@@ -123,29 +123,55 @@ public abstract class Operand {
         public static final class Atom {
 
             private final boolean subtracted;
+            private final boolean virtual;
             private final String name;
             private final long number;
 
-            private Atom(boolean subtracted, String name, long number) {
+            private Atom(boolean subtracted, boolean virtual, String name, long number) {
                 this.subtracted = subtracted;
+                this.virtual = virtual;
                 this.name = name;
                 this.number = number;
             }
 
+            /**
+             * A name the assembler resolves: a label, or a register written by hand.
+             *
+             * <p>A name is not a value. Nothing hands one a register, and a printed
+             * instruction may contain as many as it likes.
+             */
             public static Atom ofName(String name) {
-                return new Atom(false, name, 0);
+                return new Atom(false, false, name, 0);
+            }
+
+            /**
+             * A register nobody has chosen yet: a value used as an address.
+             *
+             * <p>This is the one case the syntax cannot tell apart from a label —
+             * {@code [msg]} and {@code [p]} look alike — so whoever knows the answer
+             * says so. Instruction selection knows, because it is the one holding the
+             * module's names; the assembler reading hand-written assembly does not,
+             * and calls everything a name.
+             */
+            public static Atom ofVirtual(String name) {
+                return new Atom(false, true, name, 0);
             }
 
             public static Atom ofNumber(long number) {
-                return new Atom(false, null, number);
+                return new Atom(false, false, null, number);
             }
 
             public Atom subtracted() {
-                return new Atom(true, name, number);
+                return new Atom(true, virtual, name, number);
             }
 
             public boolean isSubtracted() {
                 return subtracted;
+            }
+
+            /** True when this atom is a value waiting for a register. */
+            public boolean isVirtual() {
+                return virtual;
             }
 
             /** True when this atom is a number rather than a name. */

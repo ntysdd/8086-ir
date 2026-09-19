@@ -56,6 +56,14 @@ public final class CompilerTest {
                 CompilerTest::ignoresClobbersOfDeadValues);
         suite.add("Compiler refuses rather than spilling", CompilerTest::refusesToSpill);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
+        suite.add("Compiler reads through a pointer and writes through a label",
+                CompilerTest::loadsAndStores);
+        suite.add("Compiler gives an address a register that can hold one",
+                CompilerTest::addressesLiveInAddressRegisters);
+        suite.add("Compiler keeps a volatile read nobody uses", CompilerTest::keepsVolatileReads);
+        suite.add("Compiler refuses a byte access", CompilerTest::refusesNarrowAccess);
+        suite.add("Compiler refuses a store of a computed value",
+                CompilerTest::refusesComputedStore);
         suite.add("Compiler reads the signedness of a comparison",
                 CompilerTest::readsComparisonSignedness);
         suite.add("Compiler refuses bad input with a position", CompilerTest::refusesBadInput);
@@ -328,6 +336,107 @@ public final class CompilerTest {
                 refused.getMessage());
         Assert.assertTrue(refused.getMessage().contains("docs/ir.md"),
                 "and points at what that rule means: " + refused.getMessage());
+    }
+
+    /**
+     * A load and a store, through both kinds of address the surface has.
+     *
+     * <p>{@code [p]} is a load through a value, so {@code p} has to be in a register
+     * that can be inside brackets — {@code bx}, {@code si} or {@code di}, and on this
+     * machine nothing else. {@code [msg]} is a load from a fixed address, which needs
+     * no register at all, and the store back is written the same way.
+     */
+    private static void loadsAndStores() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov bx, offset msg\n"
+                        + "    mov ax, [bx]\n"
+                        + "    mov [msg], ax\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg: dw 0x1234\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: u16\n    var p: u16\n"
+                        + "    p = msg\n"
+                        + "    x = [p]\n"
+                        + "    [msg] = x\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg: dw 0x1234\n"));
+    }
+
+    /**
+     * The same thing said twice, to pin the reason: {@code ax} is not a register an
+     * address can live in, and a value used as an address is a value with three
+     * places to live rather than six.
+     */
+    private static void addressesLiveInAddressRegisters() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                + "    var x: u16\n    var p: u16\n"
+                + "    p = msg\n"
+                + "    x = [p]\n"
+                + "    [msg] = x\n"
+                + "    ret\n"
+                + "\n"
+                + "msg: dw 0x1234\n");
+        Assert.assertTrue(assembly.contains("    mov bx, offset msg\n"),
+                "the address went into an address register: " + assembly);
+        Assert.assertFalse(assembly.contains("mov ax, offset msg"),
+                "and not into one it cannot live in: " + assembly);
+    }
+
+    /**
+     * A read marked {@code volatile} happens because the program said so, not because
+     * the value is wanted: the register it lands in is dead here and the read stays
+     * anyway. The plain read from the image, right beside it, is gone — nothing uses
+     * its value and no program can tell whether it happened.
+     */
+    private static void keepsVolatileReads() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "main:\n"
+                        + "    mov ax, [0x40]\n"
+                        + "    mov word [bx], 5\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg: dw 0x1234\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var x: u16\n    var y: u16\n    var p: u16\n"
+                        + "    x = [msg]\n"
+                        + "    y = volatile [0x40]\n"
+                        + "    word [p] = 5\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg: dw 0x1234\n"));
+    }
+
+    /**
+     * A byte load would need {@code al}, and this back end has no way to name half a
+     * register. The refusal says that rather than refusing in general terms, because
+     * that is the piece of the target description that is missing.
+     */
+    private static void refusesNarrowAccess() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var b: u8\n"
+                        + "    b = volatile byte [msg]\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "msg: dw 0x1234\n"));
+        Assert.assertTrue(refused.getMessage().contains("half of one"),
+                "the refusal says what is missing: " + refused.getMessage());
+    }
+
+    private static void refusesComputedStore() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry main\n\nmain:\n"
+                        + "    var y: u16\n    var p: u16\n"
+                        + "    y = eval(y + 1)\n"
+                        + "    [p] = eval(y + 1)\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("put the value in a variable"),
+                "and says what to write instead: " + refused.getMessage());
     }
 
     /**
