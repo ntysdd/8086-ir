@@ -295,9 +295,9 @@ definition, which is what asking for it means.
 depends on the cell.** `tries = left` stores `left`'s value into those bytes wherever
 the value happens to be living, and the store happens: it is a half-volatile write like
 any other, so nothing removes it, duplicates it, or moves anything across it. What the
-store does not buy is the bytes *staying* that way, because a home is shared between
-the program and the allocator, and which of the two has the last word is what the cell
-was declared to be:
+store does not buy is the bytes *staying* that way, because a home is a cell the
+allocator may write too, and which of the two has the last word is what the cell was
+declared to be:
 
 * **A cell no variable declares as a home is the program's alone.** The compiler has no
   reason to write it and no permission to, so what the program puts there stays until
@@ -309,24 +309,33 @@ was declared to be:
 * **Any other home is the allocator's**, and a value the program saves there is **not
   guaranteed** to survive. The allocator may put any value whose home that cell is into
   it, so a later read of those bytes may find the allocator's value rather than the saved
-  one. That is not a promise the compiler breaks; it is one it never made, and it says so:
-  **the compiler warns at the write**, because a program that saves into a cell it shares
-  with the allocator is relying on an accident of the allocation. The warning is exact
-  about the accident, too — the cell is shared, and a small change elsewhere, one more
-  simultaneously live value, can be the change that makes the allocator put something else
-  there. The two ways out are to make that variable's home `writethrough`, or to save into
-  a cell no variable declares.
+  one. That is not a promise the compiler breaks; it is one it never made.
 
-That last case is the one a boot loader's author will meet, and the warning is what makes
-it survivable: they are expected to read and test the assembly their program became, and a
-warning that says those bytes are not theirs is the thing to read it with.
+  **When the cell is declared by more than one variable, the compiler warns at the
+  write.** That is the case the author cannot see coming: the bytes may end up holding
+  the value of a variable whose declaration is somewhere else in the file, and a small
+  change somewhere else, one more simultaneously live value, can be the change that puts
+  it there. The warning names the other variables, and the two ways out are to save into
+  a cell no variable declares, or to let the variable that wants those bytes keep them
+  with `writethrough`.
+
+  When the cell is declared by exactly one variable there is no warning, and there is no
+  guarantee either: what can replace the saved bytes there is that one variable's own
+  value — written there because the allocator put it there, which is what the declaration
+  was for. A program whose saved bytes have to stay what it wrote has the same two ways
+  out, and they do not depend on how many variables asked for the cell.
+
+The shared case is the one a boot loader's author will meet without meaning to, and the
+warning is what makes it survivable: they are expected to read and test the assembly their
+program became, and a warning that says those bytes are another variable's as well is the
+thing to read it with.
 
 In one sentence: **a save into a cell no variable declares is kept, a `writethrough` cell
 holds the variable's value by construction, and anything else is the allocator's cell** —
-written, warned about, and not promised.
+written, warned about when more than one variable asked for it, and never promised.
 
 The other direction needs the opposite rule, and it is the allocator's to keep: a value
-**living** in a shared cell does not survive a write of something else to those bytes, so
+**living** in a home does not survive a write of something else to those bytes, so
 the allocator may not have one living there across a write by the program. It has to be in
 a register there instead, or the program is refused. Never a quiet wrong answer — the same
 promise §8.2 makes about the stack, and the reason this direction cannot be left to a
