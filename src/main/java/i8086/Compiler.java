@@ -8,7 +8,6 @@ import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
 import i8086.pass.Pipeline;
-import i8086.regalloc.MergeVersions;
 import i8086.regalloc.RegisterAllocator;
 import i8086.ssa.OutOfSsa;
 import i8086.ssa.SsaBuilder;
@@ -34,9 +33,9 @@ import i8086.target.Targets;
  * {@link Pipeline}, which verifies around each pass.
  *
  * <p>What is not in that order any more is leaving SSA. Selection and allocation read
- * the form the passes produced, so that the allocator can see which definition each
- * use reads ({@code docs/ssa.md}); the only thing left of the old step is a renaming
- * the allocator needs and a dump a person reads.
+ * the form the passes produced, so the allocator can tell which definition each use
+ * reads and which names a φ puts in one register ({@code docs/ssa.md}); the only thing
+ * left of the old step is the dump a person reads.
  *
  * <p>Nothing here is target-specific. The SSA form and the passes are all in the IR's
  * own vocabulary; selection and allocation are the only stages that ask a target
@@ -101,8 +100,7 @@ public final class Compiler {
         }
         Target target = targetOf(module);
         Selection selected = InstructionSelector.select(optimized, target);
-        Selection merged = MergeVersions.merge(selected, optimized);
-        Selection allocated = RegisterAllocator.allocate(merged, target);
+        Selection allocated = RegisterAllocator.allocate(selected, target);
         return AsmEmitter.emit(optimized.module(), allocated);
     }
 
@@ -112,9 +110,9 @@ public final class Compiler {
      *
      * <p>Leaving SSA is a transformation like any other, so what it produces is checked
      * like any input before anything reads it — which here means before it is printed,
-     * because the back end no longer needs it: allocation reads the form, and what it
-     * has to be told is only that a variable's versions are one name
-     * ({@link MergeVersions}).
+     * because the back end no longer needs it: selection reads the form, and what the
+     * allocator has to be told is which names a φ puts in one register
+     * ({@link Selection#registerGroups}).
      */
     private static Module lowered(SsaForm optimized, Module module) {
         Module lowered = OutOfSsa.module(optimized);

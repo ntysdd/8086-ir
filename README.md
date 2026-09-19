@@ -287,9 +287,10 @@ Working today:
   frontier, liveness, φ placement, and the renaming walk. Every variable is renamed
   — the flags included — and every use names the definition that reaches it. It does
   not stop there: instruction selection and register allocation read the form, so the
-  instructions they work on name versions. What happens next is a renaming rather
-  than a transformation with copies in it, for the reason
-  [`docs/ssa.md`](docs/ssa.md) §8 gives. `optimize --emit ssa` prints the form.
+  instructions they work on name versions, and a name is a life. What joins two names
+  into one is a φ — the register is what carries a value along each path, since there is
+  no copy at a merge ([`docs/ssa.md`](docs/ssa.md) §8) — and a copy whose source dies at
+  it. `optimize --emit ssa` prints the form.
 * **An optimiser**: constant propagation, dead value elimination, and giving up
   flags nobody reads, in that order. Every pass runs on a verified form and has its
   output verified in turn. `optimize --emit ir` prints what the passes left, in the
@@ -322,7 +323,8 @@ Working today:
   address may live in, and what to expand when the machine insists on a register of
   its own. The allocator does not spill — too many live values is a hard error, which
   is the promise [`docs/ir.md`](docs/ir.md) §8.2 makes — and it drops the copies of a
-  register into itself that turn out to be unnecessary.
+  register into itself that turn out to be unnecessary, which are the ones a copy whose
+  source dies at it makes unnecessary.
 * **The assembly text** of [`docs/asm.md`](docs/asm.md), and the emitter that writes
   it — in the dialect NASM reads, so that `nasm -f bin` turns it into the image. The
   four differences from our own dialect, which is what an inline block is written

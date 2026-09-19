@@ -135,6 +135,18 @@ public final class SsaForm {
         return Collections.unmodifiableSet(versions);
     }
 
+    /**
+     * Every name for "this variable, with no value", in the order it was created.
+     *
+     * <p>The other half of {@link #versions}, and asked for by the same caller: the back
+     * end carries the version table so that a name it has to say out loud is the
+     * variable rather than the version, and an undefined value is a name like any
+     * other there.
+     */
+    public Set<String> undefinedValues() {
+        return Collections.unmodifiableSet(new LinkedHashSet<String>(undefined));
+    }
+
     /** The type of a value, or null when it is a version of the flags. */
     public Type typeOf(String name) {
         return types.get(name);

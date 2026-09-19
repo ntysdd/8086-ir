@@ -6,7 +6,6 @@ import i8086.ir.IrParser;
 import i8086.ir.Module;
 import i8086.isel.InstructionSelector;
 import i8086.isel.Selection;
-import i8086.regalloc.MergeVersions;
 import i8086.regalloc.RegisterAllocator;
 import i8086.ssa.SsaForm;
 import i8086.target.Target;
@@ -72,14 +71,12 @@ public final class AsmEmitterTest {
     }
 
     private static String emit(String source) {
-        // The same front half the compiler runs, and the same two steps after it:
-        // selection reads the form, and the allocator is told a variable's versions
-        // are one name.
+        // The same front half the compiler runs, and the same step after it: selection
+        // reads the form, and the allocator is told which names a φ puts in one register.
         SsaForm form = Compiler.ssa("test.ir", source);
         Target target = Targets.byName(form.module().target());
         Selection selected = InstructionSelector.select(form, target);
-        Selection merged = MergeVersions.merge(selected, form);
-        return AsmEmitter.emit(form.module(), RegisterAllocator.allocate(merged, target));
+        return AsmEmitter.emit(form.module(), RegisterAllocator.allocate(selected, target));
     }
 
     private static void writesWholeProgram() {
@@ -232,8 +229,7 @@ public final class AsmEmitterTest {
                 + "    mov cx, ax\n"
                 + "    shl cx, 1\n"
                 + "    shl cx, 1\n"
-                + "    mov dx, ax\n"
-                + "    add dx, cx\n"
+                + "    add ax, cx\n"
                 + "    ret\n", assembly);
     }
 

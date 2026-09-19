@@ -50,6 +50,10 @@ public final class CompilerTest {
         suite.add("Compiler refuses a form whose flags are still wanted",
                 CompilerTest::refusesFlagLosingForm);
         suite.add("Compiler gives a dead value's register away", CompilerTest::reusesRegisters);
+        suite.add("Compiler gives a register back across a call",
+                CompilerTest::redefinesAroundACall);
+        suite.add("Compiler keeps a value that crosses a merge in one register",
+                CompilerTest::loopCarriedValue);
         suite.add("Compiler keeps a value out of a register an inline block destroys",
                 CompilerTest::keepsValuesOffClobbers);
         suite.add("Compiler leaves a dead value in a register an inline block destroys",
@@ -205,14 +209,11 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov ax, cx\n"
                 + "    inc ax\n"
                 + "    mov cx, ax\n"
                 + "    shl cx, 1\n"
                 + "    shl cx, 1\n"
-                + "    mov dx, ax\n"
-                + "    add dx, cx\n"
-                + "    mov ax, dx\n"
+                + "    add ax, cx\n"
                 + "    add ax, 1\n"
                 + "    jc $l0\n"
                 + "\n"
@@ -249,8 +250,7 @@ public final class CompilerTest {
                 + "\n"
                 + "$main:\n"
                 + "    inc ax\n"
-                + "    mov cx, ax\n"
-                + "    add cx, 1\n"
+                + "    add ax, 1\n"
                 + "    jc $l0\n"
                 + "\n"
                 + "$l0:\n"
@@ -306,25 +306,29 @@ public final class CompilerTest {
      *
      * <p>Both are kept rather than deleted because the branches read the flags their
      * additions left. What the test is about is the register, not the survival.
+     *
+     * <p>The two values are computed from two different names on purpose. A value
+     * computed from the same name as the one before it would not need a register of its
+     * own at all — the copy that defines it dies at that copy, so the two share one
+     * (see {@code RegisterAllocator#groupNames}) — and then there would be no second
+     * value to give the first one's register to.
      */
     private static void reusesRegisters() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov ax, cx\n"
                 + "    add ax, 1\n"
                 + "    jc $l0\n"
-                + "    mov ax, cx\n"
                 + "    add ax, 2\n"
                 + "    jc $l0\n"
                 + "\n"
                 + "$l0:\n"
                 + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
-                        + "    var a: u16\n    var b: u16\n    var u: u16\n"
+                        + "    var a: u16\n    var b: u16\n    var u: u16\n    var v: u16\n"
                         + "    a = eval(u + 1)\n"
                         + "    jc $l0\n"
-                        + "    b = eval(u + 2)\n"
+                        + "    b = eval(v + 2)\n"
                         + "    jc $l0\n"
                         + "$l0:\n"
                         + "    ret\n"));
@@ -338,16 +342,18 @@ public final class CompilerTest {
      * code that read a register the block had already destroyed, which is the kind
      * of bug that is invisible until the program runs: `x` was put in `ax`, the
      * block destroyed `ax`, and `mov ax, cx` read the wreckage.
+     *
+     * <p>Nothing but {@code cx} appears in the output now, which is the point made
+     * twice over: the value is in a register the block keeps, and it needs no copy to
+     * get there, because the value it was computed from dies at that copy.
      */
     private static void keepsValuesOffClobbers() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, ax\n"
                         + "    add cx, 1\n"
                         + "    int 0x21\n"
-                        + "    mov ax, cx\n"
-                        + "    add ax, 1\n"
+                        + "    add cx, 1\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var y: u16\n    var u: u16\n"
@@ -367,10 +373,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov ax, cx\n"
                         + "    add ax, 1\n"
-                        + "    mov cx, ax\n"
-                        + "    add cx, 1\n"
+                        + "    add ax, 1\n"
                         + "    int 0x21\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -378,6 +382,74 @@ public final class CompilerTest {
                         + "    x = eval(u + 1)\n"
                         + "    y = eval(x + 1)\n"
                         + "    asm clobbers(ax) {\n        int 0x21\n    }\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A name written on both sides of a call is two values and not one — and the
+     * allocator is only told that the names a φ joins have to share a register, so the
+     * register the first value used is free again after the call.
+     *
+     * <p>This is what {@code docs/ir.md} §8.2 had written down as open: "a name that is
+     * redefined around a call is kept out of everything the call destroys even though
+     * nothing of it is alive there". The form gives the two definitions two names, the
+     * allocator sees two lives, and the second one may live in a register the call
+     * destroys — because the call happens before that value exists. Both land in
+     * {@code ax} here, which is the point: it was given back.
+     */
+    private static void redefinesAroundACall() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, 5\n"
+                        + "    mov [0x40], ax\n"
+                        + "    int 0x10\n"
+                        + "    mov ax, 7\n"
+                        + "    mov [0x41], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var n: u16\n"
+                        + "    n = 5\n"
+                        + "    volatile [0x40] = n\n"
+                        + "    int 0x10\n"
+                        + "    n = 7\n"
+                        + "    volatile [0x41] = n\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The other half of that: a value that crosses a merge is <em>one</em> value, because
+     * there is no copy at a merge to put it anywhere ({@code docs/ssa.md} §8) — the
+     * register is what carries it along each path.
+     *
+     * <p>The loop is where that shows. The counter is written before the loop, read and
+     * written inside it, and read by the test at the bottom; the φ joins all three, so
+     * they are one life and the increment happens in place. Without that the loop would
+     * cost a copy per turn and the value the test reads would be the wrong one.
+     */
+    private static void loopCarriedValue() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, 0\n"
+                        + "    jmp ..@lbl1\n"
+                        + "\n"
+                        + "..@lbl0:\n"
+                        + "    inc ax\n"
+                        + "\n"
+                        + "..@lbl1:\n"
+                        + "    cmp ax, 3\n"
+                        + "    jc ..@lbl0\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var i: u16\n    var n: u16\n"
+                        + "    i = 0\n"
+                        + "    n = 3\n"
+                        + "    .while i < n\n"
+                        + "        i = eval(i + 1)\n"
+                        + "    .endw\n"
+                        + "    volatile [0x40] = i\n"
                         + "    ret\n"));
     }
 
@@ -556,17 +628,16 @@ public final class CompilerTest {
      * <p>Two things in the output are the point. The copies the sequence is written
      * with are gone where the allocator found them unnecessary: the answer goes into
      * {@code ax} and stays there, so the copy back out is a copy from a register into
-     * itself and was dropped. And {@code b} is in {@code bx} rather than the natural
-     * {@code dx}, because {@code mul} destroys {@code dx} and {@code b} is still being
-     * read.
+     * itself and was dropped. And neither operand is in {@code ax} or {@code dx}, the
+     * two registers a multiply uses: {@code a} is in {@code cx} and {@code b} in
+     * {@code bx}, so what the sequence copies into {@code ax} is a real copy.
      */
     private static void multiplies() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, ax\n"
+                        + "    mov cx, bx\n"
                         + "    inc cx\n"
-                        + "    mov bx, ax\n"
                         + "    add bx, 2\n"
                         + "    mov ax, cx\n"
                         + "    mul bx\n"
@@ -579,9 +650,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, ax\n"
+                        + "    mov cx, bx\n"
                         + "    inc cx\n"
-                        + "    mov bx, ax\n"
                         + "    add bx, 2\n"
                         + "    mov ax, cx\n"
                         + "    xor dx, dx\n"
@@ -596,9 +666,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov cx, ax\n"
+                        + "    mov cx, bx\n"
                         + "    inc cx\n"
-                        + "    mov bx, ax\n"
                         + "    add bx, 2\n"
                         + "    mov ax, cx\n"
                         + "    xor dx, dx\n"

@@ -989,18 +989,23 @@ Because variables are virtual registers, the meaning is exact:
 compiler at all, so every function currently behaves as a no-spill one, and a
 program that needs more registers than six is refused (`README.md`, *Status*).
 
-**[open]** the allocator gives each name **one register for the whole function**, so
-a name that is redefined around a call is kept out of everything the call destroys
-even though nothing of it is alive there (§11.1). The fix is to split a name's life
-at each definition that reads nothing — `x = eval(x + 1)` is one instruction that
-reads and writes, and a write that reads nothing starts a new life — with each life
-ending at its last mention. It was written and tried: it fixes the case that
-motivated it, and it moved one value into the register a shift count arrives in,
-which is a miscompile that an existing test caught. So it is written down here
-rather than half in the code. The place to look next time is the shift sequence,
-which shifts its **source** in place and then copies out — the source is alive across
-the instruction that sets the count, and whatever the new lives say about that has to
-agree with the rule that keeps values out of `cl`.
+**[decided] each definition is one life.** The form gives every definition a name of
+its own, and the allocator is told only which names have to share a register: the ones
+a φ joins, and the two ends of a copy whose source dies there (`RegisterAllocator`,
+[`docs/ssa.md`](ssa.md) §8). So a name written on both sides of a call is two values
+with two lives, and the register the first one used is free again after the call — the
+second may live in a register the call destroys, because the call happens before it
+exists. What is *not* two lives is a value that really is live across the call: it is
+one name, kept out of everything the call destroys until it is read (§11.1).
+
+This is what a name's life being a question about the form answers, and the earlier
+attempt to answer it by splitting intervals in the allocator is why the entry stayed
+[open] for so long: that version moved a value into the register a shift count arrives
+in, because the shift sequence shifts its source in place and the source is alive
+across the instruction that sets the count. Nothing splits an interval now. A value
+that reads and writes itself — `x = eval(x + 1)` — is one instruction because its two
+names are a copy whose source dies at it, which is a rule about copies rather than
+about lifetimes.
 
 ## 9. Inline assembly — [decided]
 
@@ -1286,10 +1291,10 @@ asm clobbers(bx, cx, dx, flags) {
 
 The second one is what hand-written boot code does most of the time, and it is why
 it so rarely needs to preserve anything: state goes in memory, and a register holds
-it only for the instruction that needs it. Note the two names in it: **allocation
-gives each name one register**, so a name that spans the call cannot be given one at
-all, whichever route is taken. Reading into `m` rather than back into `n` is what
-makes the memory route work.
+it only for the instruction that needs it. Note the two names in it: the value that
+spans the call cannot be given a register the call destroys, so writing it to memory
+and reading it into a name of its own afterwards is what makes the route work — the
+second name is a new life, and the call is behind it ([`docs/ssa.md`](ssa.md) §8).
 
 **This route can also be declared rather than written.** `var m: u16 in save`
 (§3.1.2) gives a variable that home, so the store and the load are the compiler's to

@@ -54,7 +54,15 @@ public final class RegisterAllocator {
     /** Which register each value ended up in. */
     private final Map<String, String> assigned = new LinkedHashMap<String, String>();
 
-    /** The first and last instruction each value appears in. */
+    /**
+     * The first and last instruction each value appears in.
+     *
+     * <p>Keyed by the name that stands for a <em>group</em> of names rather than by a name
+     * of its own, because names that have to share a register are one life: see
+     * {@link #groupNames}. Everything downstream of here — what a value may not be given,
+     * whether it is an address, when its register is free again — is about the group for
+     * the same reason.
+     */
     private final Map<String, Integer> firstSeen = new LinkedHashMap<String, Integer>();
     private final Map<String, Integer> lastSeen = new LinkedHashMap<String, Integer>();
 
@@ -64,8 +72,21 @@ public final class RegisterAllocator {
     /** The values that are used as an address somewhere, and so need one of those registers. */
     private final Set<String> addresses = new LinkedHashSet<String>();
 
+    /** Where each name is first and last mentioned, before the groups are worked out. */
+    private final Map<String, Integer> firstMention = new LinkedHashMap<String, Integer>();
+    private final Map<String, Integer> lastMention = new LinkedHashMap<String, Integer>();
+
+    /** The names used as an address, before the groups are worked out. */
+    private final Set<String> addressNames = new LinkedHashSet<String>();
+
+    /** Which name stands for each name's group: see {@link #groupNames}. */
+    private final Map<String, String> groupOf = new LinkedHashMap<String, String>();
+
     /** The instruction from which each register is free again. */
     private final Map<String, Integer> freeFrom = new LinkedHashMap<String, Integer>();
+
+    /** The selection being allocated, for the one thing a refusal has to say out loud. */
+    private Selection selection;
 
     private RegisterAllocator(Target target) {
         this.target = target;
@@ -77,6 +98,7 @@ public final class RegisterAllocator {
     }
 
     private Selection run(Selection selection) {
+        this.selection = selection;
         findSpans(selection);
         if (selection.controlFlow()) {
             keepValuesThatCrossABlockAlive(selection);
@@ -107,22 +129,26 @@ public final class RegisterAllocator {
      * operand, and it is the one place where what a value <em>is</em> changes where
      * it may live: an address has three registers to choose from and not six, because
      * {@code [ax]} is not something this machine can say.
+     *
+     * <p>The mentions are collected per name and then folded into groups, because
+     * turning two names into one life is a question about mentions: a copy joins two
+     * names when the source is last mentioned at the copy itself.
      */
     private void findSpans(Selection selection) {
         int index = 0;
         for (Selection.Piece piece : selection.pieces()) {
             for (Instruction instruction : piece.instructions()) {
                 for (String name : mentioned(instruction)) {
-                    if (!firstSeen.containsKey(name)) {
-                        firstSeen.put(name, Integer.valueOf(index));
+                    if (!firstMention.containsKey(name)) {
+                        firstMention.put(name, Integer.valueOf(index));
                     }
-                    lastSeen.put(name, Integer.valueOf(index));
+                    lastMention.put(name, Integer.valueOf(index));
                 }
                 for (Operand operand : instruction.operands()) {
                     if (operand instanceof Operand.Memory) {
                         for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
                             if (atom.isVirtual()) {
-                                addresses.add(atom.name());
+                                addressNames.add(atom.name());
                             }
                         }
                     }
@@ -130,6 +156,126 @@ public final class RegisterAllocator {
                 index++;
             }
         }
+        groupNames(selection);
+    }
+
+    /**
+     * Works out which names share a register, and spans each group of them.
+     *
+     * <p>Two things say two names are one life, and both are read off the program rather
+     * than guessed at.
+     *
+     * <p>A φ says it outright. There is no copy at a merge — that is what
+     * {@code docs/ssa.md} §8 is about — so the register <em>is</em> what carries the value
+     * along each path, and the values a φ joins have to be in it. Selection read the φ's
+     * and passed them on, because that is a fact about the stream and not something the
+     * allocator can see.
+     *
+     * <p>A copy says it when the value being copied dies there: {@code mov d, s} with
+     * nothing left to read of {@code s} afterwards. Then {@code d} may as well <em>be</em>
+     * {@code s}: the copy becomes a register moved into itself, and the ordinary rule that
+     * drops those ({@link #isSelfCopy}) takes it away. That is what keeps a two-address
+     * machine from paying for a copy per operation — {@code x = eval(x + 1)} is one
+     * instruction and not two.
+     *
+     * <p>Everything else is left alone, and that is the whole of what this buys over
+     * renaming every version back to its variable: two versions of one variable that
+     * neither meet at a φ nor are a copy of each other are two values, and making them one
+     * register costs a register and buys nothing.
+     */
+    private void groupNames(Selection selection) {
+        for (List<String> names : selection.registerGroups()) {
+            for (String name : names) {
+                join(names.get(0), name);
+            }
+        }
+        int index = 0;
+        for (Selection.Piece piece : selection.pieces()) {
+            for (Instruction instruction : piece.instructions()) {
+                if (isCopy(instruction)) {
+                    String destination = ((Operand.Virtual) instruction.operands().get(0)).name();
+                    String source = ((Operand.Virtual) instruction.operands().get(1)).name();
+                    Integer last = lastMention.get(source);
+                    if (last != null && last.intValue() == index) {
+                        join(destination, source);
+                    }
+                }
+                index++;
+            }
+        }
+
+        // Two passes, because the two answers come from two tables: a group's first mention
+        // is the earliest of its names' first mentions, and its last is the latest of their
+        // last ones. Reading both out of the first-mention table would give every group the
+        // span of its earliest name, and a value would look dead while it is still to be
+        // read — which is the one mistake here that is not merely a worse allocation.
+        for (Map.Entry<String, Integer> entry : firstMention.entrySet()) {
+            String name = groupOf(entry.getKey());
+            Integer first = firstSeen.get(name);
+            if (first == null || entry.getValue().intValue() < first.intValue()) {
+                firstSeen.put(name, entry.getValue());
+            }
+            if (addressNames.contains(entry.getKey())) {
+                addresses.add(name);
+            }
+        }
+        for (Map.Entry<String, Integer> entry : lastMention.entrySet()) {
+            String name = groupOf(entry.getKey());
+            Integer last = lastSeen.get(name);
+            if (last == null || entry.getValue().intValue() > last.intValue()) {
+                lastSeen.put(name, entry.getValue());
+            }
+        }
+    }
+
+    /**
+     * A copy of one value into another: the machine's own way of writing {@code d = s}.
+     *
+     * <p>Both ends have to be values for the question to mean anything. The other shape
+     * {@code mov} takes is a fixed register the selector chose — {@code mov cl, 8},
+     * {@code mov ax, x} before a multiply — and there one end is the target's, so there is
+     * nothing to join.
+     */
+    private static boolean isCopy(Instruction instruction) {
+        return instruction.mnemonic().equals("mov")
+                && instruction.operands().size() == 2
+                && instruction.operands().get(0) instanceof Operand.Virtual
+                && instruction.operands().get(1) instanceof Operand.Virtual;
+    }
+
+    /**
+     * Puts two names in one group, named after whichever of them is mentioned first.
+     *
+     * <p>The group is named after the earlier name so that the answer is a property of the
+     * program and not of the order the groups happened to be built in
+     * ({@code AGENTS.md}, invariant 6). Joining is written out rather than chased through a
+     * parent chain: a group is small, and a table that always points straight at its own
+     * representative is one lookup everywhere else.
+     */
+    private void join(String one, String other) {
+        String first = groupOf(one);
+        String second = groupOf(other);
+        if (first.equals(second)) {
+            return;
+        }
+        Integer firstAt = firstMention.get(first);
+        Integer secondAt = firstMention.get(second);
+        boolean secondIsEarlier = firstAt != null && secondAt != null
+                && secondAt.intValue() < firstAt.intValue();
+        String keep = secondIsEarlier ? second : first;
+        String drop = secondIsEarlier ? first : second;
+        groupOf.put(drop, keep);
+        for (Map.Entry<String, String> entry : groupOf.entrySet()) {
+            if (entry.getValue().equals(drop)) {
+                entry.setValue(keep);
+            }
+        }
+    }
+
+    /** The name that stands for this name's group. */
+    private String groupOf(String name) {
+        String found = groupOf.get(name);
+        return found == null ? name : found;
     }
 
     /**
@@ -336,15 +482,18 @@ public final class RegisterAllocator {
     }
 
     private String registerFor(String name, SourcePos where, int index) {
-        String register = assigned.get(name);
+        // The group, not the name: names that have to share a register are one life, and
+        // a life is what a register is given to.
+        String group = groupOf(name);
+        String register = assigned.get(group);
         if (register != null) {
             return register;
         }
 
-        Integer death = lastSeen.get(name);
+        Integer death = lastSeen.get(group);
         int diesAt = death == null ? index : death.intValue();
-        Set<String> forbidden = keepOut.get(name);
-        List<String> usable = addresses.contains(name) ? target.addressRegisters()
+        Set<String> forbidden = keepOut.get(group);
+        List<String> usable = addresses.contains(group) ? target.addressRegisters()
                 : target.valueRegisters();
 
         String taken = null;
@@ -363,8 +512,8 @@ public final class RegisterAllocator {
         }
         if (taken == null) {
             throw new CompileError(where,
-                    "there is no register left for '" + name + "'"
-                            + (addresses.contains(name)
+                    "there is no register left for '" + selection.variableOf(name) + "'"
+                            + (addresses.contains(group)
                             ? ", which is used as an address and so can only live in one of "
                             + target.addressRegisters()
                             : "")
@@ -372,13 +521,13 @@ public final class RegisterAllocator {
                             + "across destroys " + forbidden
                             + "; say what it really destroys with 'clobbers(...)', or write the "
                             + "value to memory and read it into a name of its own afterwards — "
-                            + "allocation gives each name one register, so a name that spans the "
-                            + "call cannot be given one at all")
+                            + "this value is still to be read after the call, so it has to be in "
+                            + "a register the call keeps")
                             + ": this allocation does not spill, because a program that needs "
                             + "more registers than the machine has is refused rather than given "
                             + "a frame (docs/ir.md §8.2)");
         }
-        assigned.put(name, taken);
+        assigned.put(group, taken);
         freeFrom.put(taken, Integer.valueOf(diesAt == Integer.MAX_VALUE ? diesAt : diesAt + 1));
         return taken;
     }

@@ -17,6 +17,7 @@ import i8086.ir.Signedness;
 import i8086.ir.Type;
 import i8086.ir.Value;
 import i8086.ssa.Block;
+import i8086.ssa.Phi;
 import i8086.ssa.SsaForm;
 import i8086.ssa.SsaStatement;
 import i8086.target.Expansion;
@@ -26,7 +27,9 @@ import i8086.target.Target;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Turns the IR into instructions, choosing the form of each operation.
@@ -105,7 +108,15 @@ public final class InstructionSelector {
      */
     private Selection run() {
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
+        List<List<String>> groups = new ArrayList<List<String>>();
         for (Block block : form.cfg().blocks()) {
+            // A φ is not an item and not an instruction. What it says is that the values
+            // reaching it are one value as far as a register is concerned, because there
+            // is no copy at a merge (docs/ssa.md §8) — so it is a fact about the stream
+            // that travels with it, and the allocator is the one that acts on it.
+            for (Phi phi : form.phis(block)) {
+                groups.add(joined(phi));
+            }
             for (SsaStatement statement : form.statements(block)) {
                 Item item = statement.item();
                 out = new ArrayList<Instruction>();
@@ -118,7 +129,41 @@ public final class InstructionSelector {
                 pieces.add(new Selection.Piece(item, out));
             }
         }
-        return new Selection(pieces, controlFlow);
+        return new Selection(pieces, controlFlow, groups, variables());
+    }
+
+    /**
+     * The names one φ says have to share a register: its own, and the values it merges.
+     *
+     * <p>An undefined value is left out. It is the name for "this variable, with no
+     * value" ({@code docs/ssa.md} §5), so there is nothing for it to agree with — and
+     * the program that reads it reads whatever happens to be there, which is what the
+     * surface says reading a variable before writing it does ({@code docs/ir.md} §3.1).
+     */
+    private List<String> joined(Phi phi) {
+        List<String> names = new ArrayList<String>();
+        names.add(phi.name());
+        for (String operand : phi.operands()) {
+            if (form.isVersion(operand)) {
+                names.add(operand);
+            }
+        }
+        return names;
+    }
+
+    /**
+     * The version table, so that a refusal can name the variable instead of the version
+     * ({@link Selection#variableOf}).
+     */
+    private Map<String, String> variables() {
+        Map<String, String> variables = new LinkedHashMap<String, String>();
+        for (String name : form.versions()) {
+            variables.put(name, form.variableOf(name));
+        }
+        for (String name : form.undefinedValues()) {
+            variables.put(name, form.variableOf(name));
+        }
+        return variables;
     }
 
     // --- items -------------------------------------------------------------

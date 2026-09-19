@@ -242,18 +242,23 @@ edge with two ways out has nothing edge-specific left to place. A φ that carrie
 value *between* variables would need all of that machinery; this IR has no such
 construct, and does not want one.
 
-So the versions are merged, and there are two places where that happens, for two
-different readers:
+So the versions are told apart, or brought together, and what does it is the allocator:
 
-* **For the allocator**, by renaming every version back to its variable
-  ([`MergeVersions`](../src/main/java/i8086/regalloc/MergeVersions.java)). One name is
-  one life, so a variable's versions become one interval even where the value is dead
-  between them. The price is precision rather than correctness, and it is the shape
-  the allocator was written for (`docs/ir.md` §3.1).
-* **For a person**, by [`OutOfSsa`](../src/main/java/i8086/ssa/OutOfSsa.java), which is
-  what `optimize --emit ir` prints.
-
-Both are renaming, and neither inserts an instruction.
+* **A φ's names are one life.** The register *is* what carries the value along each path,
+  so the values a φ joins have to be in it. Selection read the φ's and passes them on
+  with the instructions, because that is a fact about the stream and not something the
+  allocator can see for itself.
+* **A copy's two ends are one life when the source dies there** — {@code mov d, s} with
+  nothing left to read of {@code s} afterwards. Then {@code d} may as well *be*
+  {@code s}: the copy becomes a register moved into itself, and the rule that drops those
+  takes it away. That is what keeps a two-address machine from paying for a copy per
+  operation: {@code x = eval(x + 1)} is one instruction and not two.
+* **Everything else stays apart.** Two versions of one variable that neither meet at a φ
+  nor are a copy of each other are two values, and putting them in one register would
+  cost a register and buy nothing. That is the precision this has over renaming every
+  version back to its variable, which is what the back end used to do.
+* **For a person**, {@code OutOfSsa} still writes the form with the versions merged, and
+  that is what {@code optimize --emit ir} prints.
 
 ## 9. Not here yet
 
