@@ -143,6 +143,12 @@ public final class NameTest {
                 + "    mov " + word + ", 2\n"
                 + "    word [0x40] = " + word + "\n"
                 + "    ret\n");
+        // The bytes a variable lives in are named by the author as well, so the home is
+        // a position a name stands in — and so is the word that follows it (docs/ir.md
+        // §3.1.2). 'var kept: i16 in in' is a variable whose home is a label called 'in'.
+        positions.add("    var kept: i16 in " + word + "\n"
+                + word + ": dw 0\n"
+                + "    ret\n");
         return positions;
     }
 
@@ -166,6 +172,14 @@ public final class NameTest {
                 became("    var ordinary: i16\n"
                         + "    ordinary = 1\n"
                         + "    word [0x40] = ordinary\n"));
+        // A home is the author's name too, and it is marked like one — the home itself
+        // and the item that holds the bytes (docs/ir.md §3.1.1, §3.1.2).
+        for (String word : Vocabulary.words(TARGET)) {
+            Assert.assertEquals("    var $kept: i16 in $" + word + "\n"
+                            + "\n$" + word + ": dw 0\n",
+                    became("    var kept: i16 in " + word + "\n"
+                            + word + ": dw 0\n"));
+        }
     }
 
     /**

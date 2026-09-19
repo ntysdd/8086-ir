@@ -96,6 +96,109 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesRepeatedBlockLabel);
         suite.add("Ir verifier refuses a block label that is already a name",
                 IrVerifierTest::refusesBlockLabelClash);
+        suite.add("Ir verifier accepts homes, shared and wide enough",
+                IrVerifierTest::acceptsHomes);
+        suite.add("Ir verifier refuses a home narrower than the variable",
+                IrVerifierTest::refusesNarrowHome);
+        suite.add("Ir verifier refuses a home that names a place in the code",
+                IrVerifierTest::refusesCodeLabelAsHome);
+        suite.add("Ir verifier refuses a home whose length only the assembler knows",
+                IrVerifierTest::refusesPadToAsHome);
+        suite.add("Ir verifier refuses a home that names nothing",
+                IrVerifierTest::refusesUnknownHome);
+        suite.add("Ir verifier refuses a variable as a home",
+                IrVerifierTest::refusesVariableAsHome);
+        suite.add("Ir verifier refuses a second variable on a writethrough cell",
+                IrVerifierTest::refusesSharedWritethroughHome);
+        suite.add("Ir verifier refuses a writethrough home until it is honoured",
+                IrVerifierTest::refusesWritethroughUntilBuilt);
+    }
+
+    // --- homes (§3.1.2) ----------------------------------------------------
+
+    /**
+     * A home is bytes that are wide enough, and one cell may be two variables' home,
+     * because a cell is handed out the way a register is. What is measured is the bytes
+     * the item holds, which for a list of data is the elements counted rather than the
+     * directive's width: `db "hello"` is five and `dw a, b` is four.
+     */
+    private static void acceptsHomes() {
+        verify("    var left: u16 in cell\n"
+                + "    var hand: u16 in cell\n"
+                + "    word [0x40] = left\n"
+                + "    word [0x40] = hand\n"
+                + "    var four: u32 in msg\n"
+                + "    dword [0x40] = four\n"
+                + "    var pair: u32 in table\n"
+                + "    dword [0x40] = pair\n"
+                + "cell: pad 2\n"
+                + "msg: db \"hello\"\n"
+                + "table: dw 0x1234, 0x5678\n");
+    }
+
+    /**
+     * A home narrower than the variable is a program that would read the byte after it, so
+     * it is refused, and the refusal is at the declaration that asked for it.
+     */
+    private static void refusesNarrowHome() {
+        CompileError refused = Assert.assertRefused("test.ir:6:5",
+                () -> verify("    var wide: u32 in cell\ncell: pad 2\n"));
+        Assert.assertTrue(refused.getMessage().contains("2 byte(s)"),
+                "the refusal says how wide the home is: " + refused.getMessage());
+    }
+
+    private static void refusesCodeLabelAsHome() {
+        CompileError refused = Assert.assertRefused("test.ir:6:5",
+                () -> verify("    var x: u16 in main\n"));
+        Assert.assertTrue(refused.getMessage().contains("place in the code"),
+                "a label is a place, not storage: " + refused.getMessage());
+    }
+
+    private static void refusesPadToAsHome() {
+        CompileError refused = Assert.assertRefused("test.ir:6:5",
+                () -> verify("    var x: u16 in lay\nlay: pad to 0x100\n"));
+        Assert.assertTrue(refused.getMessage().contains("assembler"),
+                "only the assembler knows how long a 'pad to' is: " + refused.getMessage());
+    }
+
+    private static void refusesUnknownHome() {
+        Assert.assertRefused("test.ir:6:5", () -> verify("    var x: u16 in nowhere\n"));
+    }
+
+    private static void refusesVariableAsHome() {
+        CompileError refused = Assert.assertRefused("test.ir:7:5",
+                () -> verify("    var other: u16\n    var x: u16 in other\n"));
+        Assert.assertTrue(refused.getMessage().contains("register"),
+                "a variable is a register, not bytes: " + refused.getMessage());
+    }
+
+    /**
+     * A cell one variable keeps current is that variable's alone, whichever of the two
+     * declarations comes first: a reader of those bytes has to be able to tell whose
+     * value it is looking at ({@code docs/ir.md} §3.1.2). Both orders are the same
+     * mistake, and both are refused at the declaration that comes second.
+     */
+    private static void refusesSharedWritethroughHome() {
+        Assert.assertRefused("test.ir:7:5",
+                () -> verify("    var a: u16 in cell\n"
+                        + "    var b: u16 in cell writethrough\ncell: pad 2\n"));
+        Assert.assertRefused("test.ir:7:5",
+                () -> verify("    var b: u16 in cell writethrough\n"
+                        + "    var a: u16 in cell\ncell: pad 2\n"));
+    }
+
+    /**
+     * A home in the default mode is accepted and not used, which costs the program
+     * nothing it was promised. {@code writethrough} is a promise that would be broken
+     * silently, so it is refused until the allocator honours a home.
+     */
+    private static void refusesWritethroughUntilBuilt() {
+        CompileError refused = Assert.assertRefused("test.ir:6:5",
+                () -> verify("    var x: u16 in cell writethrough\ncell: pad 2\n"));
+        Assert.assertTrue(refused.getMessage().startsWith("not implemented yet:"),
+                "it says so plainly: " + refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("docs/ir.md"),
+                "and points at the section that specifies it: " + refused.getMessage());
     }
 
     /**

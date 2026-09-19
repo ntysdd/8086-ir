@@ -219,6 +219,27 @@ public abstract class Item {
         public List<Atom> atoms() {
             return atoms;
         }
+
+        /**
+         * How many bytes this definition puts in the image.
+         *
+         * <p>A string is one byte per character, and that is exact rather than
+         * approximate, because the tokenizer refuses a string that is not printable
+         * ASCII. Every other element is as wide as the directive says, a name
+         * included: a label's address is a near pointer, so one word.
+         *
+         * <p>This is what a home is checked against ({@code docs/ir.md} §3.1.2). The
+         * address of these bytes is not known until the assembler places them, but
+         * their *length* is the front end's to know, which is what makes "is this home
+         * wide enough" a static question.
+         */
+        public long byteCount() {
+            long bytes = 0;
+            for (Atom atom : atoms) {
+                bytes += atom.isText() ? atom.text().length() : elementSize.bytes();
+            }
+            return bytes;
+        }
     }
 
     /** {@code ret}. */
@@ -230,20 +251,32 @@ public abstract class Item {
     }
 
     /**
-     * A declaration: {@code var x: u16}.
+     * A declaration: {@code var x: u16}, and optionally where it may live:
+     * {@code var x: u16 in cell}.
      *
      * <p>It introduces a mutable virtual register, not a memory location. The
      * input is not SSA; SSA construction renames these away.
+     *
+     * <p>A <b>home</b> is bytes in the image the value may live in when the registers
+     * cannot hold it, and {@code writethrough} says those bytes are written on every
+     * definition ({@code docs/ir.md} §3.1.2). Neither is decided here: whether the home
+     * is used at all is the allocator's answer, and what the verifier checks is that the
+     * name holds bytes and that they are wide enough.
      */
     public static final class Var extends Item {
 
         private final String name;
         private final Type type;
+        private final String home;
+        private final boolean writethrough;
 
-        public Var(SourcePos position, String name, Type type) {
+        public Var(SourcePos position, String name, Type type, String home,
+                   boolean writethrough) {
             super(position);
             this.name = name;
             this.type = type;
+            this.home = home;
+            this.writethrough = writethrough;
         }
 
         public String name() {
@@ -252,6 +285,22 @@ public abstract class Item {
 
         public Type type() {
             return type;
+        }
+
+        /**
+         * The bytes this variable may live in, named by the item that declares them,
+         * or null when it has no home.
+         */
+        public String home() {
+            return home;
+        }
+
+        /**
+         * Whether the home is kept current: every definition of this variable writes
+         * those bytes, whether or not the value needed somewhere to live.
+         */
+        public boolean writethrough() {
+            return writethrough;
         }
     }
 

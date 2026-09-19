@@ -743,6 +743,18 @@ public final class IrParser {
         return new Item.Compare(keyword.position(), kind, left, right);
     }
 
+    /**
+     * {@code var name: type}, and the bytes it may live in: {@code var x: u16 in cell},
+     * or {@code var x: u16 in cell writethrough} to keep those bytes current
+     * ({@code docs/ir.md} §3.1.2).
+     *
+     * <p>{@code in} and {@code writethrough} are words only here and only in this order,
+     * which is how the surface stays free of reserved words: a variable called {@code in}
+     * is written {@code var in: u16} and is a name everywhere a name can stand, its own
+     * home included. The home itself is a *name*, so that what bytes it means is a
+     * question about the module rather than about the text — the item may be declared
+     * later in the file, and the verifier is what asks (§10.2).
+     */
     private Item parseVar() {
         Token keyword = expectName("var");
         Token name = expect(TokenKind.IDENT, "a variable name");
@@ -758,8 +770,25 @@ public final class IrParser {
         Type type = Type.named(typeWord.name());
         require(type != null, typeWord.position(),
                 "unknown type '" + typeWord.text() + "'; the types are u8, u16, u32, i8, i16, i32");
+        String home = null;
+        boolean writethrough = false;
+        if (isWord(peek(), "in")) {
+            next();
+            Token place = expect(TokenKind.IDENT, "the name of the bytes this variable may live in");
+            requireNameable(place);
+            home = place.name();
+            if (isWord(peek(), "writethrough")) {
+                next();
+                writethrough = true;
+            }
+        } else if (isWord(peek(), "writethrough")) {
+            throw new CompileError(peek().position(),
+                    "'writethrough' says a home is kept current, so it needs the home it "
+                            + "applies to: write 'var x: u16 in place writethrough' "
+                            + "(docs/ir.md §3.1.2)");
+        }
         endOfLine();
-        return new Item.Var(keyword.position(), name.name(), type);
+        return new Item.Var(keyword.position(), name.name(), type, home, writethrough);
     }
 
     /**

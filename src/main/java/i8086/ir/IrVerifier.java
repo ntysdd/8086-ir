@@ -7,7 +7,9 @@ import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.target.Target;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -57,10 +59,31 @@ public final class IrVerifier {
     /** Every label named inside a block, so that two of them cannot collide. */
     private final Set<String> blockLabels = new LinkedHashSet<String>();
 
+    /** The item each label names, so that a home can be asked what bytes it holds. */
+    private final Map<String, Item> labelled;
+
     private IrVerifier(Module module, Target target) {
         this.module = module;
         this.target = target;
         this.names = Names.of(module);
+        this.labelled = labelledItems(module);
+    }
+
+    /**
+     * The item each label names, in module order.
+     *
+     * <p>Collected for the whole module before anything is checked, because a home and
+     * the bytes it names may be declared in either order: the variable may be declared
+     * before the data it lives in ({@code docs/ir.md} §3.1.2, §10.2).
+     */
+    private static Map<String, Item> labelledItems(Module module) {
+        Map<String, Item> labelled = new LinkedHashMap<String, Item>();
+        for (Item item : module.items()) {
+            if (Item.labelOf(item) != null) {
+                labelled.put(Item.labelOf(item), item);
+            }
+        }
+        return labelled;
     }
 
     public static void verify(Module module, Target target) {
@@ -70,6 +93,7 @@ public final class IrVerifier {
     private void run() {
         checkEntry();
         checkItems();
+        checkHomes();
     }
 
     // --- names -------------------------------------------------------------
@@ -254,6 +278,138 @@ public final class IrVerifier {
     /** Whether an item leads with a name, and so can be branched to. */
     private static boolean namesSomething(Item item) {
         return Item.labelOf(item) != null;
+    }
+
+    // --- homes (§3.1.2) ----------------------------------------------------
+
+    /**
+     * What §3.1.2 requires of a home: it names bytes, they are wide enough for the
+     * variable, and a cell one variable keeps current belongs to that variable alone.
+     *
+     * <p>All three are static questions, which is why they are asked here and not while
+     * reading: the item a home names may be declared after the code that names it, so the
+     * answer is about the module rather than about the text ({@code docs/ir.md} §10.2).
+     * Whether a home is <em>used</em> is not a static question at all — it is the
+     * allocator's, and it may find that the value fits in a register and never touch
+     * those bytes.
+     *
+     * <p>Two variables naming one cell is not itself refused: a scratch cell is exactly
+     * that, and the allocator hands it out the way it hands out a register. The refusal is
+     * for the mode that tells a reader what the bytes hold.
+     */
+    private void checkHomes() {
+        Map<String, Item.Var> cells = new LinkedHashMap<String, Item.Var>();
+        for (Item item : module.items()) {
+            if (!(item instanceof Item.Var)) {
+                continue;
+            }
+            Item.Var variable = (Item.Var) item;
+            if (variable.home() != null) {
+                requireHomeNamesBytes(variable);
+                requireExclusiveHome(cells, variable);
+            }
+        }
+        requireWritethroughIsBuilt();
+    }
+
+    /**
+     * The home names bytes, and they are at least as wide as the variable.
+     *
+     * <p>Each way of not naming bytes is refused for its own reason, because they are
+     * different mistakes: a code label is a place and not storage, a {@code pad to} has a
+     * length only the assembler knows ({@code docs/ir.md} §10.3), and a narrow home is a
+     * program that would read the byte after it.
+     */
+    private void requireHomeNamesBytes(Item.Var variable) {
+        String home = variable.home();
+        Item bytes = labelled.get(home);
+        if (bytes == null) {
+            require(!names.isVariable(home), variable.position(),
+                    "'" + home + "' is a variable, so it names a register rather than bytes; a "
+                            + "home is bytes in the image (docs/ir.md §3.1.2)");
+            throw new CompileError(variable.position(),
+                    "the home '" + home + "' names nothing: no item in this module puts bytes "
+                            + "there (docs/ir.md §3.1.2)");
+        }
+        if (bytes instanceof Item.Label) {
+            throw new CompileError(variable.position(),
+                    "the home '" + home + "' names a place in the code rather than bytes; a home "
+                            + "is data, so it is a 'db'/'dw'/'dd' list or a 'pad' "
+                            + "(docs/ir.md §3.1.2)");
+        }
+        if (bytes instanceof Item.Pad && !((Item.Pad) bytes).isResolvable()) {
+            throw new CompileError(variable.position(),
+                    "the home '" + home + "' is a 'pad to', whose length only the assembler "
+                            + "knows, so the front end cannot tell whether it is wide enough "
+                            + "(docs/ir.md §3.1.2, §10.3)");
+        }
+        long available = bytesOf(bytes);
+        require(available >= variable.type().bytes(), variable.position(),
+                "the home '" + home + "' is " + available + " byte(s) and '" + variable.name()
+                        + "' is " + variable.type().bytes() + "; a value does not fit in less "
+                        + "room than its width (docs/ir.md §3.1.2)");
+    }
+
+    /**
+     * How many bytes of the image a named item holds. The kinds that are not bytes have
+     * been refused by the caller: a label is a place, and a {@code pad to} names no length
+     * the front end knows.
+     */
+    private static long bytesOf(Item item) {
+        if (item instanceof Item.Pad) {
+            return ((Item.Pad) item).amount();
+        }
+        return ((Item.Data) item).byteCount();
+    }
+
+    /**
+     * A cell one variable keeps current is that variable's alone.
+     *
+     * <p>It is the one sharing rule the allocator does not get to decide: two variables
+     * may take turns in a cell, but not when one of them has told a reader outside the
+     * module that the cell <em>is</em> its current value. A reader could not then tell
+     * whose value it was looking at, and one variable's write would break the other's
+     * promise.
+     *
+     * <p>The refusal lands on whichever declaration comes second and names the first, so
+     * that the two lines can be read together. Refusing the second one either way is what
+     * keeps the rule independent of the order the declarations are written in.
+     */
+    private void requireExclusiveHome(Map<String, Item.Var> cells, Item.Var variable) {
+        Item.Var first = cells.get(variable.home());
+        if (first == null) {
+            cells.put(variable.home(), variable);
+            return;
+        }
+        require(!first.writethrough() && !variable.writethrough(), variable.position(),
+                "the bytes '" + variable.home() + "' are the home of '" + first.name() + "' as "
+                        + "well, and one of the two is kept current: a 'writethrough' home "
+                        + "belongs to the variable that asked for it, because a reader of those "
+                        + "bytes has to know whose value it is looking at (docs/ir.md §3.1.2)");
+    }
+
+    /**
+     * The one thing §3.1.2 asks for that is not built yet, and it is refused rather than
+     * quietly ignored.
+     *
+     * <p>A home in the default mode costs nothing while the allocator does not use it, so
+     * accepting one is honest: the program is compiled exactly as it was before homes
+     * existed, and a value the registers cannot hold is still refused instead of being put
+     * somewhere the compiler chose. {@code writethrough} is not like that, because it
+     * promises a reader outside the module that every definition writes the cell — and
+     * compiling it as if the promise had never been made is a silent wrong answer, which
+     * is the one thing this compiler does not produce ({@code AGENTS.md}, invariant 7).
+     * The refusal goes away when the allocator honours a home.
+     */
+    private void requireWritethroughIsBuilt() {
+        for (Item item : module.items()) {
+            if (item instanceof Item.Var && ((Item.Var) item).writethrough()) {
+                throw new CompileError(item.position(),
+                        "not implemented yet: 'writethrough' writes the home on every definition, "
+                                + "and nothing honours a home yet, so this program would compile "
+                                + "as if those bytes were never written (docs/ir.md §3.1.2)");
+            }
+        }
     }
 
     private void checkCompare(Item.Compare compare) {

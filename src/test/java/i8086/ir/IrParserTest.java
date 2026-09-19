@@ -45,6 +45,9 @@ public final class IrParserTest {
                 IrParserTest::readsVariablesAndAssignments);
         suite.add("Ir printer round-trips variables and assignments",
                 IrParserTest::roundTripsVariablesAndAssignments);
+        suite.add("Ir parser reads a home and prints it back", IrParserTest::roundTripsHomes);
+        suite.add("Ir parser refuses a mode with no home to apply to",
+                IrParserTest::refusesWritethroughAlone);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
         suite.add("Ir printer reaches a fixed point on loose input", IrParserTest::reachesFixedPoint);
         suite.add("A program with sugar prints labels it can read back",
@@ -261,6 +264,59 @@ public final class IrParserTest {
                 + "\n"
                 + "$msg: dw 0x1234\n";
         Assert.assertEquals(program, IrPrinter.print(parse(program)));
+    }
+
+    /**
+     * A home comes after the type, and the mode that keeps it current after the home
+     * ({@code docs/ir.md} §3.1.2). The home is a name like any other, so the canonical
+     * form marks it, and a program that writes it unmarked reads back the same way.
+     */
+    private static void roundTripsHomes() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$cell: pad 2\n"
+                + "\n"
+                + "$dap: pad 0x10\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $left: u16 in $cell\n"
+                + "    var $packet: u16 in $dap writethrough\n"
+                + "    var $plain: u16\n"
+                + "    ret\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+
+        Module module = parse(program);
+        Item.Var left = (Item.Var) module.items().get(3);
+        Assert.assertEquals("cell", left.home());
+        Assert.assertFalse(left.writethrough(), "'in place' alone is not kept current");
+        Item.Var packet = (Item.Var) module.items().get(4);
+        Assert.assertEquals("dap", packet.home());
+        Assert.assertTrue(packet.writethrough(), "the mode after the home is read");
+        Item.Var plain = (Item.Var) module.items().get(5);
+        Assert.assertNull(plain.home(), "a declaration without 'in' has no home");
+        Assert.assertFalse(plain.writethrough(), "and no mode either");
+
+        // Input is liberal and output is canonical, the same split the surface takes
+        // everywhere else: the words are the words unmarked, and every name the author
+        // chose comes back with the '$' that says it is theirs (docs/ir.md §3.1.1).
+        Assert.assertEquals("target 8086\norg 0x100\nentry $main\n\n$cell: pad 2\n\n$main:\n"
+                        + "    var $x: u16 in $cell writethrough\n",
+                IrPrinter.print(parse("target 8086\norg 0x100\nentry main\n\ncell: pad 2\n\n"
+                        + "main:\n    var x: u16 in cell writethrough\n")));
+    }
+
+    /**
+     * {@code writethrough} says the home is kept current, so a declaration with no home
+     * has nothing for it to apply to. That is a question about the line itself, and it is
+     * a different mistake from the ones the verifier refuses ({@code docs/ir.md} §3.1.2).
+     */
+    private static void refusesWritethroughAlone() {
+        CompileError refused = Assert.assertRefused("test.ir:4:12",
+                () -> parse("target 8086\norg 0\nentry a\nvar x: u16 writethrough\n"));
+        Assert.assertTrue(refused.getMessage().contains("in place writethrough"),
+                "the message says how to write it: " + refused.getMessage());
     }
 
     private static void reproducesCanonical() {

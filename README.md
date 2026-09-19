@@ -344,7 +344,11 @@ Working today:
 Not built yet, and refused with a reason rather than guessed at: conversions and
 byte accesses (there are no sub-registers, so half a register has no name), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
-[`docs/ir.md`](docs/ir.md) §11. Three things the pipeline names are also absent:
+[`docs/ir.md`](docs/ir.md) §11. A variable's **home** in memory is declared and
+checked but not used yet, and the mode that keeps a home current, `writethrough`, is
+refused until every definition writes those bytes — a wrong answer nobody is told
+about is what a refusal replaces ([`docs/ir.md`](docs/ir.md) §3.1.2). Three things the
+pipeline names are also absent:
 materialising a flag value that has to survive an instruction defining those flags,
 promoting memory to values, and any target-specific pass. And two deliberate
 retreats, each with the missing piece named: nothing may be removed from a module

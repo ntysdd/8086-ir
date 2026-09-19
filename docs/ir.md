@@ -215,7 +215,7 @@ produces is described.
   implementation detail, because it would refuse programs this compiler accepts
   today, and precision may only ever grow (§4.3).
 
-### 3.1.2 A variable may be given a home in memory — [proposed]
+### 3.1.2 A variable may be given a home in memory — [proposed; declared and checked, not yet honoured]
 
 ```
 tries: pad 2
@@ -282,8 +282,10 @@ the first: the home is used when the registers cannot hold the value, and until 
 the bytes at `place` hold whatever they held — the image's own contents, or what the
 last program left there if the module never writes them. So `in place` says nothing
 about what somebody else reading those bytes would see; it says where the value goes
-when it has to go somewhere. **[open]** the spelling of the second mode, and whether
-it belongs on the declaration at all — §12 item 18.
+when it has to go somewhere. The second mode is a word on the declaration —
+`var packet: u16 in dap writethrough` — rather than a property of the bytes, because
+what it changes is what the compiler has to do with one *variable*: every definition
+of it writes those bytes.
 
 `writethrough` is the second mode, and it says the home is to be **kept current**:
 every write to that variable goes to the home, whenever it happens and whatever else
@@ -396,7 +398,7 @@ Three rules, and what each is for:
   meaning §3.4 gives it and stays the way to say that a read is itself an effect.
   **[open]** a home whose *bytes* something else writes — a timer's tick counter, a
   cell a handler updates — is a different matter, because then the compiler may not
-  keep a copy of the value at all: §12 item 19.
+  keep a copy of the value at all: §12 item 18.
 
 **What the allocator does, since that is where the cost is.** The decision is made
 where every other decision about where a value lives is made — in the allocator, and
@@ -451,6 +453,17 @@ every name carries the `$` that says it is one (§3.1.1). `in` at the start of a
 statement is still the port instruction, still refused with its reason (§11); the
 roles never stand in the same place, which is the argument the whole surface rests on
 (§3.1).
+
+**How much of this is built.** The declaration is read and the static rules above are
+checked: a home names bytes that are wide enough, and a cell one variable keeps
+current is that variable's alone. What is not built is *using* a home, and the two
+modes are not in the same position about it. `in place` is accepted while the
+allocator ignores it, because the promise was conditional — the allocator decides —
+and never touching the bytes costs the program nothing it was promised: a value that
+does not fit in a register is refused exactly as it was before homes existed.
+`writethrough` is **refused** until every definition writes the cell, because
+compiling it as if the bytes were never written is a wrong answer the program is not
+told about, and a hard error is what this compiler gives instead.
 
 ### 3.2 Widths and signedness — [decided]
 
@@ -1536,15 +1549,7 @@ Collected for greppability; each is marked **[open]** at its point of use above.
     and wrong for a label the author named `ax` and branched to — a program the
     surface allows, because nothing is reserved (§3.1). Reading a program back needs
     the spelling to be enough on its own, and here it is not.
-18. The spelling of the mode that keeps a home current: `writethrough` in §3.1.2, which
-    is a proposal. What is decided is that there are two modes and what each of them
-    means — the home is used when the registers run out, or the home is written on every
-    definition — and that the second one is exclusive to the variable that asked for it,
-    because a reader of those bytes has to know whose value it is looking at. Whether
-    the mode is a word on the declaration (`in place writethrough`), a property of the
-    home itself (a `pad` that says it is kept current), or a declaration of its own is
-    what is open.
-19. A home whose bytes something else writes. `writethrough` keeps the *memory* current
+18. A home whose bytes something else writes. `writethrough` keeps the *memory* current
     on every write, which is what a reader outside the module needs, and says nothing
     about the other direction: the compiler may still hold a copy of a value it read.
     For a cell a handler or a device updates — the timer's counter at 0x046C, a byte a

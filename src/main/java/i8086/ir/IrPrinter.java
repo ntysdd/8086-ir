@@ -136,9 +136,21 @@ public final class IrPrinter {
                 .append(printValue(compare.right(), target)).append('\n');
     }
 
+    /**
+     * {@code var x: u16}, {@code var x: u16 in cell}, and the mode that keeps those
+     * bytes current: {@code var x: u16 in cell writethrough} ({@code docs/ir.md}
+     * §3.1.2). The home is a name like any other, so it is marked like one.
+     */
     private static void printVar(StringBuilder text, Item.Var var, Target target) {
         text.append(INDENT).append("var ").append(name(var.name(), target)).append(": ")
-                .append(var.type().spelling()).append('\n');
+                .append(var.type().spelling());
+        if (var.home() != null) {
+            text.append(" in ").append(name(var.home(), target));
+            if (var.writethrough()) {
+                text.append(" writethrough");
+            }
+        }
+        text.append('\n');
     }
 
     private static void printAssign(StringBuilder text, Item.Assign assign, Target target) {
