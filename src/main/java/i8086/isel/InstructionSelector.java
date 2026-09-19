@@ -123,7 +123,8 @@ public final class InstructionSelector {
                 pieces.add(new Selection.Piece(item, out));
             }
         }
-        return new Selection(pieces, groups, variables());
+        Map<String, String> variables = variables();
+        return new Selection(pieces, groups, variables, homes(variables), types());
     }
 
     /**
@@ -158,6 +159,46 @@ public final class InstructionSelector {
             variables.put(name, form.variableOf(name));
         }
         return variables;
+    }
+
+    /**
+     * The type of every value, so that the allocator can tell a byte from a register's worth
+     * of value when it decides where one may live.
+     */
+    private Map<String, Type> types() {
+        Map<String, Type> types = new LinkedHashMap<String, Type>();
+        for (String name : form.versions()) {
+            types.put(name, form.typeOf(name));
+        }
+        for (String name : form.undefinedValues()) {
+            types.put(name, form.typeOf(name));
+        }
+        return types;
+    }
+
+    /**
+     * The home of every value whose variable declared one ({@code docs/ir.md} §3.1.2).
+     *
+     * <p>The declaration is the module's, and a value is the form's, so this is the one
+     * place the two are put beside each other: a home is declared once, on a variable, and
+     * every version of that variable lives in the same bytes. It is the allocator's answer
+     * to use — whether the value ends up there is not decided here.
+     */
+    private Map<String, String> homes(Map<String, String> variables) {
+        Map<String, String> declared = new LinkedHashMap<String, String>();
+        for (Item item : form.module().items()) {
+            if (item instanceof Item.Var && ((Item.Var) item).home() != null) {
+                declared.put(((Item.Var) item).name(), ((Item.Var) item).home());
+            }
+        }
+        Map<String, String> homes = new LinkedHashMap<String, String>();
+        for (Map.Entry<String, String> entry : variables.entrySet()) {
+            String home = declared.get(entry.getValue());
+            if (home != null) {
+                homes.put(entry.getKey(), home);
+            }
+        }
+        return homes;
     }
 
     // --- items -------------------------------------------------------------

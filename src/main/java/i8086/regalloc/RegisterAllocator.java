@@ -4,12 +4,17 @@ import i8086.CompileError;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.asm.Size;
 import i8086.ir.Item;
+import i8086.ir.Place;
+import i8086.ir.Type;
 import i8086.isel.Selection;
 import i8086.ssa.Effects;
+import i8086.target.Form;
 import i8086.target.Target;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -37,6 +42,15 @@ import java.util.Set;
  * <p>What it still does not do is spill. A graph that cannot be coloured is a **hard
  * error**, which is the meaning {@code docs/ir.md} §8.2 gives "no spill": no frame, no
  * silent use of the stack.
+ *
+ * <p>What it does instead, when the program said it may, is use a **home**. A variable
+ * declared {@code var x: u16 in cell} says those bytes may hold its value
+ * ({@code docs/ir.md} §3.1.2), so a cell is one more colour a value can be given — after
+ * the registers, because a value that fits in one stays in one and the bytes are never
+ * touched. A value given a cell is loaded out of it wherever it is read and stored back
+ * into it where it is written, through a register picked for that one access, so the
+ * value does not hold a register for its life and the pressure it was causing is gone.
+ * That is {@link #withHomes}, and it is where the cost of a home actually lands.
  */
 public final class RegisterAllocator {
 
@@ -73,6 +87,18 @@ public final class RegisterAllocator {
     /** Which register each value ended up in. */
     private final Map<String, String> assigned = new LinkedHashMap<String, String>();
 
+    /** Which cell each value ended up in, when it did not get a register. */
+    private final Map<String, String> inHome = new LinkedHashMap<String, String>();
+
+    /** The cell each value may live in, as {@link #takeHomes} decides from the declaration. */
+    private final Map<String, String> groupHomes = new LinkedHashMap<String, String>();
+
+    /** The cells a value may not be given, because the program writes them in the middle. */
+    private final Map<String, Set<String>> keepOutHome = new LinkedHashMap<String, Set<String>>();
+
+    /** The liveness of the selection, built once for the graph and the rewrite both. */
+    private Liveness liveness;
+
     private RegisterAllocator(Target target) {
         this.target = target;
     }
@@ -85,12 +111,16 @@ public final class RegisterAllocator {
     private Selection run(Selection selection) {
         this.selection = selection;
         groupNames(selection);
-        colour(selection);
+        this.liveness = Liveness.of(selection, target);
+        takeHomes(selection);
+        keepValuesOutOfWrittenCells();
+        colour();
 
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
-        for (Selection.Piece piece : selection.pieces()) {
+        for (int point = 0; point < selection.pieces().size(); point++) {
+            Selection.Piece piece = selection.pieces().get(point);
             List<Instruction> rewritten = new ArrayList<Instruction>();
-            for (Instruction instruction : piece.instructions()) {
+            for (Instruction instruction : withHomes(piece, point)) {
                 Instruction resolved = resolve(instruction);
                 if (!isSelfCopy(resolved)) {
                     rewritten.add(resolved);
@@ -231,13 +261,20 @@ public final class RegisterAllocator {
     private static List<String> mentioned(Instruction instruction) {
         List<String> names = new ArrayList<String>();
         for (Operand operand : instruction.operands()) {
-            if (operand instanceof Operand.Virtual) {
-                names.add(((Operand.Virtual) operand).name());
-            } else if (operand instanceof Operand.Memory) {
-                for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
-                    if (atom.isVirtual()) {
-                        names.add(atom.name());
-                    }
+            names.addAll(names(operand));
+        }
+        return names;
+    }
+
+    /** The virtual names one operand mentions: itself, or the address it is made of. */
+    private static List<String> names(Operand operand) {
+        List<String> names = new ArrayList<String>();
+        if (operand instanceof Operand.Virtual) {
+            names.add(((Operand.Virtual) operand).name());
+        } else if (operand instanceof Operand.Memory) {
+            for (Operand.Memory.Atom atom : ((Operand.Memory) operand).atoms()) {
+                if (atom.isVirtual()) {
+                    names.add(atom.name());
                 }
             }
         }
@@ -266,8 +303,7 @@ public final class RegisterAllocator {
      * side: what destroys a register is a node of the graph too, and it is one nothing can
      * colour.
      */
-    private void colour(Selection selection) {
-        Liveness liveness = Liveness.of(selection, target);
+    private void buildGraph() {
         for (int point = 0; point < liveness.points(); point++) {
             Selection.Piece piece = selection.pieces().get(point);
             Set<String> alive = liveness.liveAt(point);
@@ -286,11 +322,7 @@ public final class RegisterAllocator {
                     && groupOf(liveness.liveBefore(point)).contains(definedValue);
             List<Instruction> instructions = piece.instructions();
             for (int at = 0; at < instructions.size(); at++) {
-                Set<String> destroyed = new LinkedHashSet<String>();
-                if (at == instructions.size() - 1) {
-                    destroyed.addAll(declaredClobbers(piece));
-                }
-                destroyed.addAll(target.clobbers(instructions.get(at)));
+                Set<String> destroyed = destroyedAt(piece, at);
                 if (destroyed.isEmpty()) {
                     continue;
                 }
@@ -312,27 +344,230 @@ public final class RegisterAllocator {
                 }
             }
         }
+    }
 
-        for (String value : order()) {
-            List<String> allowed = addresses.contains(value) ? target.addressRegisters()
-                    : target.valueRegisters();
-            String register = null;
-            for (String candidate : allowed) {
-                Set<String> forbidden = keepOut.get(value);
-                if (forbidden != null && forbidden.contains(candidate)) {
-                    continue;
-                }
-                if (coloursInUse(value).contains(candidate)) {
-                    continue;
-                }
-                register = candidate;
-                break;
+    /**
+     * Every value a colour: a register, or the cell it may live in.
+     *
+     * <p>Registers first — a value that fits in one stays in one and its home is never touched —
+     * and a home only for a value with no register left. That much is one pass, and one pass is
+     * not enough: the values are coloured one at a time, so a value that *could* have lived in a
+     * home may take the last register on its way past, and a value with no home then has
+     * nowhere to go. So a pass that ends that way is thrown away and run again with one more
+     * value sent to its home, which is a value that has one and is the reason the other could
+     * not be coloured. Each attempt pins one more, so the loop ends.
+     */
+    private void colour() {
+        buildGraph();
+        List<String> order = order();
+        Map<String, String> pinned = new LinkedHashMap<String, String>();
+        while (true) {
+            assigned.clear();
+            inHome.clear();
+            inHome.putAll(pinned);
+            String failed = assign(order);
+            if (failed == null) {
+                return;
             }
-            if (register == null) {
-                throw noRegister(value);
+            String value = pinnedFor(failed, order);
+            if (value == null) {
+                throw noRegister(failed);
             }
-            assigned.put(value, register);
+            pinned.put(value, groupHomes.get(value));
         }
+    }
+
+    /**
+     * One attempt: a register or a home for every value, and the first value that got neither.
+     */
+    private String assign(List<String> order) {
+        for (String value : order) {
+            if (inHome.containsKey(value)) {
+                continue; // an earlier attempt already sent this one to its home
+            }
+            String register = freeRegister(value);
+            if (register != null) {
+                assigned.put(value, register);
+                continue;
+            }
+            String cell = usableHome(value);
+            if (cell != null) {
+                inHome.put(value, cell);
+                continue;
+            }
+            return value;
+        }
+        return null;
+    }
+
+    /** The first register this value may have and no neighbour is using, or null. */
+    private String freeRegister(String value) {
+        List<String> allowed = addresses.contains(value) ? target.addressRegisters()
+                : target.valueRegisters();
+        Set<String> inUse = coloursInUse(value);
+        Set<String> forbidden = keepOut.get(value);
+        for (String candidate : allowed) {
+            if (forbidden != null && forbidden.contains(candidate)) {
+                continue;
+            }
+            if (inUse.contains(candidate)) {
+                continue;
+            }
+            return candidate;
+        }
+        return null;
+    }
+
+    /**
+     * The cell this value may live in, or null when it may not live in one at all.
+     *
+     * <p>Three things can say no, and {@link #noRegister} says which one it was: the value is
+     * not a register's width, the program writes those bytes while the value is alive, or a value
+     * it interferes with is in the same cell already.
+     */
+    private String usableHome(String value) {
+        String cell = groupHomes.get(value);
+        if (cell == null || !wholeRegister(value)) {
+            return null;
+        }
+        if (keepOutHome(value).contains(cell) || cellsInUse(value).contains(cell)) {
+            return null;
+        }
+        return cell;
+    }
+
+    /**
+     * A value to move into its home so that one that could not be coloured can have a register.
+     *
+     * <p>The failed value itself first: if it has a home, that is what the home is for. Otherwise
+     * a value it interferes with, since those are the registers it could not have — and the first
+     * of them in the colouring order, which is a rule rather than a preference. Which values
+     * should pay for memory when only some of them fit is a question about how often each is read,
+     * and this allocator has no cost model ({@code docs/ir.md} §3.1.2).
+     *
+     * <p>A value already in its home is not a candidate: pinning it again would be an attempt
+     * that changes nothing, and the loop that runs this would not end.
+     */
+    private String pinnedFor(String failed, List<String> order) {
+        for (String value : order) {
+            if (inHome.containsKey(value)) {
+                continue; // already sent to its home, by an earlier attempt or by this one
+            }
+            if (value.equals(failed) || neighbours(failed).contains(value)) {
+                if (usableHome(value) != null) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The cell each value may live in: what the declaration said, per group of names.
+     *
+     * <p>A value is a group of names, and the names of one group may come from different
+     * variables — a copy joins them when the source dies at it — so the cell is taken from
+     * the first name that declares one, in the order the names are first mentioned. Any of
+     * their homes is a cell the program asked for, so which one is a matter of which
+     * declaration comes first rather than of anything guessed at.
+     */
+    private void takeHomes(Selection selection) {
+        for (String name : firstMention.keySet()) {
+            String value = groupOf(name);
+            if (groupHomes.containsKey(value)) {
+                continue;
+            }
+            String home = selection.homeOf(name);
+            if (home != null) {
+                groupHomes.put(value, home);
+            }
+        }
+    }
+
+    /**
+     * Keeps a value out of a cell the program writes while the value is alive.
+     *
+     * <p>A value lives in a home because the allocator put it there, and a store of the
+     * program's to those bytes — {@code [cell] = x}, the save §3.1.2 describes — writes over
+     * it. The program is allowed to do that, so the value has to be somewhere else across the
+     * write, which is the one direction of the home rules that is a hard constraint and not a
+     * warning: a register or a refusal, never a value quietly lost.
+     */
+    private void keepValuesOutOfWrittenCells() {
+        for (int point = 0; point < liveness.points(); point++) {
+            String cell = writtenCell(selection.pieces().get(point).item());
+            if (cell == null) {
+                continue;
+            }
+            for (String name : liveness.liveAt(point)) {
+                String value = groupOf(name);
+                if (cell.equals(groupHomes.get(value))) {
+                    forbidHome(value, cell);
+                }
+            }
+        }
+    }
+
+    /** The cell an item of the program writes, or null when it writes something else. */
+    private static String writtenCell(Item item) {
+        if (!(item instanceof Item.Assign)) {
+            return null;
+        }
+        Place place = ((Item.Assign) item).place();
+        return place instanceof Place.Memory
+                ? ((Place.Memory) place).operand().addressedLabel()
+                : null;
+    }
+
+    /**
+     * Whether a value is the width of a whole register, which is the only width a home holds.
+     *
+     * <p>Moving a value in and out of its home is a machine access, and the access this back
+     * end can make is one register wide: nothing here can name half of a register, and two of
+     * them at once is not an access either ({@code docs/ir.md} §3.4). A value that is not that
+     * wide is refused where it is needed rather than quietly denied its home.
+     */
+    private boolean wholeRegister(String value) {
+        Type type = selection.typeOf(value);
+        return type != null && type.bytes() == Size.WORD.bytes();
+    }
+
+    /** The registers the values alive at a point are in. A value in a home is in none. */
+    private Set<String> registersInUse(int point) {
+        Set<String> used = new LinkedHashSet<String>();
+        for (String name : liveness.liveAt(point)) {
+            String register = assigned.get(groupOf(name));
+            if (register != null) {
+                used.add(register);
+            }
+        }
+        return used;
+    }
+
+    /** The cells the values this one interferes with are in. */
+    private Set<String> cellsInUse(String value) {
+        Set<String> used = new LinkedHashSet<String>();
+        for (String other : neighbours(value)) {
+            String cell = inHome.get(other);
+            if (cell != null) {
+                used.add(cell);
+            }
+        }
+        return used;
+    }
+
+    private Set<String> keepOutHome(String value) {
+        Set<String> found = keepOutHome.get(value);
+        return found == null ? Collections.<String>emptySet() : found;
+    }
+
+    private void forbidHome(String value, String cell) {
+        Set<String> found = keepOutHome.get(value);
+        if (found == null) {
+            found = new LinkedHashSet<String>();
+            keepOutHome.put(value, found);
+        }
+        found.add(cell);
     }
 
     /**
@@ -446,6 +681,33 @@ public final class RegisterAllocator {
     }
 
     /**
+     * The registers a point's instruction destroys, or that the point's own declaration says it
+     * destroys.
+     *
+     * <p>Two kinds of point carry a list and mean the same thing by it — an inline block, which
+     * the compiler cannot see into, and a machine statement such as an interrupt — and the
+     * declaration is the authority over what the target would otherwise assume. It is asked for
+     * the last instruction because that is what the list was written on.
+     */
+    private Set<String> destroyedAt(Selection.Piece piece, int at) {
+        Set<String> destroyed = new LinkedHashSet<String>();
+        if (at == piece.instructions().size() - 1) {
+            destroyed.addAll(declaredClobbers(piece));
+        }
+        destroyed.addAll(target.clobbers(piece.instructions().get(at)));
+        return destroyed;
+    }
+
+    /** Every register a point destroys, whichever of its instructions does it. */
+    private Set<String> destroyed(Selection.Piece piece) {
+        Set<String> destroyed = new LinkedHashSet<String>();
+        for (int at = 0; at < piece.instructions().size(); at++) {
+            destroyed.addAll(destroyedAt(piece, at));
+        }
+        return destroyed;
+    }
+
+    /**
      * The registers a point's declaration says it destroys.
      *
      * <p>Two kinds of point declare a list and mean the same thing by it — an inline block,
@@ -478,9 +740,10 @@ public final class RegisterAllocator {
      *
      * <p>What got in the way is the answer, not a guess: the values alive at the same time
      * are values the register would have to hold at once, and the registers something
-     * destroys are the ones it cannot live in. The two things a program can do about it are
-     * {@code docs/ir.md} §11.1's, and the message says so rather than leaving the reader to
-     * find out.
+     * destroys are the ones it cannot live in. A home the value could have had is asked why it
+     * did not, so that a program which declared one is told what became of it. The things a
+     * program can do about any of this are {@code docs/ir.md} §11.1's, and the message says so
+     * rather than leaving the reader to find out.
      */
     private CompileError noRegister(String value) {
         List<String> blockers = new ArrayList<String>();
@@ -505,6 +768,7 @@ public final class RegisterAllocator {
                         : "; something it has to live across destroys " + forbidden
                         + ", so say what it really destroys with 'clobbers(...)', or write the "
                         + "value to memory and read it into a name of its own afterwards")
+                        + homeProblem(value)
                         + ": this allocation does not spill, because a program that needs "
                         + "more registers than the machine has is refused rather than given "
                         + "a frame (docs/ir.md §8.2)");
@@ -530,6 +794,291 @@ public final class RegisterAllocator {
         Operand source = instruction.operands().get(1);
         return destination instanceof Operand.Name && source instanceof Operand.Name
                 && ((Operand.Name) destination).name().equals(((Operand.Name) source).name());
+    }
+
+    // --- values that live in a home (§3.1.2) -------------------------------
+
+    /**
+     * A point's instructions, with the values that live in a cell loaded where they are read
+     * and stored where they are written.
+     *
+     * <p>This is the whole cost of a home. A value in memory is not in a register, so every
+     * read of it is a load into a register the allocator picks for that one access, and its one
+     * definition is computed in a register and then stored. The value does not hold a register
+     * for its life — that is what makes the pressure it was causing go away — so the register is
+     * not part of the graph, and what it has to be is free: not one a live value is in, and not
+     * one this point destroys ({@link #scratch}).
+     *
+     * <p>One register per value per point, so that {@code x = eval(x - 1)} with {@code x} in a
+     * cell is a load, the subtraction and a store, all in that one register: the read that is
+     * the value's own definition is not a load, because the computation is already putting the
+     * answer there.
+     */
+    private List<Instruction> withHomes(Selection.Piece piece, int point) {
+        List<Instruction> instructions = piece.instructions();
+        String defined = Effects.writtenVariable(piece.item());
+        String definedValue = defined == null ? null : groupOf(defined);
+
+        Map<String, String> cells = new LinkedHashMap<String, String>();
+        for (Instruction instruction : instructions) {
+            for (String name : mentioned(instruction)) {
+                String value = groupOf(name);
+                String cell = inHome.get(value);
+                if (cell != null) {
+                    cells.put(value, cell);
+                }
+            }
+        }
+        if (cells.isEmpty()) {
+            return instructions;
+        }
+
+        Map<String, String> scratches = new LinkedHashMap<String, String>();
+        Set<String> taken = new LinkedHashSet<String>();
+        for (String value : cells.keySet()) {
+            String register = scratch(value, piece, point, taken);
+            scratches.put(value, register);
+            taken.add(register);
+        }
+
+        int storeAfter = lastWriter(instructions, definedValue, cells);
+        List<Instruction> out = new ArrayList<Instruction>();
+        Set<String> loaded = new LinkedHashSet<String>();
+        for (int at = 0; at < instructions.size(); at++) {
+            Instruction instruction = instructions.get(at);
+            for (String value : readsHere(instruction, definedValue, cells.keySet())) {
+                if (loaded.add(value)) {
+                    out.add(load(instruction.position(), scratches.get(value), cells.get(value)));
+                }
+            }
+            out.add(withScratches(instruction, scratches));
+            if (at == storeAfter) {
+                out.add(store(instruction.position(), cells.get(definedValue),
+                        scratches.get(definedValue)));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The last instruction that writes the value this point defines, or -1 when it defines none
+     * that lives in a cell.
+     *
+     * <p>That instruction is where the store goes and not the end of the point, because the
+     * definition of a value is the last thing the point does to it: a multiply copies its answer
+     * out of {@code ax} at the end, and an addition adds in place.
+     */
+    private int lastWriter(List<Instruction> instructions, String definedValue,
+                           Map<String, String> cells) {
+        if (definedValue == null || !cells.containsKey(definedValue)) {
+            return -1;
+        }
+        int last = -1;
+        for (int at = 0; at < instructions.size(); at++) {
+            if (writes(instructions.get(at), definedValue)) {
+                last = at;
+            }
+        }
+        return last;
+    }
+
+    /**
+     * Whether this instruction writes the value: its first operand is a name of that group.
+     *
+     * <p>Which operand is written is the machine's rule and not this class's — {@code cmp}
+     * answers with the flags, a jump answers with where it went — and every instruction the
+     * selector builds that does write one writes the first. A value being defined is written
+     * and never read by its own definition, which SSA guarantees and which is why the first
+     * operand is enough to recognise it.
+     */
+    private boolean writes(Instruction instruction, String value) {
+        List<Operand> operands = instruction.operands();
+        if (operands.isEmpty() || !(operands.get(0) instanceof Operand.Virtual)) {
+            return false;
+        }
+        return groupOf(((Operand.Virtual) operands.get(0)).name()).equals(value);
+    }
+
+    /**
+     * The values this instruction reads which live in a cell.
+     *
+     * <p>Every mention of one is a read except the first operand of the instruction that writes
+     * it, which is the definition being computed. A value the point itself defines is otherwise
+     * not mentioned by the point at all: in SSA a definition is written once and read afterwards
+     * ({@code docs/ssa.md}).
+     */
+    private List<String> readsHere(Instruction instruction, String definedValue,
+                                  Set<String> cellValues) {
+        List<String> read = new ArrayList<String>();
+        List<Operand> operands = instruction.operands();
+        for (int at = 0; at < operands.size(); at++) {
+            for (String name : names(operands.get(at))) {
+                String value = groupOf(name);
+                if (!cellValues.contains(value)) {
+                    continue;
+                }
+                if (at == 0 && value.equals(definedValue)) {
+                    continue;
+                }
+                if (!read.contains(value)) {
+                    read.add(value);
+                }
+            }
+        }
+        return read;
+    }
+
+    /**
+     * The register a value in a cell is moved through at this point.
+     *
+     * <p>It has to be a register no value alive here is in, because the value in the cell is
+     * not the only thing that needs registers, and a register a point destroys, because a
+     * sequence the target declared may need {@code ax} or {@code dx} for itself. Two values in
+     * cells at one point get two registers, since they are both live across the instruction
+     * that computes with them.
+     *
+     * <p>Which one it is comes from the target's own order, so it is a property of the program
+     * and of nothing else. A value used as an address is moved through an address register, the
+     * same rule a value in a register follows.
+     */
+    private String scratch(String value, Selection.Piece piece, int point, Set<String> taken) {
+        Set<String> busy = registersInUse(point);
+        busy.addAll(destroyed(piece));
+        busy.addAll(taken);
+        List<String> allowed = addresses.contains(value) ? target.addressRegisters()
+                : target.valueRegisters();
+        for (String candidate : allowed) {
+            if (!busy.contains(candidate)) {
+                return candidate;
+            }
+        }
+        throw noScratch(value, piece);
+    }
+
+    /** The instruction with every value that lives in a cell written as its scratch register. */
+    private Instruction withScratches(Instruction instruction, Map<String, String> scratches) {
+        List<Operand> operands = new ArrayList<Operand>();
+        for (Operand operand : instruction.operands()) {
+            operands.add(withScratches(operand, scratches));
+        }
+        return new Instruction(instruction.position(), instruction.mnemonic(), operands);
+    }
+
+    private Operand withScratches(Operand operand, Map<String, String> scratches) {
+        if (operand instanceof Operand.Virtual) {
+            String register = scratches.get(groupOf(((Operand.Virtual) operand).name()));
+            return register == null ? operand : new Operand.Name(operand.position(), register);
+        }
+        if (operand instanceof Operand.Memory) {
+            Operand.Memory memory = (Operand.Memory) operand;
+            List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
+            for (Operand.Memory.Atom atom : memory.atoms()) {
+                atoms.add(withScratches(atom, scratches));
+            }
+            return new Operand.Memory(memory.position(), memory.size(), memory.segment(), atoms);
+        }
+        return operand;
+    }
+
+    private Operand.Memory.Atom withScratches(Operand.Memory.Atom atom,
+                                             Map<String, String> scratches) {
+        if (!atom.isVirtual()) {
+            return atom;
+        }
+        String register = scratches.get(groupOf(atom.name()));
+        if (register == null) {
+            return atom;
+        }
+        Operand.Memory.Atom resolved = Operand.Memory.Atom.ofName(register);
+        return atom.isSubtracted() ? resolved.subtracted() : resolved;
+    }
+
+    /**
+     * A load of a cell into a register, and a store of a register into a cell.
+     *
+     * <p>Both are the target's: it declares what a load and a store are
+     * ({@link Target#loadForms}, {@link Target#storeForms}), and this takes the one it declares.
+     * Choosing between several would be the smallest-form question selection answers, and this
+     * machine has one of each.
+     */
+    private Instruction load(SourcePos where, String register, String cell) {
+        return access(target.loadForms(), "load", where,
+                pair(new Operand.Name(where, register), cell(where, cell)));
+    }
+
+    private Instruction store(SourcePos where, String cell, String register) {
+        return access(target.storeForms(), "store", where,
+                pair(cell(where, cell), new Operand.Name(where, register)));
+    }
+
+    private static Instruction access(List<Form> forms, String what, SourcePos where,
+                                      List<Operand> operands) {
+        if (forms.isEmpty()) {
+            throw new CompileError(where,
+                    "this target declares no form for a " + what + ", so a value cannot be kept "
+                            + "in memory on it (docs/ir.md §3.1.2)");
+        }
+        return new Instruction(where, forms.get(0).mnemonic(), operands);
+    }
+
+    /** The bytes of a home, as the address an access is made through. */
+    private static Operand.Memory cell(SourcePos where, String cell) {
+        List<Operand.Memory.Atom> atoms = new ArrayList<Operand.Memory.Atom>();
+        atoms.add(Operand.Memory.Atom.ofName(cell));
+        return new Operand.Memory(where, Size.WORD, null, atoms);
+    }
+
+    private static List<Operand> pair(Operand first, Operand second) {
+        List<Operand> operands = new ArrayList<Operand>();
+        operands.add(first);
+        operands.add(second);
+        return operands;
+    }
+
+    /**
+     * Why a value could not be moved through a register at this point.
+     *
+     * <p>The home is there so that the value does not need a register for its whole life, and
+     * this is the moment it still needs one. Every register is either holding a value that is
+     * alive here or destroyed here, so there is nowhere to put the value while it is being read
+     * or written — which is a refusal and not a silent use of somewhere else
+     * ({@code docs/ir.md} §8.2).
+     */
+    private CompileError noScratch(String value, Selection.Piece piece) {
+        return new CompileError(piece.position(),
+                "there is no register free to move '" + selection.variableOf(value) + "' between "
+                        + "its home '" + inHome.get(value) + "' and the machine here: every "
+                        + "register is either holding a value that is alive at this point or "
+                        + "destroyed by it (docs/ir.md §3.1.2, §8.2)");
+    }
+
+    /**
+     * What became of the home this value was given, when it could not have it.
+     *
+     * <p>A program that declared a home and is then refused deserves to be told which of the
+     * three rules said no, because each of them is something the program can change: the width of
+     * the value, a store of the program's to those bytes while the value is alive, or another
+     * value alive at the same time whose home those bytes are.
+     */
+    private String homeProblem(String value) {
+        String cell = groupHomes.get(value);
+        if (cell == null) {
+            return "";
+        }
+        if (!wholeRegister(value)) {
+            return "; its home '" + cell + "' cannot hold it either, because a value is moved in "
+                    + "and out of a home one whole register at a time and this one is not that "
+                    + "wide (docs/ir.md §3.1.2, §3.4)";
+        }
+        if (keepOutHome(value).contains(cell)) {
+            return "; its home '" + cell + "' is written by the program while the value is alive, "
+                    + "so the value cannot be kept there (docs/ir.md §3.1.2)";
+        }
+        if (cellsInUse(value).contains(cell)) {
+            return "; its home '" + cell + "' is the home of a value alive at the same time, and a "
+                    + "cell holds one value at a time (docs/ir.md §3.1.2)";
+        }
+        return "";
     }
 
     // --- writing the registers in ------------------------------------------

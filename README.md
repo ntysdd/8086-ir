@@ -340,14 +340,22 @@ Working today:
   is a symbol, because in that language a bare name spelled like a register is the
   register. An assembler of our own is still planned and still not written, but
   nothing waits on it.
+* **A home in memory for a variable that will not fit in a register**: `var left: u16 in
+  tries` gives the value bytes to wait in, and the allocator uses them only when no
+  register is left — a value that fits in one never touches them, so a home costs a
+  program that does not need it nothing. A value in a home is loaded where it is read
+  and stored where it is written, through a register picked for that one access, which
+  is how a value survives an `int` that destroys every register
+  ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
 Not built yet, and refused with a reason rather than guessed at: conversions and
 byte accesses (there are no sub-registers, so half a register has no name), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
-[`docs/ir.md`](docs/ir.md) §11. A variable's **home** in memory is declared and
-checked but not used yet, and the mode that keeps a home current, `writethrough`, is
-refused until every definition writes those bytes — a wrong answer nobody is told
-about is what a refusal replaces ([`docs/ir.md`](docs/ir.md) §3.1.2). Three things the
+[`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
+refused until every definition writes those bytes — a wrong answer nobody is told about
+is what a refusal replaces — and a variable that is not the width of a register cannot
+have a home used for it, because moving a value in and out of one is a whole register's
+worth of access ([`docs/ir.md`](docs/ir.md) §3.1.2). Three things the
 pipeline names are also absent:
 materialising a flag value that has to survive an instruction defining those flags,
 promoting memory to values, and any target-specific pass. And two deliberate

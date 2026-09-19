@@ -90,4 +90,22 @@ public final class MemoryOperand {
     public long displacement() {
         return displacement;
     }
+
+    /**
+     * The label this operand addresses exactly, or null when it addresses something else.
+     *
+     * <p><b>Exactly</b> is the whole of it: a bare name with nothing added to it. A
+     * segment override is a place in whichever segment that register points at, and a
+     * displacement is a place past the start of the bytes, so neither is the bytes the
+     * label names. Two rules in {@code docs/ir.md} §3.1.2 are written about those bytes —
+     * a save into a shared cell is warned about at the write, and the allocator may not
+     * keep a value in a cell the program writes — and they share this answer rather than
+     * each having their own idea of what a store to a cell looks like.
+     */
+    public String addressedLabel() {
+        if (segment != null || base == null || displacement != 0) {
+            return null;
+        }
+        return base;
+    }
 }

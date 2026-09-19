@@ -61,6 +61,18 @@ public final class CompilerTest {
         suite.add("Compiler leaves a dead value in a register an inline block destroys",
                 CompilerTest::ignoresClobbersOfDeadValues);
         suite.add("Compiler refuses rather than spilling", CompilerTest::refusesToSpill);
+        suite.add("Compiler keeps a value in its home across a call",
+                CompilerTest::keepsAValueInItsHome);
+        suite.add("Compiler refuses that value when it has no home",
+                CompilerTest::refusesAValueWithNoHome);
+        suite.add("Compiler leaves a home alone when the value fits in a register",
+                CompilerTest::leavesAnUnneededHomeAlone);
+        suite.add("Compiler keeps a value out of a cell the program writes",
+                CompilerTest::refusesToKeepAValueWhereTheProgramWrites);
+        suite.add("Compiler refuses a value no register is free to move",
+                CompilerTest::refusesWhenNoRegisterIsFreeToMoveAValue);
+        suite.add("Compiler refuses a byte value a whole register cannot hold",
+                CompilerTest::refusesAByteValueItsHomeCannotHold);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
         suite.add("Compiler reads through a pointer and writes through a label",
                 CompilerTest::loadsAndStores);
@@ -544,6 +556,197 @@ public final class CompilerTest {
                 refused.getMessage());
         Assert.assertTrue(refused.getMessage().contains("docs/ir.md"),
                 "and points at what that rule means: " + refused.getMessage());
+    }
+
+    // --- homes (docs/ir.md §3.1.2) -----------------------------------------
+
+    /**
+     * A value that has to live across an interrupt which destroys every register, with or
+     * without the bytes its declaration could keep it in.
+     *
+     * <p>The value comes from memory so that nothing can fold it away, and every register is
+     * destroyed by the call, so there is no register it can wait in: without a home this is
+     * {@link #refusesToSpill}'s refusal and nothing else.
+     */
+    private static String acrossACall(String home) {
+        return "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$tries: pad 2\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $left: u16" + home + "\n"
+                + "    $left = word [0x40]\n"
+                + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                + "    $left = eval($left - 1)\n"
+                + "    word [0x42] = $left\n"
+                + "    ret\n";
+    }
+
+    /**
+     * What a home is for: the value waits in the bytes the program named while the call that
+     * destroys every register happens, and comes back afterwards.
+     */
+    private static void keepsAValueInItsHome() {
+        String assembly = Compiler.compile("across.ir", acrossACall(" in $tries"));
+        int stored = assembly.indexOf("mov word [$tries], ax");
+        int called = assembly.indexOf("int 0x13");
+        int loaded = assembly.indexOf("mov ax, word [$tries]");
+        Assert.assertTrue(stored >= 0, "the value is stored into its home: " + assembly);
+        Assert.assertTrue(loaded >= 0, "and read back out of it: " + assembly);
+        Assert.assertTrue(called > stored && called < loaded,
+                "with the call in between, which is the whole point: " + assembly);
+        Assert.assertTrue(assembly.contains("mov word [0x42], ax"),
+                "and the program's own use reads the value that came back: " + assembly);
+    }
+
+    /**
+     * The other half of that: the same program without a home is refused, and the refusal is
+     * about registers rather than about memory the compiler made up ({@code docs/ir.md} §8.2).
+     */
+    private static void refusesAValueWithNoHome() {
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("across.ir", acrossACall("")));
+        Assert.assertTrue(refused.getMessage().contains("no register left for 'left'"),
+                refused.getMessage());
+    }
+
+    /** A value in a register where the pressure is low: the same program, with a home on it. */
+    private static String withinOneRegister(String home) {
+        return "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$tries: pad 2\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $left: u16" + home + "\n"
+                + "    $left = word [0x40]\n"
+                + "    $left = eval($left + 2)\n"
+                + "    word [0x42] = $left\n"
+                + "    ret\n";
+    }
+
+    /**
+     * A value that fits in a register stays in one and its home is never touched, so a program
+     * that declares one and turns out not to need it has paid nothing: the two assemblies here
+     * are the same program, and the entry point onwards is the same text.
+     */
+    private static void leavesAnUnneededHomeAlone() {
+        String plain = body(Compiler.compile("plain.ir", withinOneRegister("")));
+        String homed = body(Compiler.compile("homed.ir", withinOneRegister(" in $tries")));
+        Assert.assertEquals(plain, homed);
+        Assert.assertFalse(homed.contains("$tries"),
+                "and the bytes are not written: " + homed);
+    }
+
+    /** Everything from the entry point on: the program, without the data in front of it. */
+    private static String body(String assembly) {
+        int at = assembly.indexOf("$main:");
+        Assert.assertTrue(at >= 0, "the entry point is in the assembly: " + assembly);
+        return assembly.substring(at);
+    }
+
+    /**
+     * The value has a home, and the program writes those same bytes while the value is alive.
+     * Then the home cannot hold it — the bytes would not still be its value — and the value has
+     * to be in a register across the write or the program is refused. Never a value quietly lost
+     * ({@code docs/ir.md} §3.1.2).
+     */
+    private static String acrossACallWritingTheHome(boolean writesTheCell) {
+        return "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$cell: pad 2\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $left: u16 in $cell\n"
+                + "    $left = word [0x40]\n"
+                + (writesTheCell ? "    word [$cell] = 7\n" : "")
+                + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                + "    word [0x42] = $left\n"
+                + "    ret\n";
+    }
+
+    private static void refusesToKeepAValueWhereTheProgramWrites() {
+        String assembly = Compiler.compile("kept.ir", acrossACallWritingTheHome(false));
+        Assert.assertTrue(assembly.contains("mov word [$cell], ax"),
+                "nothing else is in the way, so the value waits in the cell: " + assembly);
+
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("written.ir", acrossACallWritingTheHome(true)));
+        Assert.assertTrue(
+                refused.getMessage().contains("its home 'cell' is written by the program"),
+                refused.getMessage());
+    }
+
+    /**
+     * Seven values alive at one point, one of them in a home. Six hold the six registers, so
+     * there is no register left to move the seventh between its cell and the machine — and
+     * without one, nothing can read or write the cell at all. A refusal, and the message says
+     * which kind ({@code docs/ir.md} §8.2).
+     *
+     * <p>The flags are what keeps {@code eval} from becoming {@code expr}: a value computed with
+     * {@code expr} is put into a register of its own first, and then this would be a program
+     * about temporaries rather than about homes.
+     */
+    private static void refusesWhenNoRegisterIsFreeToMoveAValue() {
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n"
+                + "$cell: pad 2\n\n$main:\n");
+        for (char name = 'a'; name <= 'f'; name++) {
+            source.append("    var ").append(name).append(": u16\n");
+        }
+        source.append("    var h: u16 in $cell\n");
+        for (char name = 'a'; name <= 'f'; name++) {
+            source.append("    ").append(name).append(" = word [0x").append(name - 'a' + 40)
+                    .append("]\n");
+        }
+        source.append("    h = word [0x4c]\n")
+                .append("    h = eval(h - a)\n")
+                .append("    jz done\n")
+                .append("done:\n");
+        for (char name = 'a'; name <= 'f'; name++) {
+            source.append("    word [0x").append(name - 'a' + 0x4e).append("] = ")
+                    .append(name).append("\n");
+        }
+        source.append("    word [0x60] = h\n    ret\n");
+
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", source.toString()));
+        Assert.assertTrue(refused.getMessage().contains("no register free to move"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("its home 'cell'"),
+                "and the refusal names the home it could not use: " + refused.getMessage());
+    }
+
+    /**
+     * A byte value and a home: the home cannot hold it, because a value is moved in and out of
+     * one a whole register at a time and half a register has no name here. With every register
+     * destroyed by the call, there is nowhere for the value to be, and the refusal says which of
+     * the two rules it was ({@code docs/ir.md} §3.1.2, §3.4).
+     *
+     * <p>The comparison is what keeps the byte alive: nothing else observes a byte value yet.
+     */
+    private static void refusesAByteValueItsHomeCannotHold() {
+        String source = "target 8086\norg 0x100\nentry $main\n\n"
+                + "$cell: pad 2\n\n$main:\n"
+                + "    var h: u8 in $cell\n"
+                + "    var x: u8\n"
+                + "    h = 3\n"
+                + "    x = 4\n"
+                + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                + "    cmp h, x\n"
+                + "    jz done\n"
+                + "done:\n"
+                + "    ret\n";
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("t.ir", source));
+        Assert.assertTrue(refused.getMessage().contains("cannot hold it either"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("one whole register at a time"),
+                "and says why: " + refused.getMessage());
     }
 
     /**

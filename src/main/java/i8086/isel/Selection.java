@@ -3,6 +3,7 @@ package i8086.isel;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.ir.Item;
+import i8086.ir.Type;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,6 +58,8 @@ public final class Selection {
     private final List<Piece> pieces;
     private final List<List<String>> registerGroups;
     private final Map<String, String> variables;
+    private final Map<String, String> homes;
+    private final Map<String, Type> types;
 
     public Selection(List<Piece> pieces) {
         this(pieces, Collections.<List<String>>emptyList(),
@@ -65,6 +68,13 @@ public final class Selection {
 
     public Selection(List<Piece> pieces, List<List<String>> registerGroups,
                      Map<String, String> variables) {
+        this(pieces, registerGroups, variables, Collections.<String, String>emptyMap(),
+                Collections.<String, Type>emptyMap());
+    }
+
+    public Selection(List<Piece> pieces, List<List<String>> registerGroups,
+                     Map<String, String> variables, Map<String, String> homes,
+                     Map<String, Type> types) {
         this.pieces = Collections.unmodifiableList(new ArrayList<Piece>(pieces));
         List<List<String>> groups = new ArrayList<List<String>>();
         for (List<String> group : registerGroups) {
@@ -72,6 +82,8 @@ public final class Selection {
         }
         this.registerGroups = Collections.unmodifiableList(groups);
         this.variables = Collections.unmodifiableMap(new LinkedHashMap<String, String>(variables));
+        this.homes = Collections.unmodifiableMap(new LinkedHashMap<String, String>(homes));
+        this.types = Collections.unmodifiableMap(new LinkedHashMap<String, Type>(types));
     }
 
     public List<Piece> pieces() {
@@ -105,6 +117,30 @@ public final class Selection {
     public String variableOf(String name) {
         String variable = variables.get(name);
         return variable == null ? name : variable;
+    }
+
+    /**
+     * The bytes a name may live in, or null when it has no home.
+     *
+     * <p>A home is the program's answer to "where does this value go when the registers
+     * cannot hold it" ({@code docs/ir.md} §3.1.2), and it is a fact about the stream like
+     * {@link #registerGroups}: the selector read the declarations, and the allocator is
+     * the one that acts on it. It travels as a version-to-cell table for the same reason
+     * the variable table does: a version is what the instructions name.
+     */
+    public String homeOf(String name) {
+        return homes.get(name);
+    }
+
+    /**
+     * The type of a value, or null when the form has none for it.
+     *
+     * <p>Which is the declared type of the variable it is a version of, and it travels for
+     * the same reason the other two tables do: the allocator decides what a value can live
+     * in, and a home holds a value that is one register wide ({@code docs/ir.md} §3.1.2).
+     */
+    public Type typeOf(String name) {
+        return types.get(name);
     }
 
     /** Every instruction, in order, with the pieces flattened away. */

@@ -440,7 +440,7 @@ public final class IrVerifier {
             if (!(place instanceof Place.Memory)) {
                 continue;
             }
-            String cell = cellWritten(((Place.Memory) place).operand());
+            String cell = ((Place.Memory) place).operand().addressedLabel();
             List<Item.Var> declared = cell == null ? null : cells.get(cell);
             if (declared != null && declared.size() > 1) {
                 warnings.add(item.position(),
@@ -451,24 +451,6 @@ public final class IrVerifier {
                                 + "keep them with 'writethrough' (docs/ir.md §3.1.2)");
             }
         }
-    }
-
-    /**
-     * The cell a store writes, or null when the store is not written as one.
-     *
-     * <p>Only a store written as {@code [cell]} counts, and the reason is that nothing
-     * here knows what a segment register holds: {@code [cell]} is the image's own bytes by
-     * the reading the whole surface takes of a label in an address, while {@code es:[cell]}
-     * is a place in whichever segment {@code es} points at, which is a different cell as
-     * far as this check can tell. An offset — {@code [cell + 2]} — is inside the cell
-     * rather than the cell, and nothing here reasons about overlap
-     * ({@code docs/ir.md} §3.1.2, §3.4).
-     */
-    private static String cellWritten(MemoryOperand operand) {
-        if (operand.segment() != null || operand.base() == null || operand.displacement() != 0) {
-            return null;
-        }
-        return operand.base();
     }
 
     /** The variables that declared a cell, in declaration order, as the warning names them. */

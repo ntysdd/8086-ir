@@ -215,24 +215,17 @@ produces is described.
   implementation detail, because it would refuse programs this compiler accepts
   today, and precision may only ever grow (§4.3).
 
-### 3.1.2 A variable may be given a home in memory — [proposed; declared and checked, not yet honoured]
+### 3.1.2 A variable may be given a home in memory — [proposed; the default mode is built]
 
 ```
 tries: pad 2
-dap:   pad 16
 
 main:
-    var left: u16 in tries               ; a home for left: these bytes, if it needs
-    var packet: u16 in dap writethrough    ; and one that is kept current
-    left = 4
-again:
-    int 0x13                             ; a handler this compiler has never seen
-    jnc done
+    var left: u16 in tries        ; a home for left: these bytes, if it needs them
+    left = word [0x40]
+    int 0x13                      ; a handler this compiler has never seen
     left = eval(left - 1)
-    cmp left, 0
-    jne again
-done:
-    packet = 0x10
+    word [0x42] = left
     ret
 ```
 
@@ -410,16 +403,19 @@ not before SSA as a question about operand shapes (*README*, step 7). A value gi
 home is one whose reads become loads and whose definition is followed by a store, so
 `left = eval(left - 1)` is a load, a subtraction and a store when `left` is in memory
 and one instruction when it is not. Whether the machine can do part of that in place
-(`sub word [tries], 1` is one instruction on this one) is the target's business and
-not the surface's.
+(`sub word [tries], 1` is one instruction on this one) is the target's business and not
+the surface's; what this allocator does is the load, the operation in a register and the
+store, every time.
 
 A home is a resource like a register, and it is handed out the same way: the value
 it holds may not be alive at the same time as another value that is given it, and the
-allocator colours a graph to decide (*README*, step 7). So the number of values that
-end up in memory is the fewest the program allows — a home is one more colour, and
-the colouring is optimal. What is *not* optimal is the cost: which of several values
-goes to memory when only some of them fit is a question about how often each is read,
-and that is a heuristic.
+allocator colours a graph to decide (*README*, step 7). A value is given its home only
+when no register is left for it, which is what keeps the bytes of a program that does not
+need them untouched — and when that leaves a value with no home of its own, the allocator
+sends a value it interferes with to its home and colours the graph again, so the number
+of values that end up in memory is a greedy answer rather than a provably smallest one.
+What is *not* optimal is the cost: which of several values goes to memory when only some
+of them fit is a question about how often each is read, and that is a heuristic.
 
 The accesses the allocator writes have to stay distinguishable from an authored
 `[0x40] = x` — not in the syntax, which says nothing about it, but for the pass that
@@ -458,17 +454,19 @@ statement is still the port instruction, still refused with its reason (§11); t
 roles never stand in the same place, which is the argument the whole surface rests on
 (§3.1).
 
-**How much of this is built.** The declaration is read and the static rules above are
-checked: a home names bytes that are wide enough, a cell one variable keeps current is
-that variable's alone, and a store into a cell more than one variable declares is warned
-about. What is not built is *using* a home, and the two modes are not in the same
-position about it. `in place` is accepted while the allocator ignores it, because the
-promise was conditional — the allocator decides — and never touching the bytes costs the
-program nothing it was promised: a value that does not fit in a register is refused
-exactly as it was before homes existed. `writethrough` is **refused** until every
+**How much of this is built.** The declaration is read, the static rules above are
+checked, a store into a cell more than one variable declares is warned about at the
+store, and the default mode is honoured: a value with no register left is given its home,
+and every read of it is then a load and its one definition is followed by a store, through
+a register picked for that one access. Two things stop a home from being used, and both
+are refusals rather than guesses. A home the program writes while the value is alive
+cannot hold the value, which is the rule two paragraphs above. And moving a value in and
+out of a home needs a register at the point it is read or written, so a program whose
+registers are all taken there is refused. `writethrough` is still **refused** until every
 definition writes the cell, because compiling it as if the bytes were never written is a
 wrong answer the program is not told about, and a hard error is what this compiler gives
-instead.
+instead. A value that is not the width of a register cannot use a home either: the access
+is one whole register wide, and half of one has no name here (§3.4).
 
 ### 3.2 Widths and signedness — [decided]
 
