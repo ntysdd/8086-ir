@@ -106,8 +106,9 @@ frame is invisible at this level — unless the declaration says where the varia
 lives, and then it is memory and the answer is not the allocator's to give
 (§3.1.2).
 
-**Nothing is reserved.** A word means what its position says it means, and every
-word the surface knows can also be an author's name:
+**Almost nothing is reserved.** A word means what its position says it means, and
+every word the surface knows can also be an author's name — with one exception, a
+leading dot, which is how the sugar is spelled (§7.2):
 
 ```
 var adc: i16        ; an operator's spelling, and a variable
@@ -125,9 +126,19 @@ the parser: **values never stand next to each other**. There is no reading of
 it is an operator, so a word's role is decided by what stands beside it, and one
 token of lookahead settles the few places where a word could begin two things:
 `eval` and `expr` are the operation only in front of `(`; a size word is a size
-only when a value follows it; a dot word is the sugar only where the line is
-neither an assignment nor a label; and `in` gives a variable a home only after the
-type of its declaration (§3.1.2).
+only when a value follows it; and `in` gives a variable a home only after the
+type of its declaration (§3.1.2). The dot words are not on this list because the
+dot settles them: `.if` is the sugar and cannot be a name (§7.2).
+
+**The dot is the one exception, and it is worth its cost.** `.if`, `.elseif`,
+`.else`, `.endif`, `.while` and `.endw` are the surface's words, and the dot in
+front of them is what says so; a name may not begin with one in any position, so a
+dot word always means the sugar and a reader never has to count back to see whether
+one is a name. What that buys beyond the reading is a guarantee about the *output*:
+an assembler reads a label beginning with a dot as a local label of its own
+({@code docs/asm.md} §3), and no program can now make this compiler emit one. The
+only dot that is not the sugar's is the compiler's `..@` namespace (§3.1.1), which
+the printer writes for the sugar's own labels and which has to stay readable.
 
 The price is paid on the way out rather than on the way in. The printer writes the
 canonical form, and the canonical form of **every** name the author chose carries a
@@ -182,7 +193,8 @@ The two prefixes are worth stating plainly, and the list that goes with them:
 So a program never fails to compile because of a name it chose, and a reader of
 canonical text never has to work out which of two things a word is. The audit that
 establishes the first half is a test — every word the surface knows, used as a name
-in every position a name can stand in.
+in every position a name can stand in. The sugar's dot words are not in it, because
+they are the one thing that cannot be a name (§3.1).
 
 **Data labels are memory.** `msg:` denotes an address — a near pointer constant.
 

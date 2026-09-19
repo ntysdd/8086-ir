@@ -244,10 +244,9 @@ public final class IrParser {
             padding.add(parsePad(next(), null));
             return padding;
         }
-        if (first.is(TokenKind.IDENT) && !first.forced() && !named
-                && first.name().startsWith(".")) {
-            throw new CompileError(first.position(),
-                    "'" + first.text() + "' is not a directive of this surface");
+        if (first.is(TokenKind.IDENT) && !first.forced()
+                && Vocabulary.theSugarsDot(first.name())) {
+            throw new CompileError(first.position(), dotProblem(first));
         }
 
         List<Item> one = new ArrayList<Item>();
@@ -748,6 +747,12 @@ public final class IrParser {
         Token keyword = expectName("var");
         Token name = expect(TokenKind.IDENT, "a variable name");
         requireNameable(name);
+        // A label may be written with a name the compiler generated — the printer writes
+        // them and its output has to be readable again (AGENTS.md, invariant 5) — but a
+        // variable may not: a variable is the author's, and that namespace is not.
+        require(!Vocabulary.generated(name.name()), name.position(),
+                "a name beginning with '..@' is one the compiler generated, so it cannot be "
+                        + "declared; the compiler's labels are its own (docs/ir.md §7.2)");
         expectPunct(":");
         Token typeWord = expect(TokenKind.IDENT, "a type after ':'");
         Type type = Type.named(typeWord.name());
@@ -758,17 +763,27 @@ public final class IrParser {
     }
 
     /**
-     * Refuses a name that is only spelled like a name, which is now exactly one
-     * thing: a name the compiler generated (§7.2).
+     * A name the author writes for something they own.
      *
-     * <p>Every other word can be an author's name, because where a word stands
-     * decides what it is — and a name the compiler made up is not a word at all, it
-     * is the compiler's own bookkeeping showing through.
+     * <p>One thing is not theirs: a leading dot is the sugar's — {@code .if} and its
+     * neighbours are the surface's words, and the dot is what says so — so no name may
+     * begin with one, which is also what keeps the emitted assembly free of the local
+     * labels an assembler reads a leading dot as ({@code docs/asm.md} §3).
+     *
+     * <p>Every other word can be an author's name, because where a word stands decides
+     * what it is. A name the compiler generated is a second refusal, and it is asked at
+     * the place a variable is declared, because a label has to be able to carry one:
+     * the printer writes them and its output has to be readable again (§7.2).
      */
     private void requireNameable(Token name) {
-        require(!Vocabulary.generated(name.name()), name.position(),
-                "a name beginning with '..@' is one the compiler generated, so it cannot be "
-                        + "declared; the compiler's labels are its own (docs/ir.md §7.2)");
+        require(!Vocabulary.theSugarsDot(name.name()), name.position(), dotProblem(name));
+    }
+
+    /** Why a name may not begin with a dot, in the form a reader can act on. */
+    private static String dotProblem(Token name) {
+        return "'" + name.text() + "' begins with '.', which is how this surface spells the "
+                + "sugar (.if, .elseif, .else, .endif, .while, .endw) and nothing else: a name "
+                + "may not begin with a dot (docs/ir.md §3.1)";
     }
 
     private Item parseAssignment() {
@@ -1278,6 +1293,7 @@ public final class IrParser {
                 && tokenAt(1).is(TokenKind.PUNCT) && tokenAt(1).text().equals(":")) {
             next();
             next();
+            requireNameable(first);
             require(!target.isRegister(first.name()) && !target.isSegmentRegister(first.name()),
                     first.position(),
                     "'" + first.text() + "' is a register, so it cannot label anything inside a "

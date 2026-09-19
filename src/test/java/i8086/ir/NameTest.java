@@ -41,8 +41,8 @@ public final class NameTest {
         suite.add("A name the compiler generated cannot be declared",
                 NameTest::refusesGeneratedNames);
         suite.add("The sugar still reads its own words", NameTest::sugarStillWorks);
-        suite.add("A dot word can be a name where the sugar is not reading",
-                NameTest::dotWordsAreNames);
+        suite.add("A dot name is the sugar's, and is refused",
+                NameTest::dotNamesAreRefused);
     }
 
     private static Module parse(String body) {
@@ -250,30 +250,30 @@ public final class NameTest {
                         + "    .endw\n"));
     }
 
-    private static void dotWordsAreNames() {
-        // A dot word is a name wherever the sugar is not looking for a shape. Outside
-        // a sugar block, '.if = 1' is an assignment; inside one, the marker is what
-        // says the same thing, because there the closing word is what is being read.
-        Assert.assertEquals("    var $.if: i16\n"
-                        + "    $.if = 1\n",
-                became("    var .if: i16\n"
-                        + "    .if = 1\n"));
-        Assert.assertEquals("    var $n: u16\n"
-                        + "    var $.endif: i16\n"
-                        + "    jmp ..@lbl1\n"
-                        + "\n"
-                        + "..@lbl0:\n"
-                        + "    $.endif = 1\n"
-                        + "    $n = eval($n - 1)\n"
-                        + "\n"
-                        + "..@lbl1:\n"
-                        + "    cmp $n, 0\n"
-                        + "    ja ..@lbl0\n",
-                became("    var n: u16\n"
-                        + "    var .endif: i16\n"
-                        + "    .while n > 0\n"
-                        + "        $.endif = 1\n"
-                        + "        n = eval(n - 1)\n"
-                        + "    .endw\n"));
+    /**
+     * The one thing that is not a name: a leading dot, which is how the sugar is spelled
+     * ({@code docs/ir.md} §3.1).
+     *
+     * <p>It is refused in every position, because a name only has to be written once to
+     * exist: a label, a data label, a variable, and a label inside a block are the four
+     * ways one comes into being. What it buys is that a dot word always means the sugar —
+     * and that the emitted assembly can never contain the local labels an assembler
+     * reads a leading dot as ({@code docs/asm.md} §3).
+     */
+    private static void dotNamesAreRefused() {
+        String[] refused = new String[] {
+            "    .loop:\n    ret\n",
+            "    var .x: i16\n",
+            "    .x = 1\n",
+            ".data: db 1\n",
+            "    asm clobbers() {\n    .retry:\n    }\n",
+        };
+        for (String body : refused) {
+            CompileError problem = Assert.assertThrows(CompileError.class, () -> parse(body));
+            Assert.assertTrue(problem.getMessage().contains("dot"), problem.getMessage());
+        }
+        // And the compiler's own namespace is not that dot: the printer writes labels
+        // there and its output has to be readable again (AGENTS.md, invariant 5).
+        parse("    jmp ..@x\n\n..@x:\n    ret\n");
     }
 }

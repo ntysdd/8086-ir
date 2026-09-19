@@ -92,14 +92,30 @@ public final class Vocabulary {
 
     /**
      * Whether a spelling could be a name at all: a symbol like {@code -} is an
-     * operator and never a name, so there is nothing for the audit to try it as.
+     * operator, and a name beginning with a dot is the sugar's ({@link #theSugarsDot}),
+     * so neither is something the audit can try as a name.
      */
     private static boolean isWordShape(String name) {
         if (name.isEmpty()) {
             return false;
         }
         char first = name.charAt(0);
-        return first == '.' || first == '_' || Character.isLetter(first);
+        return first == '_' || Character.isLetter(first);
+    }
+
+    /**
+     * Whether this name begins with the dot that only the sugar is spelled with
+     * ({@code docs/ir.md} §3.1).
+     *
+     * <p>{@code .if}, {@code .elseif}, {@code .else}, {@code .endif}, {@code .while} and
+     * {@code .endw} are the surface's own words, and a dot in front of them is what says
+     * so. No name the author writes may begin that way, which is what makes a dot word
+     * mean the sugar wherever it stands, and what keeps the assembly text free of the
+     * local labels an assembler reads a leading dot as ({@code docs/asm.md} §3). The
+     * compiler's own {@code ..@} namespace is not one of these ({@link #generated}).
+     */
+    public static boolean theSugarsDot(String name) {
+        return name.startsWith(".") && !generated(name);
     }
 
     /**

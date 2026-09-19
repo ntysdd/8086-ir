@@ -121,6 +121,12 @@ block is a straight sequence of instructions.
   without the `@` is refused rather than read as an ordinary name, because in an
   assembler that reads this text `..lbl0` is a local label and means something
   else again.
+* **No name here begins with a dot**, except the compiler's own `..@` namespace. The
+  IR surface refuses a dot at the front of a name (`docs/ir.md` §3.1), so a program
+  cannot make this emitter write one, and that is what keeps the output free of the
+  local labels an assembler reads a leading dot as — a label `.loop` would be scoped
+  to whatever non-local label came before it rather than being the place the module
+  meant.
 * **The emitter marks every name that is the author's**, and the marker is what makes
   the output unambiguous rather than decoration: this text has registers, so a bare
   name spelled like one *is* the register (`mov ax, 1`), and a label of that name is

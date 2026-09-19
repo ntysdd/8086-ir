@@ -47,6 +47,8 @@ public final class IrParserTest {
                 IrParserTest::roundTripsVariablesAndAssignments);
         suite.add("Ir printer reproduces canonical input exactly", IrParserTest::reproducesCanonical);
         suite.add("Ir printer reaches a fixed point on loose input", IrParserTest::reachesFixedPoint);
+        suite.add("A program with sugar prints labels it can read back",
+                IrParserTest::roundTripsGeneratedLabels);
         suite.add("Ir printer is deterministic", IrParserTest::printsDeterministically);
         suite.add("Ir parser refuses an unknown target", IrParserTest::refusesUnknownTarget);
         suite.add("Ir parser refuses a missing header word", IrParserTest::refusesMissingHeader);
