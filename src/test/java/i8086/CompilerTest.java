@@ -44,6 +44,8 @@ public final class CompilerTest {
                 CompilerTest::foldsWhatNothingReads);
         suite.add("Compiler keeps the example loop in registers",
                 CompilerTest::keepsTheExampleLoopInRegisters);
+        suite.add("Compiler keeps the copies around an operation with a form",
+                CompilerTest::keepsTheCopiesAroundAnOperationWithAForm);
         suite.add("Compiler keeps a temporary for a tree on the right",
                 CompilerTest::keepsATemporaryForATreeOnTheRight);
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
@@ -237,6 +239,7 @@ public final class CompilerTest {
      * the loop — {@code s}, {@code d}, {@code a} and {@code b} — and {@code imul} and {@code idiv} work
      * in {@code ax} and {@code dx} and nowhere else, which is six; the division reads {@code b} where
      * it already is instead of copying it somewhere, which is the register that makes the count work.
+     * The multiply and the divide are one chain in {@code ax}, so nothing is copied between them.
      * {@code inc} appears where the flags were claimed and given up again, and {@code test si, si} is
      * the comparison with zero that does not need the zero.
      */
@@ -253,8 +256,6 @@ public final class CompilerTest {
                         + "..@lbl0:\n"
                         + "    mov ax, si\n"
                         + "    imul bx\n"
-                        + "    mov si, ax\n"
-                        + "    mov ax, si\n"
                         + "    cwd\n"
                         + "    idiv cx\n"
                         + "    mov si, ax\n"
@@ -268,6 +269,36 @@ public final class CompilerTest {
                         + "    mov [0x40], di\n"
                         + "    ret\n",
                 Compiler.compile("examples/sum.ir", readExample("examples/sum.ir")));
+    }
+
+    /**
+     * The chain is two operations the machine does in a register of its own, and that is the whole of
+     * what it covers: an operation with an ordinary form in the middle of a tree is computed into a
+     * register of its own, because the multiply outside it reads its operand after that register has
+     * been written. The two copies around the multiply below are that case, and they are what the
+     * chain cannot take away ({@code docs/ir.md} §6.1).
+     */
+    private static void keepsTheCopiesAroundAnOperationWithAForm() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, word [0x40]\n"
+                        + "    mov ax, word [0x42]\n"
+                        + "    mov cx, word [0x44]\n"
+                        + "    add bx, ax\n"
+                        + "    mov ax, bx\n"
+                        + "    mul cx\n"
+                        + "    mov bx, ax\n"
+                        + "    mov [0x46], bx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n    var $b: u16\n    var $c: u16\n    var $x: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    b = word [0x42]\n"
+                        + "    c = word [0x44]\n"
+                        + "    x = expr((a + b) * c)\n"
+                        + "    [0x46] = x\n"
+                        + "    ret\n"));
     }
 
     /**

@@ -500,6 +500,17 @@ public final class I8086 implements Target {
     private static final String SEGMENT_SCRATCH = "ax";
 
     /**
+     * Where this machine does its multiplying and dividing, and where the answer arrives.
+     *
+     * <p>Named here rather than written out a third time in the sequences below, because
+     * {@link #answerRegister} has to tell the truth about the same register the sequences use.
+     */
+    private static final String MULTIPLY_ANSWER = "ax";
+
+    /** Where the other half of that answer arrives: the remainder, and the high half of a product. */
+    private static final String REMAINDER_ANSWER = "dx";
+
+    /**
      * The registers that can be inside the brackets.
      *
      * <p>These three and no others: {@code [ax]}, {@code [cx]} and {@code [dx]} are
@@ -743,6 +754,32 @@ public final class I8086 implements Target {
     }
 
     /**
+     * Where this machine leaves the answer of a multiplication or a division.
+     *
+     * <p>{@code mul} and {@code div} are the operations this machine has no ordinary form for: the
+     * multiplicand or the dividend goes into {@code ax}, and the answer arrives there too — the
+     * quotient in {@code ax} and the remainder in {@code dx}, which is what {@code %} asks for. Two
+     * of them in a row are then one chain in {@code ax}, with nothing copied between them
+     * ({@code docs/ir.md} §6.1).
+     */
+    @Override
+    public String answerRegister(Operator operator) {
+        switch (operator) {
+            case MULTIPLY:
+            case MULTIPLY_UNSIGNED:
+            case MULTIPLY_SIGNED:
+            case DIVIDE:
+            case DIVIDE_UNSIGNED:
+            case DIVIDE_SIGNED:
+                return MULTIPLY_ANSWER;
+            case REMAINDER:
+                return REMAINDER_ANSWER;
+            default:
+                return null;
+        }
+    }
+
+    /**
      * {@code mov ax, left; mul right; mov destination, ax}.
      *
      * <p>The machine multiplies what is in {@code AX} by the operand and leaves the
@@ -766,9 +803,10 @@ public final class I8086 implements Target {
             return null; // multiplying two literals is not this target's to do
         }
         List<Instruction> instructions = new ArrayList<Instruction>();
-        instructions.add(instruction(where, "mov", new Operand.Name(where, "ax"), left));
+        instructions.add(instruction(where, "mov", new Operand.Name(where, MULTIPLY_ANSWER), left));
         instructions.add(instruction(where, signed ? "imul" : "mul", right));
-        instructions.add(instruction(where, "mov", destination, new Operand.Name(where, "ax")));
+        instructions.add(instruction(where, "mov", destination,
+                new Operand.Name(where, MULTIPLY_ANSWER)));
         return new Expansion(instructions, true);
     }
 
@@ -792,16 +830,16 @@ public final class I8086 implements Target {
             return null;
         }
         List<Instruction> instructions = new ArrayList<Instruction>();
-        instructions.add(instruction(where, "mov", new Operand.Name(where, "ax"), left));
+        instructions.add(instruction(where, "mov", new Operand.Name(where, MULTIPLY_ANSWER), left));
         if (signed) {
             instructions.add(instruction(where, "cwd"));
         } else {
-            instructions.add(instruction(where, "xor", new Operand.Name(where, "dx"),
-                    new Operand.Name(where, "dx")));
+            instructions.add(instruction(where, "xor", new Operand.Name(where, REMAINDER_ANSWER),
+                    new Operand.Name(where, REMAINDER_ANSWER)));
         }
         instructions.add(instruction(where, signed ? "idiv" : "div", right));
         instructions.add(instruction(where, "mov", destination,
-                new Operand.Name(where, remainder ? "dx" : "ax")));
+                new Operand.Name(where, remainder ? REMAINDER_ANSWER : MULTIPLY_ANSWER)));
         return new Expansion(instructions, false);
     }
 

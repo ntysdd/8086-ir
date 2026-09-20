@@ -35,6 +35,8 @@ public final class I8086Test {
         suite.add("I8086 builds a zero the way the flags allow",
                 I8086Test::buildsZeroesTheWayTheFlagsAllow);
         suite.add("I8086 says a comparison with zero is a test", I8086Test::comparesZeroWithATest);
+        suite.add("I8086 says where a multiplication's answer arrives",
+                I8086Test::saysWhereTheAnswerArrives);
         suite.add("I8086 writes only registers a value cannot live in",
                 I8086Test::writableStateHoldsNoValues);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
@@ -250,6 +252,28 @@ public final class I8086Test {
     private static void comparesZeroWithATest() {
         Assert.assertTrue(Targets.byName("8086").zeroComparisonIsATest(),
                 "both clear CF and OF and take ZF, SF and PF from the operand");
+    }
+
+    /**
+     * Where this machine leaves a multiplication's or a division's answer, which is what lets two of
+     * them in a row be one chain ({@code docs/ir.md} §6.1).
+     *
+     * <p>The answer of a remainder is the other half of the pair, and that is the whole reason the
+     * question is per operator rather than one register for all of them.
+     */
+    private static void saysWhereTheAnswerArrives() {
+        Target target = Targets.byName("8086");
+        Assert.assertEquals("ax", target.answerRegister(Operator.MULTIPLY));
+        Assert.assertEquals("ax", target.answerRegister(Operator.MULTIPLY_SIGNED));
+        Assert.assertEquals("ax", target.answerRegister(Operator.MULTIPLY_UNSIGNED));
+        Assert.assertEquals("ax", target.answerRegister(Operator.DIVIDE));
+        Assert.assertEquals("ax", target.answerRegister(Operator.DIVIDE_SIGNED));
+        Assert.assertEquals("ax", target.answerRegister(Operator.DIVIDE_UNSIGNED));
+        Assert.assertEquals("dx", target.answerRegister(Operator.REMAINDER));
+        // An operation with an ordinary form answers in an operand the caller chose, so there is
+        // nothing for this question to say about it.
+        Assert.assertNull(target.answerRegister(Operator.ADD), "an addition has forms");
+        Assert.assertNull(target.answerRegister(Operator.SHIFT_LEFT), "and so does a shift");
     }
 
     /** The mnemonics of a sequence, in order, so that its shape can be compared. */

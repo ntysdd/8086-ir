@@ -862,6 +862,18 @@ public final class InstructionSelector {
             return;
         }
 
+        // Two operations in a row that the machine does in a register of its own — `d * a / b` — are
+        // one chain in that register: the first is asked for its answer where the second one works,
+        // and the two copies between them are moves of a register into itself. Computing them one
+        // after the other costs nothing but two instructions, and `a * b / c` is the shape sector
+        // arithmetic is made of (docs/ir.md §6.1).
+        Expansion chained = chainedSequences(apply, destination);
+        if (chained != null) {
+            requireFlagsMayBeLost(chained.keepsFlags(), apply.position(), operator, false);
+            out.addAll(chained.instructions());
+            return;
+        }
+
         // Multiply and divide are done in registers the machine names itself, which
         // means a sequence rather than an instruction — and the sequence wants its
         // operands as operands, so it is asked before either side is moved anywhere.
@@ -986,6 +998,69 @@ public final class InstructionSelector {
         emitValue(operands.get(0), destination, flagsMayBeRead);
         emitInPlace(operator, destination, second, signedness(operator, operands, destination),
                 operation.position(), flagsMayBeRead);
+    }
+
+    /**
+     * Two operations in a row that the machine does in a register of its own, as one chain.
+     *
+     * <p>The shape is {@code d * a / b}: both operations want their first operand where the machine
+     * keeps it and leave their answer there, so the answer of the first is asked for in the register
+     * the second one works in. The copies in and out of that register are then moves of a register
+     * into itself, and the allocator drops those.
+     *
+     * <p>What it needs is a target that says where an operator's answer goes
+     * ({@link Target#answerRegister}); a target that says nothing gets the two operations one after
+     * the other, which is what this compiler did before. The left side must be one of those
+     * operations itself and all three operands leaves, because a chain is a chain of operands: a tree
+     * anywhere in it is computed into a register of its own, which is a different question.
+     */
+    private Expansion chainedSequences(Expression.Apply apply, String destination) {
+        Operator operator = apply.operator();
+        String answer = target.answerRegister(operator);
+        if (answer == null || !(apply.left() instanceof Expression.Apply)) {
+            return null;
+        }
+        Expression.Apply inner = (Expression.Apply) apply.left();
+        if (!target.forms(inner.operator()).isEmpty() || !target.forms(operator).isEmpty()) {
+            return null;
+        }
+        Value first = leafOf(inner.left());
+        Value second = leafOf(inner.right());
+        Value third = leafOf(apply.right());
+        if (first == null || second == null || third == null) {
+            return null;
+        }
+        SourcePos where = apply.position();
+        Operand into = new Operand.Name(where, answer);
+        Boolean innerSigned = signedness(inner.operator(), Arrays.asList(first, second), destination);
+        Boolean outerSigned = signedness(operator, Arrays.asList(third), destination);
+        Expansion one = declaredSequence(inner.operator(), into, operandOf(first), operandOf(second),
+                innerSigned, where);
+        Expansion two = declaredSequence(operator, virtual(destination, where), into, operandOf(third),
+                outerSigned, where);
+        if (one == null || two == null) {
+            return null;
+        }
+        List<Instruction> instructions = new ArrayList<Instruction>(one.instructions());
+        instructions.addAll(two.instructions());
+        return new Expansion(instructions, one.keepsFlags() && two.keepsFlags());
+    }
+
+    /**
+     * One operation the machine does in a register of its own, as the target declares it.
+     *
+     * <p>The destination is an operand rather than a name, because in a chain it is a register the
+     * selector wrote by hand rather than a value: what comes out of the first operation goes into the
+     * second one, and neither the middle nor the end of a chain is a name the program wrote.
+     */
+    private Expansion declaredSequence(Operator operator, Operand destination, Operand left,
+                                       Operand right, Boolean signed, SourcePos where) {
+        if (operator == Operator.MULTIPLY || operator == Operator.MULTIPLY_UNSIGNED
+                || operator == Operator.MULTIPLY_SIGNED) {
+            return target.multiply(where, destination, left, right, Boolean.TRUE.equals(signed));
+        }
+        return target.divide(where, destination, left, right, Boolean.TRUE.equals(signed),
+                operator == Operator.REMAINDER);
     }
 
     /** The value an expression is, when it is one, or null when it is a tree. */

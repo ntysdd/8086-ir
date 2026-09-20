@@ -944,6 +944,14 @@ nothing else and cost nothing.
   product in its low 32 bits, and anything wider than that is inline assembly.
   The surface language has no tuple-returning `mul`.
 * Signedness follows the operands: `u16 * u16` is `MUL`, `i16 * i16` is `IMUL`.
+* **Two of these in a row are one chain.** The machine does them in a register it names itself —
+  {@code ax} on the 8086, with the other half of the answer in {@code dx} — so the sequence an
+  operand arrives in and the answer leaves in is the *same* register, and `d * a / b` is computed
+  there without a copy between the two operations. Which register that is, is the target's to
+  say ({@code Target#answerRegister}), because a caller may not know that a multiply works in
+  {@code ax}: what the compiler asks is where an operator's answer goes, not where the machine keeps
+  it. The chain is two operations the machine does this way and nothing more — an operation with an
+  ordinary form in the middle of a tree is computed into a register of its own, as it has to be.
 
 ### 6.2 Divide — [decided]
 

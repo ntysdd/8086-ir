@@ -367,6 +367,26 @@ public interface Target {
     List<Form> forms(Operator operator);
 
     /**
+     * The register this target's sequence for an operator leaves its answer in, or null when the
+     * caller says where the answer goes ({@code docs/ir.md} §6.1).
+     *
+     * <p>Some operations have no ordinary form: the machine does them in a register it names itself,
+     * so the sequence copies its operands in and its answer out. Two of those in a row —
+     * {@code d * a / b} — are asked for with the first one's answer going straight into the second
+     * one, and then the copies between them are moves of a register into itself
+     * ({@code docs/ir.md} §5.5). Which register that is, is the machine's business and the reason
+     * this is a question rather than a constant: the caller may not know that a multiply works in
+     * {@code ax}, and a target whose machine works elsewhere says so here.
+     *
+     * <p>A target that answers null keeps the copies. The answer is the register the operation's
+     * <em>answer</em> is in, which is not always the one it computes in: a remainder arrives in the
+     * other half of it.
+     */
+    default String answerRegister(Operator operator) {
+        return null;
+    }
+
+    /**
      * A sequence that multiplies a register by a constant, or null when this
      * target has no such trick.
      *
