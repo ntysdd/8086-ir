@@ -326,7 +326,8 @@ Working today:
 * **The machine's own registers**: `movreg ds, 0`, `movreg ss, 0`,
   `movreg sp, 0x7C00`, `movreg ds, cs`, `movreg bp, 0x1000` — the registers a value cannot
   live in, which is what makes a standalone write to one safe, in the sequence the machine
-  needs for each (a segment register takes no immediate, so it goes through `ax`). It is a
+  needs for each (a segment register takes no immediate, so an immediate goes through `ax`,
+  while a value that is already in a register goes straight in). It is a
   statement of its own rather than an assignment, because a name in the position an
   assignment writes cannot say whether it means the machine's register or a variable of that
   name — which is what keeps `ds` an ordinary name. Read the other way round, the same word

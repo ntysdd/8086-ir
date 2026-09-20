@@ -973,10 +973,17 @@ public final class I8086 implements Target {
      * Setting one of the machine's own registers, from an operand.
      *
      * <p>{@code sp} and {@code bp} take the operand directly — {@code mov sp, x} is one instruction
-     * — and a segment register does not: this machine has no {@code mov ds, immediate} and no
-     * {@code mov ds, memory}, so the value goes through {@code ax} first. The copy is stated even
-     * when it turns out to be unnecessary, which is how the rest of this class writes a sequence:
-     * the allocator is the one that finds out, and drops a copy of a register into itself.
+     * — and so does a segment register, when the operand is already a general register: this
+     * machine's {@code mov sreg, r/m16} takes one, so {@code mov ds, cx} is the whole of it, a byte
+     * shorter than going through {@code ax} and without the register the copy would hold.
+     *
+     * <p>What a segment register cannot take is an immediate or a memory operand — there is no
+     * {@code mov ds, 0} and no {@code mov ds, [x]} — and neither can it take another segment
+     * register, {@code mov es, ds} being no encoding at all. Those go through {@code ax} first: the
+     * copy is stated even when it turns out to be unnecessary, which is how the rest of this class
+     * writes a sequence, and the allocator is the one that finds out and drops a copy of a register
+     * into itself. A byte cannot arrive either; the verifier refuses one where a segment register is
+     * written, because there is nothing to put it in.
      *
      * <p>A zero is built with {@code xor} rather than moved, when nothing can look at the flags
      * afterwards: {@code xor r, r} is one byte shorter than {@code mov r, 0} on a word, and it is
@@ -988,6 +995,10 @@ public final class I8086 implements Target {
     public Expansion writeState(SourcePos where, String name, Operand value, boolean flagsMayBeRead) {
         List<Instruction> instructions = new ArrayList<Instruction>();
         if (SEGMENT_REGISTERS.contains(name)) {
+            if (isAGeneralRegister(value)) {
+                instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
+                return new Expansion(instructions, true);
+            }
             Operand scratch = new Operand.Name(where, SEGMENT_SCRATCH);
             instructions.add(built(where, scratch, value, flagsMayBeRead));
             instructions.add(instruction(where, "mov", new Operand.Name(where, name), scratch));
@@ -995,6 +1006,23 @@ public final class I8086 implements Target {
         }
         instructions.add(built(where, new Operand.Name(where, name), value, flagsMayBeRead));
         return new Expansion(instructions, true);
+    }
+
+    /**
+     * Whether this operand is a general register, which is what {@code mov sreg, r/m16} takes.
+     *
+     * <p>Two things say no, and the machine is the reason for both: a literal is not a register at
+     * all, and a segment register is one this machine will not move into another — {@code mov es, ds}
+     * has no encoding. The verifier refuses the other two operands that could not be named here, a
+     * label and a byte, so what arrives is a value, an immediate or a segment register; the question
+     * is asked of the operand all the same, because what the encoding takes is what decides it.
+     */
+    private static boolean isAGeneralRegister(Operand operand) {
+        if (Shape.of(operand) != Shape.REGISTER) {
+            return false;
+        }
+        return !(operand instanceof Operand.Name
+                && SEGMENT_REGISTERS.contains(((Operand.Name) operand).name()));
     }
 
     /**

@@ -1185,9 +1185,9 @@ movreg bp, 0x1000
 
 `movreg` takes one of the registers a value cannot live in — on this machine `ds`, `es`,
 `ss`, `sp` and `bp` — and what to put there: a literal, a variable, an address, or another
-register the machine has. Most of those are a sequence rather than one instruction, because
-a segment register takes no immediate: `movreg ds, 0` is `mov ax, 0` and then
-`mov ds, ax`, while `movreg sp, 0x7C00` is one instruction. The target description is what
+register the machine has. A segment register takes no immediate, so `movreg ds, 0` is `mov ax, 0`
+and then `mov ds, ax`, where `movreg sp, 0x7C00` and `movreg ds, v` are one instruction each:
+a general register is an operand a segment register does take. The target description is what
 says so, like every other choice of instruction.
 
 **That list is a rule, and the rule is why this is a statement at all.** A standalone write
@@ -1607,9 +1607,10 @@ code is still not spellable, and that is §12 item 12.
 * **Any register the target has** may be named, because the write and the read are one item:
   `ah`, `dl`, `bx`, `si` and the segment registers are all ordinary here. This is the
   difference between the clause and `movreg`, and it is the whole of it. A **segment
-  register** is one of them and takes no immediate, so a value reaches it through a general
+  register** is one of them and takes no immediate, so an immediate reaches it through a general
   register — which one, and in what order relative to the other arguments, is the target's
-  business and the compiler's (§8.1).
+  business and the compiler's (§8.1). A value that is already in a general register is the
+  register that goes straight in.
 * **A bare name in the register position is the machine's**, and the author's variable of
   that name is written `$ax` — the rule the assembly text has (§3.1.1), and the same one
   `movreg`'s source follows.

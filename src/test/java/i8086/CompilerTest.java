@@ -124,6 +124,12 @@ public final class CompilerTest {
                 CompilerTest::handsTheNextStageItsRegisters);
         suite.add("Compiler keeps a value out of the register a segment move uses",
                 CompilerTest::keepsValuesOutOfTheSegmentScratch);
+        suite.add("Compiler moves a value into a segment register directly",
+                CompilerTest::setsASegmentFromARegister);
+        suite.add("Compiler sets three segments up from one zero",
+                CompilerTest::setsThreeSegmentsFromOneZero);
+        suite.add("Compiler hands a clause a segment from the register a value is in",
+                CompilerTest::givesAClauseASegmentFromARegister);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -1466,8 +1472,9 @@ public final class CompilerTest {
 
     /**
      * The first lines of every boot loader: the segmentation state, in the sequences the target
-     * declared. {@code sp} takes the value directly, and a segment register does not — a segment
-     * register takes no immediate, so the value goes through {@code ax}.
+     * declared. {@code sp} takes the value directly, and a segment register does not take an
+     * immediate — so an immediate goes through {@code ax}, and so does another segment register,
+     * which this machine cannot move into one ({@code docs/ir.md} §8.1).
      */
     private static void setsSegmentsUp() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n"
@@ -1486,6 +1493,74 @@ public final class CompilerTest {
                 + "    mov ax, cs\n"
                 + "    mov ds, ax\n"
                 + "    ret\n", assembly);
+    }
+
+    /**
+     * The same three registers from a value: a segment register takes a general register directly,
+     * so {@code mov es, ax} is the whole of it where an immediate has to be built in a register
+     * first. The register is the one the value already lives in, which is what the copy the
+     * immediate needs was buying — two bytes and one register that nothing else may use
+     * ({@code docs/ir.md} §8.1).
+     */
+    private static void setsASegmentFromARegister() {
+        Assert.assertEquals("org 0x100\n\n$main:\n"
+                + "    mov ax, word [0x40]\n"
+                + "    mov es, ax\n"
+                + "    mov [0x42], ax\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var v: u16\n"
+                        + "    v = word [0x40]\n"
+                        + "    movreg es, v\n"
+                        + "    volatile [0x42] = v\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * Three segment registers set to one zero, which is the cheap way to write a preamble and the
+     * shape a person writes by hand: the zero is one value, so it is built once and moved three
+     * times. Three literals cost a build each, because a statement cannot see another statement's
+     * literal ({@code docs/ir.md} §3.1.2 — a named constant is what would make it automatic).
+     */
+    private static void setsThreeSegmentsFromOneZero() {
+        Assert.assertEquals("org 0x7c00\n\n$main:\n"
+                + "    xor ax, ax\n"
+                + "    mov ds, ax\n"
+                + "    mov es, ax\n"
+                + "    mov ss, ax\n"
+                + "    mov sp, 0x7c00\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
+                        + "    var zero: u16\n"
+                        + "    zero = 0\n"
+                        + "    movreg ds, zero\n"
+                        + "    movreg es, zero\n"
+                        + "    movreg ss, zero\n"
+                        + "    movreg sp, 0x7c00\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the same in the shape a loader uses it: a clause giving an interrupt a segment register
+     * out of a value ({@code docs/ir.md} §11). What the clause does with the segment is the
+     * target's, so this is the same sequence as the statement above — with the value in whatever
+     * register it is in, and no copy into {@code ax}.
+     */
+    private static void givesAClauseASegmentFromARegister() {
+        Assert.assertEquals("org 0x100\n\n$main:\n"
+                + "    mov si, word [0x40]\n"
+                + "    mov es, si\n"
+                + "    mov ah, 2\n"
+                + "    mov bx, 0x7e00\n"
+                + "    int 0x13\n"
+                + "    mov [0x42], si\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var v: u16\n"
+                        + "    v = word [0x40]\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx) with ah = 2, es = v, bx = 0x7e00\n"
+                        + "    volatile [0x42] = v\n"
+                        + "    ret\n"));
     }
 
     /**
