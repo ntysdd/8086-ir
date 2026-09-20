@@ -159,12 +159,13 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    state there is about a register, and no value has one before the allocator has
    run. `loop` counts in `cx` and nowhere else, so what a countdown loop costs
    depends on where its counter ended up.
-   **Built: two passes, the 8086's.** A constant a register already holds is not built again
-   (`i8086.target.RepeatedConstants`), which is what lets a boot loader write its three segment
-   registers to zero the way it always has and pay for one zero; and a countdown whose flags
-   nothing else reads loses the comparison that repeats what the decrement already said, and, where
-   the counter is in `cx` and the loop is short enough to count, the pair becomes the machine's own
-   `loop` (`i8086.target.CountedLoops`).
+   **Built: three passes, the 8086's.** A constant a register already holds is not built again
+   (`i8086.target.RepeatedConstants`); a load of what a register already holds, with nothing between
+   that could have written memory, is not loaded again (`i8086.target.RepeatedLoads` — a value in a
+   home is read out of it at every point that mentions it, and two statements in a row are one
+   access); and a countdown whose flags nothing else reads loses the comparison that repeats what the
+   decrement already said, and, where the counter is in `cx` and the loop is short enough to count,
+   the pair becomes the machine's own `loop` (`i8086.target.CountedLoops`).
 6. **Instruction selection**: pick the instruction *form* — which instruction,
    which addressing mode — by size first, with the target's cost estimates
    breaking ties (*Optimised for size*, above). Byte-level encoding choices are

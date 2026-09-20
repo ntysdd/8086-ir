@@ -162,6 +162,12 @@ public final class CompilerTest {
                 CompilerTest::withdrawsTheRequestForTheAccumulator);
         suite.add("Compiler leaves an address out of the counting register",
                 CompilerTest::leavesAnAddressOutOfTheCountingRegister);
+        suite.add("Compiler loads a cell once for two statements that read it",
+                CompilerTest::loadsACellOnceForTwoReaders);
+        suite.add("Compiler loads the cell again after a store",
+                CompilerTest::loadsTheCellAgainAfterAStore);
+        suite.add("Compiler loads the cell again after an interrupt",
+                CompilerTest::loadsTheCellAgainAfterAnInterrupt);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -2133,6 +2139,120 @@ public final class CompilerTest {
                         + "    ret\n"
                         + "\n"
                         + "$parts: pad 4\n"));
+    }
+
+    // --- a load of what a register already holds (the third tail) -----------
+
+    /**
+     * Two statements that read the same cell, one after the other: the second load is four bytes
+     * spent on an answer the register already has. A value in a cell is loaded out of it at every
+     * point that reads it, because a value in memory is not in a register — but two statements in a
+     * row with nothing between them that could have written the cell are one access, not two.
+     *
+     * <p>The interrupt before them is what puts the value in the cell at all: it destroys every
+     * register, so a value that has to live across it has nowhere else to wait.
+     */
+    private static void loadsACellOnceForTwoReaders() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$cell: times 2 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, word [0x40]\n"
+                        + "    mov word [$cell], bx\n"
+                        + "    int 0x13\n"
+                        + "    mov bx, word [$cell]\n"
+                        + "    mov cx, word [bx+2]\n"
+                        + "    mov ax, word [bx+4]\n"
+                        + "    mov [0x42], cx\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$cell: pad 2\n\n$main:\n"
+                        + "    var e: u16 in cell\n"
+                        + "    var lo: u16\n"
+                        + "    var hi: u16\n"
+                        + "    e = word [0x40]\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                        + "    lo = word [e + 2]\n"
+                        + "    hi = word [e + 4]\n"
+                        + "    volatile [0x42] = lo\n"
+                        + "    volatile [0x44] = hi\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The must-not that is about memory rather than about the register: a store between the two
+     * reads may have written the cell, and nothing in this compiler can say that it did not — the
+     * aliasing question, which is where load elimination stops ({@code docs/ssa.md} §9). So both
+     * loads stand, and the second one is there for a reason a reader can see.
+     */
+    private static void loadsTheCellAgainAfterAStore() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$cell: times 2 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, word [0x40]\n"
+                        + "    mov word [$cell], bx\n"
+                        + "    int 0x13\n"
+                        + "    mov bx, word [$cell]\n"
+                        + "    mov ax, word [bx+2]\n"
+                        + "    mov [0x42], ax\n"
+                        + "    mov bx, word [$cell]\n"
+                        + "    mov ax, word [bx+4]\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$cell: pad 2\n\n$main:\n"
+                        + "    var e: u16 in cell\n"
+                        + "    var lo: u16\n"
+                        + "    var hi: u16\n"
+                        + "    e = word [0x40]\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                        + "    lo = word [e + 2]\n"
+                        + "    volatile [0x42] = lo\n"
+                        + "    hi = word [e + 4]\n"
+                        + "    volatile [0x44] = hi\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not that is about what the compiler cannot see into: an interrupt may write
+     * anywhere at all, so a cell read before one is not a cell read after it. What says so is the
+     * statement rather than the instructions — a clobber list names registers — which is why this is
+     * a pass over the code the allocator produced and not one over the form.
+     */
+    private static void loadsTheCellAgainAfterAnInterrupt() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$cell: times 2 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, word [0x40]\n"
+                        + "    mov word [$cell], bx\n"
+                        + "    int 0x13\n"
+                        + "    mov bx, word [$cell]\n"
+                        + "    mov si, word [bx+2]\n"
+                        + "    int 0x13\n"
+                        + "    mov bx, word [$cell]\n"
+                        + "    mov ax, word [bx+4]\n"
+                        + "    mov [0x42], si\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$cell: pad 2\n\n$main:\n"
+                        + "    var e: u16 in cell\n"
+                        + "    var lo: u16\n"
+                        + "    var hi: u16\n"
+                        + "    e = word [0x40]\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx, si, di)\n"
+                        + "    lo = word [e + 2]\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx)\n"
+                        + "    hi = word [e + 4]\n"
+                        + "    volatile [0x42] = lo\n"
+                        + "    volatile [0x44] = hi\n"
+                        + "    ret\n"));
     }
 
     // --- reading the machine's own registers (docs/ir.md §8.1) --------------

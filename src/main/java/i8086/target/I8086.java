@@ -1116,13 +1116,16 @@ public final class I8086 implements Target {
     }
 
     /**
-     * Two cleanups, in the order they are worth doing: a constant a register already holds is not
-     * built again ({@link RepeatedConstants}), and a countdown is done the way this machine counts it
+     * Three cleanups, in the order they are worth doing: a constant a register already holds is not
+     * built again ({@link RepeatedConstants}), a load whose answer is already in the register is not
+     * loaded again ({@link RepeatedLoads}), and a countdown is done the way this machine counts it
      * down ({@link CountedLoops}).
      */
     @Override
     public Selection tail(SsaForm form, Selection selection) {
-        return CountedLoops.clean(form, RepeatedConstants.clean(this, form, selection));
+        Selection cleaned = RepeatedConstants.clean(this, form, selection);
+        cleaned = RepeatedLoads.clean(this, form, cleaned);
+        return CountedLoops.clean(form, cleaned);
     }
 
     /**
