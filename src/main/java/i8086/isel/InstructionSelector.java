@@ -545,16 +545,95 @@ public final class InstructionSelector {
      * here pins a value to a register, it copies one into place and then the statement runs. A
      * label is an address like anywhere else, so it goes in as an offset — {@code bx = buffer} is
      * how a call is told where to put something.
+     *
+     * <p>A segment register is the exception, and it is the machine's: it takes neither an immediate
+     * nor a memory operand, so a value reaches one through a general register, and how is the
+     * target's answer — the same one {@code movreg} gets ({@code docs/ir.md} §8.1). Writing
+     * {@code mov es, 0} instead is an instruction no assembler takes, and a clause is where a
+     * loader sets up the segment it is about to load into.
+     *
+     * <p>Those go first, whatever order they were written in. The arguments of a clause are all
+     * inputs to the statement, so which of them is put in place first is the compiler's business —
+     * and the register the machine moves a segment through is one of the general ones, which another
+     * argument may be named after: {@code int 0x13 with ah = 2, es = 0} has to reach {@code es}
+     * before {@code ah} is written, or the value that got it there is gone.
+     *
+     * <p>Then the arguments that are variables, and then the ones that are not. A value may have to be
+     * brought in from a cell, and the register it is moved through has to still hold it when its own
+     * move runs — while every other argument's move writes a register and so destroys whatever was in
+     * it. {@code int 0x13 with ah = 2, ch = byte [entry + 3], dl = drive} is the shape that needs the
+     * care: {@code drive} is in a cell, and {@code ah} and {@code ch} are written before it is read
+     * if the clause is taken in the order it was written.
      */
     private void emitArguments(List<Item.Argument> arguments) {
         for (Item.Argument argument : arguments) {
-            SourcePos where = argument.position();
-            Operand value = isLabel(argument.value())
-                    ? new Operand.Offset(where, ((Value.Name) argument.value()).name())
-                    : operandOf(argument.value());
-            out.add(new Instruction(where, "mov",
-                    operands(new Operand.Name(where, argument.register()), value)));
+            if (target.isSegmentRegister(argument.register())) {
+                emitArgument(argument);
+            }
         }
+        for (Item.Argument argument : arguments) {
+            if (!target.isSegmentRegister(argument.register()) && holdsAVariable(argument)) {
+                emitArgument(argument);
+            }
+        }
+        for (Item.Argument argument : arguments) {
+            if (!target.isSegmentRegister(argument.register()) && !holdsAVariable(argument)) {
+                emitArgument(argument);
+            }
+        }
+    }
+
+    /**
+     * Whether an argument hands over a variable's value, which may be in memory and have to be moved
+     * into a register first, as opposed to a literal, a label's address or an access.
+     *
+     * <p>The question is asked of the form and not of the module, because a clause's value has been
+     * renamed by the time a selector sees it: it names a version of the variable rather than the
+     * variable ({@code docs/ssa.md}). A label is the module's name still, because renaming is about
+     * values.
+     */
+    private boolean holdsAVariable(Item.Argument argument) {
+        Value value = argument.value();
+        return value instanceof Value.Name
+                && form.variableOf(((Value.Name) value).name()) != null;
+    }
+
+    /** One argument of a clause: its operand into its register, the machine's way. */
+    private void emitArgument(Item.Argument argument) {
+        SourcePos where = argument.position();
+        Operand value = operandFor(argument.value());
+        if (target.isSegmentRegister(argument.register())) {
+            Expansion sequence = target.writeState(where, argument.register(), value,
+                    flagsLiveHere);
+            if (sequence == null) {
+                throw new CompileError(where, "this target has no way to set '"
+                        + argument.register() + "' (docs/ir.md §11)");
+            }
+            out.addAll(sequence.instructions());
+            return;
+        }
+        out.add(new Instruction(where, "mov",
+                operands(new Operand.Name(where, argument.register()), value)));
+    }
+
+    /**
+     * The operand an argument hands over: a literal, a value in a register, a label's address, or an
+     * access ({@code docs/ir.md} §11).
+     *
+     * <p>An address is what a clause is usually given — {@code bx = buffer} tells a routine where to
+     * put something — and an access is the same idea the other way round: {@code ch = byte [entry +
+     * 3]} is one instruction, where reading the field into a value first costs a register and the
+     * move that follows it. The register states the width when the access does not ({@code byte},
+     * {@code word}), which is the rule the assembly text has ({@code docs/asm.md} §5).
+     */
+    private Operand operandFor(Value value) {
+        if (value instanceof Value.Memory) {
+            return memory(((Value.Memory) value).operand());
+        }
+        if (isLabel(value)) {
+            return new Operand.Offset(value.position(), ((Value.Name) value).name());
+        }
+        return operandOf(value);
     }
 
     /** {@code p = msg}: the address of a label, as an immediate. */

@@ -63,6 +63,10 @@ public final class CompilerTest {
                 CompilerTest::leavesATestThatWasWritten);
         suite.add("Compiler compares a literal with a byte",
                 CompilerTest::comparesALiteralOnTheLeftOfAByte);
+        suite.add("Compiler sets a segment up in a clause",
+                CompilerTest::setsASegmentUpInAClause);
+        suite.add("Compiler hands a call the fields of a table",
+                CompilerTest::handsACallTheFieldsOfATable);
         suite.add("Compiler compares a literal with a word",
                 CompilerTest::comparesALiteralOnTheLeftOfAWord);
         suite.add("Compiler computes a byte expression in byte registers",
@@ -712,6 +716,94 @@ public final class CompilerTest {
                 + "    ret\n");
         Assert.assertTrue(halves.contains("mov [0x50], ") && halves.contains("mov [0x52], "),
                 "two halves are two word moves, whichever registers they went through: " + halves);
+    }
+
+    /**
+     * A clause is where a loader sets a segment up, and a segment register takes no immediate: the
+     * value goes through a general register, which is the target's answer and the same one
+     * {@code movreg} gets ({@code docs/ir.md} §8.1, §11).
+     *
+     * <p>That write happens before the arguments that are written into {@code ax}'s halves, because
+     * the register the machine moves a segment through is one of them: {@code ah = 2} after
+     * {@code es = 0} would otherwise be the value that got it there, gone.
+     */
+    private static void setsASegmentUpInAClause() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov cx, 0x7e00\n"
+                        + "    xor ax, ax\n"
+                        + "    mov es, ax\n"
+                        + "    mov bx, cx\n"
+                        + "    mov ah, 2\n"
+                        + "    mov al, 1\n"
+                        + "    int 0x13\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $c: u8\n    var $buffer: u16\n"
+                        + "    c = byte [0x40]\n"
+                        + "    buffer = 0x7E00\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx) with ah = 2, al = 1, es = 0,"
+                        + " bx = buffer, dl = c\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A clause operand may be an access, which is how a boot loader hands a call the fields of a
+     * table it is looking at: {@code ch = byte [entry + 3]} is one instruction where reading the
+     * field into a value first costs a register and the move that follows it ({@code docs/ir.md}
+     * §11).
+     *
+     * <p>The three fields are read straight into the registers the call wants, and the drive number
+     * — which lives in a cell because it has to survive the interrupts — is moved into {@code dl}
+     * before the arguments that write {@code dx}'s other half.
+     */
+    private static void handsACallTheFieldsOfATable() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cl, dl\n"
+                        + "    mov bx, $parts\n"
+                        + "    xor ax, ax\n"
+                        + "    mov es, ax\n"
+                        + "    mov dl, cl\n"
+                        + "    mov ah, 2\n"
+                        + "    mov al, 1\n"
+                        + "    mov ch, byte [bx+3]\n"
+                        + "    mov cl, byte [bx+2]\n"
+                        + "    mov dh, byte [bx+1]\n"
+                        + "    mov bx, 0x7e00\n"
+                        + "    int 0x13\n"
+                        + "    jc $fail\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$fail:\n"
+                        + "\n"
+                        + "$halt:\n"
+                        + "    hlt\n"
+                        + "    jmp $halt\n"
+                        + "\n"
+                        + "$parts: times 0x40-($-$$) db 0\n"
+                        + "\n"
+                        + "$saved: times 1 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $base: u16\n"
+                        + "    var $drive: u8 in saved\n"
+                        + "    movreg drive, dl\n"
+                        + "    base = parts\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx) with ah = 2, al = 1,"
+                        + " ch = byte [base + 3], cl = byte [base + 2], dh = byte [base + 1],"
+                        + " dl = drive, es = 0, bx = 0x7E00\n"
+                        + "    jc $fail\n"
+                        + "    ret\n"
+                        + "$fail:\n"
+                        + "halt:\n"
+                        + "    hlt\n"
+                        + "    jmp $halt\n"
+                        + "\n"
+                        + "parts: pad to 0x40\n"
+                        + "saved: pad 1\n"));
     }
 
     /** The 8086 has no multiply by a constant, so the target hands over a shift trick. */
@@ -1605,9 +1697,10 @@ public final class CompilerTest {
      * <p>Two things in the output are the point. The copies the sequence is written
      * with are gone where the allocator found them unnecessary: the answer goes into
      * {@code ax} and stays there, so the copy back out is a copy from a register into
-     * itself and was dropped. And neither operand is in {@code ax} or {@code dx}, the two
-     * registers a multiply uses, so what the sequence copies into {@code ax} is a real
-     * copy.
+     * itself and was dropped. And the value the sequence copies in lives in {@code dx} —
+     * a register the multiply destroys — because the copy is its last read: what a
+     * register is destroyed by is the instruction that runs, and this value is dead by
+     * then ({@code docs/ir.md} §3.1, §11).
      *
      * <p>Which registers they are instead is not the test's business — the allocator
      * decides that by colouring a graph, and the names in it are the program's, not this
@@ -1617,10 +1710,10 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov bx, cx\n"
-                        + "    inc bx\n"
+                        + "    mov dx, cx\n"
+                        + "    inc dx\n"
                         + "    add cx, 2\n"
-                        + "    mov ax, bx\n"
+                        + "    mov ax, dx\n"
                         + "    mul cx\n"
                         + "    mov [0x40], ax\n"
                         + "    ret\n",
@@ -1631,10 +1724,10 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov bx, cx\n"
-                        + "    inc bx\n"
+                        + "    mov dx, cx\n"
+                        + "    inc dx\n"
                         + "    add cx, 2\n"
-                        + "    mov ax, bx\n"
+                        + "    mov ax, dx\n"
                         + "    xor dx, dx\n"
                         + "    div cx\n"
                         + "    mov [0x40], ax\n"
@@ -1647,10 +1740,10 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov bx, cx\n"
-                        + "    inc bx\n"
+                        + "    mov dx, cx\n"
+                        + "    inc dx\n"
                         + "    add cx, 2\n"
-                        + "    mov ax, bx\n"
+                        + "    mov ax, dx\n"
                         + "    xor dx, dx\n"
                         + "    div cx\n"
                         + "    mov ax, dx\n"
@@ -1770,13 +1863,17 @@ public final class CompilerTest {
      * A clause operand may be a value, and then it is read where the statement is — which means it
      * is alive across everything between the two, and the copy into the register the clause names is
      * the compiler's to make ({@code docs/ir.md} §11).
+     *
+     * <p>Where the value is read and what the clause asks for are the same thing when the value can
+     * live in the register being named: the copy is then a register moved into itself and there is no
+     * instruction at all, because a value is read before the register it is read from is written
+     * ({@code docs/ir.md} §5.1).
      */
     private static void handsTheNextStageItsRegisters() {
         Assert.assertEquals("org 0x100\n\n$main:\n"
-                        + "    mov di, word [0x40]\n"
+                        + "    mov si, word [0x40]\n"
                         + "    int 0x10\n"
-                        + "    mov word [0x42], di\n"
-                        + "    mov si, di\n"
+                        + "    mov word [0x42], si\n"
                         + "    jmp 0:0x7e00\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var count: u16\n"

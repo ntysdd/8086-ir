@@ -1586,13 +1586,23 @@ code is still not spellable, and that is §12 item 12.
 
 * **Any register the target has** may be named, because the write and the read are one item:
   `ah`, `dl`, `bx`, `si` and the segment registers are all ordinary here. This is the
-  difference between the clause and `movreg`, and it is the whole of it.
+  difference between the clause and `movreg`, and it is the whole of it. A **segment
+  register** is one of them and takes no immediate, so a value reaches it through a general
+  register — which one, and in what order relative to the other arguments, is the target's
+  business and the compiler's (§8.1).
 * **A bare name in the register position is the machine's**, and the author's variable of
   that name is written `$ax` — the rule the assembly text has (§3.1.1), and the same one
   `movreg`'s source follows.
-* **The operands are ordinary operands**: a literal, a variable, a label, an address. The
-  width rule is the one assignments have — both sides the same width, and a literal takes the
-  width of the register it goes into (§3.2).
+* **The operands are ordinary operands**: a literal, a variable, a label, an address, an
+  access. The width rule is the one assignments have — both sides the same width, a literal
+  takes the width of the register it goes into, and so does an access written without one
+  (§3.2). An access is how a loader hands a call the fields of a table it is looking at:
+  `ch = byte [entry + 3]` is one instruction, where reading the field into a value first
+  costs a register and the move that follows it.
+* **The order the arguments are put in place is the compiler's**, because they are all inputs
+  to one statement and nothing can observe the half-done state. That is not a licence to
+  write a register twice — `with ah = 2, es = 0` is two different registers, while
+  `with ah = 2, ax = 5` asks for one register to hold two things at once.
 * **What the statement leaves in those registers is not a value.** The registers are the
   statement's, and afterwards they hold whatever it left there — for `int 0x13`, the BIOS's
   answer. Reading one back into a value is `movreg`'s other direction (§8.1).

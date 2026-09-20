@@ -345,10 +345,23 @@ public final class RegisterAllocator {
      * a register anything else alive at the point is using — the definition would overwrite
      * it, and on a two-address machine the value it is computed from is alive at the same
      * point, which is why a value interferes with everything alive at its definition rather
-     * than with what is alive after it alone. And a value alive where a register is
-     * destroyed may not be in that register, which is the same edge seen from the other
-     * side: what destroys a register is a node of the graph too, and it is one nothing can
-     * colour.
+     * than with what is alive after it alone. And a value a register is destroyed under may
+     * not be in that register, which is the same edge seen from the other side: what destroys
+     * a register is a node of the graph too, and it is one nothing can colour.
+     *
+     * <p>That last edge is drawn per <em>instruction</em> and not per point, because a point is
+     * as coarse as this can honestly go when it comes to what a register holds versus when it
+     * is taken away. What a statement destroys is destroyed when it runs — an {@code int} takes
+     * {@code ax}, {@code bx}, {@code cx} and {@code dx} away, and the {@code with} clause that
+     * handed it three of them read those values before it did. A value that is read by the
+     * clause and dead afterwards may therefore live in a register the interrupt destroys; one
+     * that is still to be read after the point may not, and neither may one read by a later
+     * instruction of the same sequence.
+     *
+     * <p>The question is what the point still reads <em>after</em> the instruction, because a
+     * value is read before the register it is read from is written ({@code docs/ir.md} §5.1):
+     * {@code mov dl, c} with {@code c} living in {@code dl} is a move of a register into itself
+     * and no instruction at all, and the allocator is the one that gets to find that out.
      */
     private void buildGraph() {
         for (int point = 0; point < liveness.points(); point++) {
@@ -368,18 +381,28 @@ public final class RegisterAllocator {
             boolean alreadyAlive = definedValue != null
                     && groupOf(liveness.liveBefore(point)).contains(definedValue);
             List<Instruction> instructions = piece.instructions();
-            for (int at = 0; at < instructions.size(); at++) {
+            // What the point still reads after one instruction, and from its successors after the
+            // last. Walking backwards is what makes it one pass: the instruction being looked at adds
+            // its own names only once the registers it destroys have been held against it.
+            Set<String> stillRead = groupOf(liveness.liveAfter(point));
+            for (int at = instructions.size() - 1; at >= 0; at--) {
                 Set<String> destroyed = destroyedAt(piece, at);
-                if (destroyed.isEmpty()) {
-                    continue;
-                }
-                for (String name : alive) {
-                    String value = groupOf(name);
-                    if (value.equals(definedValue) && !alreadyAlive
-                            && at != instructions.size() - 1) {
-                        continue;
+                if (!destroyed.isEmpty()) {
+                    for (String name : alive) {
+                        String value = groupOf(name);
+                        if (value.equals(definedValue) && !alreadyAlive
+                                && at != instructions.size() - 1) {
+                            continue;
+                        }
+                        if (!stillRead.contains(value)) {
+                            continue; // dead at this instruction, which is where a register it is in
+                                      // may be destroyed
+                        }
+                        forbid(value, destroyed);
                     }
-                    forbid(value, destroyed);
+                }
+                for (String name : mentioned(instructions.get(at))) {
+                    stillRead.add(groupOf(name));
                 }
             }
             if (defined != null) {
@@ -981,6 +1004,40 @@ public final class RegisterAllocator {
     }
 
     /**
+     * The registers a point destroys before a value's last mention of it, which a scratch for that
+     * value has to survive.
+     *
+     * <p>A value moved between its home and the machine is moved through a register that has to hold
+     * it for as long as the point still reads it — and what a register is destroyed <em>by</em> is
+     * the instruction that runs, so only the destructions before that last mention are in the way.
+     * Whether one of them is: {@code int 0x13} destroys {@code ax}, {@code bx}, {@code cx} and
+     * {@code dx}, and the {@code with} clause that hands it its arguments has read them before it
+     * runs — which is what lets a boot loader fill a packet and interrupt in one statement
+     * ({@code docs/ir.md} §11).
+     *
+     * <p>The mention that matters is the last one, because the load is emitted before the first and
+     * the store after the last write ({@link #withHomes}), and a value is read before the register it
+     * is read from is written ({@code docs/ir.md} §5.1).
+     */
+    private Set<String> destroyedBeforeLastMention(Selection.Piece piece, String value) {
+        List<Instruction> instructions = piece.instructions();
+        int last = -1;
+        for (int at = 0; at < instructions.size(); at++) {
+            for (String name : mentioned(instructions.get(at))) {
+                if (groupOf(name).equals(value)) {
+                    last = at;
+                    break;
+                }
+            }
+        }
+        Set<String> destroyed = new LinkedHashSet<String>();
+        for (int at = 0; at < last; at++) {
+            destroyed.addAll(destroyedAt(piece, at));
+        }
+        return destroyed;
+    }
+
+    /**
      * The registers a point's declaration says it destroys.
      *
      * <p>Two kinds of point declare a list and mean the same thing by it — an inline block,
@@ -1230,7 +1287,6 @@ public final class RegisterAllocator {
             Selection.Piece piece = selection.pieces().get(point);
             Map<String, String> at = scratches.get(point);
             Set<String> busy = registersInUse(point);
-            busy.addAll(destroyed(piece));
             // A register some read can still ask for is the machine's until that read: a scratch
             // writes over what it would return (docs/ir.md §8.1).
             Set<String> readLater = registersReadLater.get(Integer.valueOf(point));
@@ -1243,7 +1299,9 @@ public final class RegisterAllocator {
                     if (!inHome.containsKey(value) || at.containsKey(value)) {
                         continue;
                     }
-                    String register = freeRegisterFor(value, busy);
+                    Set<String> forbidden = new LinkedHashSet<String>(busy);
+                    forbidden.addAll(destroyedBeforeLastMention(piece, value));
+                    String register = freeRegisterFor(value, forbidden);
                     if (register == null) {
                         return new Stuck(point, value);
                     }
