@@ -114,6 +114,16 @@ public final class InstructionSelector {
     private Map<String, String> widenedBytes = new LinkedHashMap<String, String>();
 
     /**
+     * The widened value each word value is a copy of, shifted up by eight, by the word value's name.
+     *
+     * <p>The same two bytes put together into a word, written as two statements instead of one:
+     * {@code h = expr(w shl 8)} says the high half where {@code expr((w shl 8) | v)} says it inside
+     * the tree. It is the same fact about the form either way — the high half of the word is the low
+     * byte of a value some statement widened — so it is read the same way ({@link #highHalf}).
+     */
+    private Map<String, String> shiftedHalves = new LinkedHashMap<String, String>();
+
+    /**
      * The widenings whose only reader is a combine, so that emitting one would be work nobody wants.
      *
      * <p>A widening is a statement ({@code w = movzx x}), so it is a value, and a combine that reads
@@ -123,6 +133,17 @@ public final class InstructionSelector {
      * whose value goes anywhere else is a value the program asked for, and it stays.
      */
     private Set<String> consumedWidenings = new LinkedHashSet<String>();
+
+    /**
+     * The shifts whose only reader is a combine, so that emitting one would be work nobody wants.
+     *
+     * <p>A combine that reads a half out of {@code h} reads the byte {@code h} was shifted up from,
+     * so the shift is spent on a register the combine's own moves are about to fill — the same thing
+     * the widening is spent on, one statement further along. All of the shape or none of it: the byte
+     * is in the high half <b>because</b> the shift put it there, so a shift that stays is a shift
+     * whose word the combine wants as a word, which is the arithmetic it does not build.
+     */
+    private Set<String> consumedShifts = new LinkedHashSet<String>();
 
     /**
      * The byte values whose own load a combine makes, and the access each of those is.
@@ -179,10 +200,11 @@ public final class InstructionSelector {
         List<List<Integer>> mergedOperands = new ArrayList<List<Integer>>();
         Map<Block, Integer> firstPiece = new LinkedHashMap<Block, Integer>();
         Map<Block, Integer> lastPiece = new LinkedHashMap<Block, Integer>();
-        Map<Item, Boolean> flagsLive = flagsLiveBefore(Liveness.of(form.cfg(), names));
+        FlagLiveness flags = flagLiveness(Liveness.of(form.cfg(), names));
         widenedBytes = widenedBytes();
+        shiftedHalves = shiftedHalves();
         loadedBytes = loadedBytes();
-        findConsumed();
+        findConsumed(flags);
         for (Block block : form.cfg().blocks()) {
             // A φ is not an item and not an instruction. What it says is that the values
             // reaching it are one value as far as a register is concerned, because there
@@ -199,7 +221,7 @@ public final class InstructionSelector {
             for (SsaStatement statement : form.statements(block)) {
                 Item item = statement.item();
                 out = new ArrayList<Instruction>();
-                flagsLiveHere = isLive(flagsLive.get(item));
+                flagsLiveHere = flags.before(item);
                 select(item);
                 pieces.add(new Selection.Piece(item, out));
             }
@@ -243,6 +265,56 @@ public final class InstructionSelector {
             }
         }
         return widened;
+    }
+
+    /**
+     * The widened value each word value is a copy of, shifted up by eight, for {@link #shiftedHalves}.
+     *
+     * <p>Three things have to be true, and each of them is a fact about the form: the value is written
+     * once, by an assignment whose value is one operation, the operation shifts its second operand up
+     * by eight, and that operand is a value some statement widened a byte into. It is the shape
+     * {@link #highHalf} reads out of an expression, written as a statement of its own — and it is read
+     * here rather than at selection because which statements a combine reads is what decides what a
+     * combine may take over.
+     */
+    private Map<String, String> shiftedHalves() {
+        Map<String, String> shifted = new LinkedHashMap<String, String>();
+        for (Block block : form.cfg().blocks()) {
+            for (SsaStatement statement : form.statements(block)) {
+                if (!(statement.item() instanceof Item.Assign)) {
+                    continue;
+                }
+                Item.Assign assign = (Item.Assign) statement.item();
+                if (!(assign.place() instanceof Place.Name)) {
+                    continue;
+                }
+                String widened = shiftedUpByEight(assign.value());
+                if (widened != null) {
+                    shifted.put(((Place.Name) assign.place()).name(), widened);
+                }
+            }
+        }
+        return shifted;
+    }
+
+    /**
+     * The widened value this value is, shifted up by eight, or null when it is not that value.
+     *
+     * <p>Two spellings of the same thing, because the surface has two ways to write an operation and
+     * the pipeline picks between them: {@code h = eval(w shl 8)} while the flags are wanted, and
+     * {@code h = expr(w shl 8)} once the pass that takes the claim away has been over it
+     * ({@code i8086.pass.UnreadFlags}). Either of them is a statement that puts a byte in the high
+     * half of a word, which is what a combine is looking for.
+     */
+    private String shiftedUpByEight(Value value) {
+        if (value instanceof Value.Eval) {
+            Operation operation = ((Value.Eval) value).operation();
+            List<Value> operands = operation.operands();
+            return operands.size() == 2 && shiftsUpByEight(operation.operator(), operands.get(1))
+                    ? widenedValue(leaf(operands.get(0))) : null;
+        }
+        return value instanceof Value.Expr
+                ? widenedValue(shiftedUp(((Value.Expr) value).expression())) : null;
     }
 
     /**
@@ -313,7 +385,7 @@ public final class InstructionSelector {
     }
 
     /**
-     * Whether the flags can still be read in front of each item, by item.
+     * Where the flags are live in front of each item, and behind it.
      *
      * <p>The ordinary backward question about one variable, and the variable is {@code flags}
      * ({@code docs/ir.md} §4.1): they are live where something reads them before writing them
@@ -328,9 +400,13 @@ public final class InstructionSelector {
      * <p>The items are the form's rather than the module's, which is what the statement a selector
      * is given holds: a renamed item is a different object from the one the block was built with,
      * and the question "is this the item in front of me" has to have an answer that survives that.
+     *
+     * <p>Both directions come out of the one walk because both are read at the same moment, and
+     * because they are two halves of what one substitution has to know: which instruction may be
+     * replaced here, and which of the flags an instruction <em>defines</em> may be taken away.
      */
-    private Map<Item, Boolean> flagsLiveBefore(Liveness liveness) {
-        Map<Item, Boolean> live = new LinkedHashMap<Item, Boolean>();
+    private FlagLiveness flagLiveness(Liveness liveness) {
+        FlagLiveness flags = new FlagLiveness();
         for (Block block : form.cfg().blocks()) {
             boolean alive = false;
             for (Block successor : block.successors()) {
@@ -339,12 +415,30 @@ public final class InstructionSelector {
             List<SsaStatement> statements = form.statements(block);
             for (int at = statements.size() - 1; at >= 0; at--) {
                 Item item = statements.get(at).item();
+                flags.after.put(item, Boolean.valueOf(alive));
                 alive = Effects.readsFlags(item)
                         || (alive && !Effects.definedBy(item).contains(Names.FLAGS));
-                live.put(item, Boolean.valueOf(alive));
+                flags.before.put(item, Boolean.valueOf(alive));
             }
         }
-        return live;
+        return flags;
+    }
+
+    /** Whether the flags can still be read in front of an item, and behind it. */
+    private static final class FlagLiveness {
+
+        private final Map<Item, Boolean> before = new LinkedHashMap<Item, Boolean>();
+        private final Map<Item, Boolean> after = new LinkedHashMap<Item, Boolean>();
+
+        /** In front of it: whether an instruction here has to leave the flags alone. */
+        boolean before(Item item) {
+            return isLive(before.get(item));
+        }
+
+        /** Behind it: whether the flags this item defines are still read. */
+        boolean after(Item item) {
+            return isLive(after.get(item));
+        }
     }
 
     /** Whether the answer that was worked out for an item was that the flags are live. */
@@ -519,8 +613,9 @@ public final class InstructionSelector {
             return;
         }
         String destination = ((Place.Name) assign.place()).name();
-        if (consumedWidenings.contains(destination) || consumedLoads.contains(destination)) {
-            return; // the byte goes into the word a combine builds, and nothing else reads it
+        if (consumedWidenings.contains(destination) || consumedLoads.contains(destination)
+                || consumedShifts.contains(destination)) {
+            return; // this statement is work the word a combine builds has already done
         }
         if (isLabel(assign.value())) {
             emitLabelAddress(destination, (Value.Name) assign.value());
@@ -1087,26 +1182,31 @@ public final class InstructionSelector {
     }
 
     /**
-     * The widenings and loads whose only reader is a combine, so that emitting them is work nobody
-     * wants.
+     * The widenings, shifts and loads whose only reader is a combine, so that emitting them is work
+     * nobody wants.
      *
      * <p>Both halves come from statements that widen a byte, and the combine puts those bytes where
      * they belong — so the widening is not a value the program needs any more, and the sequence it
      * would be selected to is a move and a clear that the combine writes over. And where the byte
      * itself came from one plain load, that load can be the combine's own operand instead: the half
      * wants a byte in it, and {@code mov ah, byte [$p1]} is that byte, where loading it into a
-     * register first is a load and a move.
+     * register first is a load and a move. A half the program shifted up as a statement of its own
+     * is the same story one step along: {@code h = eval(w shl 8)} is a count in a register and a
+     * shift, and the combine's moves write the byte where the shift was putting it.
      *
-     * <p>What makes leaving either out safe is that <b>nothing else</b> reads the value: the count is
-     * of readers, the statement that defines a value does not count itself, and a value a φ carries
-     * is a reader that is an item of no kind and is therefore refused rather than missed.
+     * <p>What makes leaving any of them out safe is that <b>nothing else</b> reads the value: the
+     * count is of readers, the statement that defines a value does not count itself, and a value a φ
+     * carries is a reader that is an item of no kind and is therefore refused rather than missed.
      *
      * <p>A load is only taken when the combine is in <b>the same block</b> and later, with nothing
      * between that could have written memory — a store, an interrupt or a block of assembly. That is
      * the same rule {@code i8086.target.RepeatedLoads} applies to the code the allocator produced,
      * asked here of the statements, because this one changes which statement the access belongs to.
+     *
+     * <p>A shift brings the flags with it: written as an {@code eval} it defines them, where the
+     * idiom defines nothing ({@link #shiftsMayBeTaken}).
      */
-    private void findConsumed() {
+    private void findConsumed(FlagLiveness flags) {
         Map<String, Set<Item>> readers = new LinkedHashMap<String, Set<Item>>();
         Map<String, Item> definedBy = new LinkedHashMap<String, Item>();
         Map<Item, Integer> position = new LinkedHashMap<Item, Integer>();
@@ -1141,46 +1241,82 @@ public final class InstructionSelector {
 
         for (Block each : form.cfg().blocks()) {
             for (SsaStatement statement : form.statements(each)) {
-                String[] halves = combinedHalves(statement.item());
-                if (halves == null) {
+                Item combine = statement.item();
+                Half[] halves = combinedHalves(combine);
+                if (halves == null
+                        || !shiftsMayBeTaken(halves, combine, flags, definedBy, readers, carried)) {
                     continue;
                 }
-                for (String half : halves) {
-                    if (!onlyReader(readers, carried, half, statement.item())) {
+                for (Half half : halves) {
+                    if (half.shift != null) {
+                        consumedShifts.add(half.shift);
+                    }
+                    // The widening is dead when the only thing that read it is going away: the
+                    // combine itself, or the shift the combine is taking over instead.
+                    Item readsTheWidening = half.shift == null ? combine : definedBy.get(half.shift);
+                    if (!onlyReader(readers, carried, half.widened, readsTheWidening)) {
                         continue;
                     }
-                    consumedWidenings.add(half);
-                    consumeByteLoad(half, definedBy, readers, carried, position, block, statement);
+                    consumedWidenings.add(half.widened);
+                    consumeByteLoad(half, definedBy, readers, carried, position, block, combine);
                 }
             }
         }
     }
 
     /**
+     * Whether every shift this combine reads may be taken over: only this combine reads the shift, and
+     * the flags it defines are nobody's.
+     *
+     * <p>The flags are not a detail. A shift claims the flags its operation leaves and the idiom
+     * cannot make that claim — it is moves — so the flags the shift leaves behind have to be dead:
+     * asked of {@link FlagLiveness#after}, the direction that sees a definition of the flags as
+     * something a later statement may be counting on.
+     *
+     * <p>All of the shape or none of it: the byte is in the high half <b>because</b> the shift put it
+     * there, so a shift that stays is a shift whose word the combine would have to read as a word.
+     */
+    private static boolean shiftsMayBeTaken(Half[] halves, Item combine, FlagLiveness flags,
+                                            Map<String, Item> definedBy,
+                                            Map<String, Set<Item>> readers, Set<String> carried) {
+        for (Half half : halves) {
+            if (half.shift == null) {
+                continue;
+            }
+            Item shift = definedBy.get(half.shift);
+            if (shift == null || flags.after(shift)
+                    || !onlyReader(readers, carried, half.shift, combine)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Takes the load a widened byte came from, when that load is the byte's only reader and the
      * combine can carry the access itself.
      */
-    private void consumeByteLoad(String half, Map<String, Item> definedBy,
+    private void consumeByteLoad(Half half, Map<String, Item> definedBy,
                                  Map<String, Set<Item>> readers, Set<String> carried,
                                  Map<Item, Integer> position, Map<Item, Block> block,
-                                 SsaStatement combine) {
-        String value = widenedBytes.get(half);
+                                 Item combine) {
+        String value = widenedBytes.get(half.widened);
         Value.Memory load = value == null ? null : loadedBytes.get(value);
-        Item widening = definedBy.get(half);
+        Item widening = definedBy.get(half.widened);
         Item loading = value == null ? null : definedBy.get(value);
         if (load == null || widening == null || loading == null
                 || !onlyReader(readers, carried, value, widening)
-                || block.get(widening) != block.get(combine.item())
-                || block.get(loading) != block.get(combine.item())
+                || block.get(widening) != block.get(combine)
+                || block.get(loading) != block.get(combine)
                 || position.get(loading).intValue() > position.get(widening).intValue()
-                || position.get(widening).intValue() > position.get(combine.item()).intValue()) {
+                || position.get(widening).intValue() > position.get(combine).intValue()) {
             return;
         }
-        if (writesMemoryBetween(block.get(loading), loading, combine.item())) {
+        if (writesMemoryBetween(block.get(loading), loading, combine)) {
             return;
         }
         consumedLoads.add(value);
-        halfAccess.put(half, load);
+        halfAccess.put(half.widened, load);
     }
 
     /** Whether this value's one reader is this item, and nothing carries it as a φ operand. */
@@ -1233,54 +1369,118 @@ public final class InstructionSelector {
     }
 
     /**
-     * The two word values a statement puts together into one, the high one first, or null when the
+     * A half of a combine: the byte that goes in it, and what put it in the half it is in.
+     *
+     * <p>The byte is named by the word value some statement widened it into — {@link #widenedBytes}
+     * says which byte that word is a copy of — and {@code shift} is the word value a statement of its
+     * own shifted up, when the program wrote the high half as a statement rather than inside the tree.
+     * Only {@link #highHalf} makes one with a shift, and only a shift makes a byte the high half, which
+     * is what says the two halves do not overlap.
+     */
+    private static final class Half {
+
+        private final String widened;
+        private final String shift;
+
+        Half(String widened, String shift) {
+            this.widened = widened;
+            this.shift = shift;
+        }
+    }
+
+    /**
+     * The two halves of the word a statement puts together, the high one first, or null when the
      * statement puts nothing together.
      *
      * <p>The shape is {@code (high shl 8) + low} — or the same with {@code * 256}, or with the two
      * operands the other way round, or joined with {@code |}, which says the same thing when the
-     * fields cannot overlap.
+     * fields cannot overlap. The high half may be shifted by a statement of its own:
+     * {@code h = expr(w shl 8)} and {@code t = expr(h | v)} are the halves of
+     * {@code t = expr((w shl 8) | v)} spelled out.
+     *
+     * <p>Only {@code expr}, because the idiom is moves and claims nothing about the flags where the
+     * arithmetic it stands for does. An operation written as an {@code eval} still claims them, and for
+     * two operands that are values it is a claim the pass that turns unread operations into
+     * {@code expr} would have taken away ({@code i8086.pass.UnreadFlags}) — so an {@code eval} left
+     * here is one whose flags are read.
      */
-    private String[] combinedHalves(Item item) {
+    private Half[] combinedHalves(Item item) {
         if (!(item instanceof Item.Assign)
                 || !(((Item.Assign) item).value() instanceof Value.Expr)) {
             return null;
         }
-        return combinedHalves(((Value.Expr) ((Item.Assign) item).value()).expression());
-    }
-
-    /** The same, for an expression: the two widened values a combine would read, or null. */
-    private String[] combinedHalves(Expression expression) {
+        Expression expression = ((Value.Expr) ((Item.Assign) item).value()).expression();
         if (!(expression instanceof Expression.Apply)) {
             return null;
         }
         Expression.Apply apply = (Expression.Apply) expression;
-        if (!apply.operator().equals(Operator.ADD)
-                && !apply.operator().equals(Operator.OR)) {
+        return combinedHalves(apply.operator(), apply.left(), apply.right());
+    }
+
+    /** The two halves of the word two operands make, the high one first, or null. */
+    private Half[] combinedHalves(Operator operator, Expression left, Expression right) {
+        if (!operator.equals(Operator.ADD) && !operator.equals(Operator.OR)) {
             return null;
         }
-        String high = widenedValue(shiftedUp(apply.left()));
-        String low = widenedValue(apply.right());
+        Half high = highHalf(left);
+        Half low = lowHalf(right);
         if (high == null || low == null) {
-            high = widenedValue(shiftedUp(apply.right()));
-            low = widenedValue(apply.left());
+            high = highHalf(right);
+            low = lowHalf(left);
         }
-        if (high == null || low == null || high.equals(low)) {
+        if (high == null || low == null || high.widened.equals(low.widened)) {
             return null;
         }
-        return new String[] { high, low };
+        return new Half[] { high, low };
+    }
+
+    /**
+     * The high half this expression puts in place, when it is a byte shifted up by eight: written
+     * inside the tree as {@code (w shl 8)}, or by a statement of its own, {@code h = eval(w shl 8)}.
+     * Null when it is neither.
+     *
+     * <p>The shift is the whole of what makes a high half: two bytes added or ORed with neither of
+     * them shifted are two bytes in the low half, which is not the word a combine builds.
+     */
+    private Half highHalf(Expression expression) {
+        Expression operand = shiftedUp(expression);
+        if (operand != null) {
+            String widened = widenedValue(operand);
+            return widened == null ? null : new Half(widened, null);
+        }
+        String name = nameOf(expression);
+        String widened = name == null ? null : shiftedHalves.get(name);
+        return widened == null ? null : new Half(widened, name);
+    }
+
+    /**
+     * The low half this expression is, when it is a byte some statement widened: that word's low
+     * byte. Null when it is anything else, a shift included — a shifted byte is above the low half,
+     * which makes it the other half and not this one.
+     */
+    private Half lowHalf(Expression expression) {
+        String widened = widenedValue(expression);
+        return widened == null ? null : new Half(widened, null);
     }
 
     /** The word value this expression names, when a statement widened a byte into it. */
     private String widenedValue(Expression expression) {
+        String name = nameOf(expression);
+        return name != null && widenedBytes.containsKey(name) ? name : null;
+    }
+
+    /** The name a leaf names, or null when the expression is not a name standing on its own. */
+    private static String nameOf(Expression expression) {
         if (!(expression instanceof Expression.Leaf)) {
             return null;
         }
         Value value = ((Expression.Leaf) expression).value();
-        if (!(value instanceof Value.Name)) {
-            return null;
-        }
-        String name = ((Value.Name) value).name();
-        return widenedBytes.containsKey(name) ? name : null;
+        return value instanceof Value.Name ? ((Value.Name) value).name() : null;
+    }
+
+    /** A value standing where a tree can stand: an operand of an {@code eval}, read as a leaf. */
+    private static Expression leaf(Value value) {
+        return new Expression.Leaf(value.position(), value);
     }
 
     /**
@@ -1293,24 +1493,37 @@ public final class InstructionSelector {
      * With both halves known, the word they make is the low byte of one in the high half and the low
      * byte of the other in the low half, which on this machine is two moves.
      *
+     * <p>A half that a statement of its own shifted up is only the combine's to take apart when the
+     * shift is going away too, and whether it is was decided once, over the statements
+     * ({@link #findConsumed}). Asking here is what keeps the two ends of that decision the same
+     * decision: a shift that stays is a shift the combine reads as a word.
+     *
      * <p>Only where nothing is reading the flags, because the idiom is moves and the arithmetic it
-     * stands for defines them. The declaration is the target's ({@code keepsFlags}), and it is asked
-     * before the substitution rather than after: the flags are the machine's, not this class's.
+     * stands for defines them. The declaration of that is the target's ({@code keepsFlags}); the
+     * promise that the flags are nobody's is the shape's, and it is made where the shape is
+     * recognized — an {@code expr} has given them up by being written as one, and a shift is only ever
+     * taken when the flags it leaves have no reader ({@link #findConsumed}).
      */
     private Expansion combinedBytes(Expression.Apply apply, String destination) {
-        if (flagsLiveHere) {
-            return null;
-        }
-        String[] halves = combinedHalves(apply);
+        return combinedBytes(combinedHalves(apply.operator(), apply.left(), apply.right()),
+                apply.operator(), apply.position(), destination);
+    }
+
+    /** The idiom for these halves, when there is one — or null when the shape is not the combine's. */
+    private Expansion combinedBytes(Half[] halves, Operator operator, SourcePos where,
+                                    String destination) {
         if (halves == null) {
             return null;
         }
-        Expansion sequence = target.combineBytes(apply.position(),
-                virtual(destination, apply.position()),
-                halfOperand(halves[0], apply.position()),
-                halfOperand(halves[1], apply.position()));
+        for (Half half : halves) {
+            if (half.shift != null && !consumedShifts.contains(half.shift)) {
+                return null;
+            }
+        }
+        Expansion sequence = target.combineBytes(where, virtual(destination, where),
+                halfOperand(halves[0], where), halfOperand(halves[1], where));
         if (sequence != null) {
-            requireFlagsMayBeLost(sequence.keepsFlags(), apply.position(), apply.operator(), false);
+            requireFlagsMayBeLost(sequence.keepsFlags(), where, operator, false);
         }
         return sequence;
     }
@@ -1319,9 +1532,10 @@ public final class InstructionSelector {
      * What a combine reads a half from: the access itself when the byte's own load is the combine's
      * to make, and the register the byte is in otherwise.
      */
-    private Operand halfOperand(String half, SourcePos where) {
-        Value.Memory load = halfAccess.get(half);
-        return load == null ? virtual(widenedBytes.get(half), where) : memory(load.operand());
+    private Operand halfOperand(Half half, SourcePos where) {
+        Value.Memory load = halfAccess.get(half.widened);
+        return load == null
+                ? virtual(widenedBytes.get(half.widened), where) : memory(load.operand());
     }
 
     /**
@@ -1334,30 +1548,28 @@ public final class InstructionSelector {
             return null;
         }
         Expression.Apply apply = (Expression.Apply) expression;
+        Value by = literalOf(apply.right());
+        return by != null && shiftsUpByEight(apply.operator(), by) ? apply.left() : null;
+    }
+
+    /** Whether this operator, applied to this operand, shifts a value up by eight. */
+    private static boolean shiftsUpByEight(Operator operator, Value by) {
         long amount;
-        if (apply.operator().equals(Operator.SHIFT_LEFT)) {
+        if (operator.equals(Operator.SHIFT_LEFT)) {
             amount = 8;
-        } else if (apply.operator().equals(Operator.MULTIPLY)
-                || apply.operator().equals(Operator.MULTIPLY_UNSIGNED)
-                || apply.operator().equals(Operator.MULTIPLY_SIGNED)) {
+        } else if (operator.equals(Operator.MULTIPLY)
+                || operator.equals(Operator.MULTIPLY_UNSIGNED)
+                || operator.equals(Operator.MULTIPLY_SIGNED)) {
             amount = 256;
         } else {
-            return null;
+            return false;
         }
-        Value by = literalOf(apply.right());
-        if (!(by instanceof Value.Number) || ((Value.Number) by).value() != amount) {
-            return null;
-        }
-        return apply.left();
+        return by instanceof Value.Number && ((Value.Number) by).value() == amount;
     }
 
     /** The register a leaf already names, or null when it is not one. */
     private static String sourceRegister(Expression expression) {
-        if (!(expression instanceof Expression.Leaf)) {
-            return null;
-        }
-        Value value = ((Expression.Leaf) expression).value();
-        return value instanceof Value.Name ? ((Value.Name) value).name() : null;
+        return nameOf(expression);
     }
 
     /** The register an operand already names, or null when it is a literal. */

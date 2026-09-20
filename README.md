@@ -183,9 +183,12 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    what it has — `LAHF` or `PUSHF` on the 8086, which has no `SETcc`.
    **Built for arithmetic, comparisons, control flow, loads, stores, the machine's multiply and
    divide, and two bytes put together into one word** — the last one being the shape a program writes
-   as {@code (high shl 8) + low} over two bytes it has widened, which on this machine is two moves
-   into the halves of {@code ax} ({@code i8086.target.combineBytes} and the recognizer beside it in
-   selection); **conversions, `setcc` and the target-provided
+   as `(high shl 8) + low` over two bytes it has widened, which on this machine is two moves
+   into the halves of `ax` (`i8086.target.combineBytes` and the recognizer beside it in
+   selection). The high half may be shifted by a statement of its own — `h = eval(w shl 8)`
+   then `t = expr(h | v)` says what `t = expr((w shl 8) | v)` says — and then the shift goes with
+   the widenings it reads, where nothing reads it and nothing reads the flags it leaves;
+   **conversions, `setcc` and the target-provided
    operations of `docs/ir.md` §11 are not there yet**, and a byte access is refused
    with the reason.
 7. **Register allocation**: graph colouring over the target's small, heavily

@@ -171,6 +171,14 @@ public final class CompilerTest {
         suite.add("Compiler puts two bytes into one word", CompilerTest::combinesTwoBytes);
         suite.add("Compiler puts two computed bytes into one word",
                 CompilerTest::combinesComputedBytes);
+        suite.add("Compiler puts two bytes into one word written as two statements",
+                CompilerTest::combinesBytesShiftedByAStatement);
+        suite.add("Compiler leaves the shift whose word is read somewhere else",
+                CompilerTest::leavesAShiftThatIsReadTwice);
+        suite.add("Compiler keeps the shift when the flags it leaves are read",
+                CompilerTest::keepsAShiftWhoseFlagsAreRead);
+        suite.add("Compiler leaves the shift a store stands in the way of",
+                CompilerTest::leavesTheShiftWhenAStoreComesBetween);
         suite.add("Compiler takes the bytes past a store that came before them",
                 CompilerTest::takesTheLoadsPastAnEarlierStore);
         suite.add("Compiler leaves the load when a store stands between",
@@ -2332,6 +2340,145 @@ public final class CompilerTest {
                         + "    w = movzx x\n"
                         + "    v = movzx y\n"
                         + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the same idiom for the same two bytes where the high half was shifted by a statement of its
+     * own: {@code h = eval(w shl 8)} and {@code t = expr(h | v)} say what
+     * {@code t = expr((w shl 8) | v)} says, and it is the shape the program is left with once the pass
+     * that gives up unread flags has been over it.
+     *
+     * <p>Three statements go this time, not two: the load put the byte in a register, the widening put
+     * it in a word, and the shift put it in the high half — and the combine's moves do all three. What
+     * makes that safe is the count of readers again, one link at a time: the combine reads the word, the
+     * shift reads the widened word, and the widening reads the byte.
+     */
+    private static void combinesBytesShiftedByAStatement() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$p1: times 1 db 0\n"
+                        + "\n"
+                        + "$p2: times 1 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ah, byte [$p1]\n"
+                        + "    mov al, byte [$p2]\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$p1: pad 1\n$p2: pad 1\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var h: u16\n    var t: u16\n"
+                        + "    x = byte [$p1]\n"
+                        + "    y = byte [$p2]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    h = eval(w shl 8)\n"
+                        + "    t = expr(h | v)\n"
+                        + "    volatile [0x40] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The must-not for taking a shift: its word is read by another statement as well, so the shift is a
+     * value the program asked for and it stays where it was written.
+     *
+     * <p>And everything under it stays with it. The byte is in the high half <b>because</b> the shift
+     * put it there, so a shift that stays is a shift the combine would have to read as a word — which is
+     * the arithmetic it does not build. All of the shape or none of it.
+     */
+    private static void leavesAShiftThatIsReadTwice() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov al, byte [0x40]\n"
+                        + "    mov cl, byte [0x42]\n"
+                        + "    xor ah, ah\n"
+                        + "    mov bx, ax\n"
+                        + "    mov al, cl\n"
+                        + "    xor ah, ah\n"
+                        + "    mov dx, ax\n"
+                        + "    mov cl, 8\n"
+                        + "    shl bx, cl\n"
+                        + "    mov ax, bx\n"
+                        + "    or ax, dx\n"
+                        + "    mov [0x44], ax\n"
+                        + "    mov [0x46], bx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var h: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    h = eval(w shl 8)\n"
+                        + "    t = expr(h | v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    volatile [0x46] = h\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not for the flags, which is what a shift brings and a widening does not: the flags
+     * are read where the shift stands, and the machine's shift by a count of eight does not leave the
+     * flags the operation promises.
+     *
+     * <p>So the program is refused where the shift is written, and that is the point of the test: with
+     * the shift taken apart the refusal would never happen, because the idiom is moves and would leave
+     * the branch reading whatever was in the flags before — a wrong answer in place of a complaint.
+     */
+    private static void keepsAShiftWhoseFlagsAreRead() {
+        CompileError refused = Assert.assertRefused("t.ir:16:16",
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var h: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    h = eval(w shl 8)\n"
+                        + "    jnz $skip\n"
+                        + "    t = expr(h | v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    ret\n"
+                        + "\n$skip:\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("leaves different flags"),
+                refused.getMessage());
+    }
+
+    /**
+     * And the must-not for taking the load, with the shift in the way: a store between them may have
+     * written the byte, so the load happens where it was written and the combine reads the register.
+     *
+     * <p>The shift still goes, and so does the widening under it: neither of them touches memory, so a
+     * store is nothing either of them has to stay behind. Only the access is pinned, and only because
+     * the question about what else could have written it is asked of a range of statements.
+     */
+    private static void leavesTheShiftWhenAStoreComesBetween() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov cl, byte [0x42]\n"
+                        + "    mov word [0x50], 1\n"
+                        + "    mov ah, dl\n"
+                        + "    mov al, cl\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var h: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    h = eval(w shl 8)\n"
+                        + "    volatile word [0x50] = 1\n"
+                        + "    t = expr(h | v)\n"
                         + "    volatile [0x44] = t\n"
                         + "    ret\n"));
     }
