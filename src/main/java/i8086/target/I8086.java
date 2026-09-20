@@ -530,6 +530,24 @@ public final class I8086 implements Target {
     private static final String REMAINDER_ANSWER = "dx";
 
     /**
+     * The register this machine counts a loop in, which is the only register {@code loop} counts in.
+     *
+     * <p>Named here because two things say it: the sequence that counts a loop down
+     * ({@link CountedLoops}) and the answer to {@link #preferredRegister}, and a machine with two
+     * opinions about which register counts is a machine with a bug.
+     */
+    static final String COUNTING_REGISTER = "cx";
+
+    /**
+     * The instructions that count a value, which is what makes {@code cx} worth asking for.
+     *
+     * <p>{@code dec} and {@code inc} are what selection writes where the flags of the arithmetic are
+     * not wanted, and {@code sub r, 1} and {@code add r, 1} are the same thing where they are. All
+     * four are the countdown a loop is made of, and a loop is where {@code loop} saves its byte.
+     */
+    private static final Set<String> COUNTING_INSTRUCTIONS = names("dec", "inc", "sub", "add");
+
+    /**
      * The registers that can be inside the brackets.
      *
      * <p>These three and no others: {@code [ax]}, {@code [cx]} and {@code [dx]} are
@@ -1067,6 +1085,34 @@ public final class I8086 implements Target {
                     new Operand.Number(where, 0, Numbers.spelling(0)));
         }
         return instruction(where, "xor", register, register);
+    }
+
+    /**
+     * A countdown would rather be in {@code cx}, because that is where {@code loop} counts.
+     *
+     * <p>It is a preference rather than a rule because the account is one byte either way: moving a
+     * value here takes it out of {@code ax}, whose direct address and immediate forms are shorter,
+     * and gives it a counted loop, which is a byte where the three instructions it replaces are
+     * three. Nothing else this machine does cares which of the two a value is in — {@code dec},
+     * {@code inc}, {@code test r, r} and a small immediate all cost the same either way — which is
+     * what makes the ask worth making at all.
+     */
+    @Override
+    public String preferredRegister(Instruction instruction) {
+        List<Operand> operands = instruction.operands();
+        if (!COUNTING_INSTRUCTIONS.contains(instruction.mnemonic()) || operands.isEmpty()) {
+            return null;
+        }
+        if (operands.size() == 2 && !Long.valueOf(1).equals(number(operands.get(1)))) {
+            return null; // arithmetic, but not by one: not a countdown
+        }
+        return COUNTING_REGISTER;
+    }
+
+    /** The number an operand is, or null when it is not a literal at all. */
+    private static Long number(Operand operand) {
+        return operand instanceof Operand.Number
+                ? Long.valueOf(((Operand.Number) operand).value()) : null;
     }
 
     /**

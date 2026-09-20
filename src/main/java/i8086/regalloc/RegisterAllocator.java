@@ -86,6 +86,15 @@ public final class RegisterAllocator {
     /** The registers each value may not be given, because something destroys them. */
     private final Map<String, Set<String>> keepOut = new LinkedHashMap<String, Set<String>>();
 
+    /**
+     * The register each value would rather have, where the target says one is worth asking for.
+     *
+     * <p>Not a constraint and not a colour: a hint, tried before the target's own order, so that a
+     * value the machine would be a byte cheaper holding can have that register when it is free and
+     * the usual order when it is not ({@link Target#preferredRegister}).
+     */
+    private final Map<String, String> preferred = new LinkedHashMap<String, String>();
+
     /** Which register each value ended up in. */
     private final Map<String, String> assigned = new LinkedHashMap<String, String>();
 
@@ -154,6 +163,7 @@ public final class RegisterAllocator {
         takeReadRegisters();
         keepValuesOutOfReadRegisters();
         requireTheReadRegistersAreTheMachines();
+        takePreferences(selection);
         colour();
 
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
@@ -513,6 +523,11 @@ public final class RegisterAllocator {
         List<String> allowed = registersFor(value);
         Set<String> inUse = coloursInUse(value);
         Set<String> forbidden = keepOut.get(value);
+        String wanted = preferred.get(value);
+        if (wanted != null && allowed.contains(wanted) && !inUse.contains(wanted)
+                && (forbidden == null || !forbidden.contains(wanted))) {
+            return wanted; // what the machine asked for, when the machine can have it
+        }
         for (String candidate : allowed) {
             if (forbidden != null && forbidden.contains(candidate)) {
                 continue;
@@ -523,6 +538,112 @@ public final class RegisterAllocator {
             return candidate;
         }
         return null;
+    }
+
+    /**
+     * The register each value would rather have, where the machine says one is worth asking for.
+     *
+     * <p>A machine is not uniform about its registers. This one counts a loop down in {@code cx} and
+     * nowhere else, so a value an instruction counts can be a byte cheaper there — and the register
+     * this allocator reaches for first is the accumulator, whose direct-address and immediate forms
+     * are shorter than the general ones. The answer is therefore asked for and tried, and where it
+     * does not fit the order is what is left.
+     *
+     * <p>What the target answers is about one instruction, so what it is asked for is the register a
+     * counted value is worth trying, and not proof that a loop will use it: a value that is counted
+     * and never looped over costs the same either way ({@code inc}, {@code dec}, {@code test r, r}
+     * and a small immediate are all the same in either register), which is what makes the ask
+     * harmless where it is not useful. The counted instruction is a byte, and it is the one the
+     * machine has no general form of.
+     *
+     * <p>Three shapes withdraw the request, and all three are shapes rather than facts about the
+     * machine, because shapes are what this can see: an address with no register in it, which a
+     * machine may have a direct form of — {@code mov [x], ax} is a byte shorter than
+     * {@code mov [x], cx} — a move between a value and a register the target named by hand, where a
+     * sequence has already decided which register it wants, and a literal too wide for the short
+     * immediate form. A byte value asks for nothing either: this machine's counted instruction counts
+     * a word, so a byte in the register the target named would buy nothing and could cost the byte an
+     * immediate comparison saves.
+     *
+     * <p>What is asked about is the <b>value</b> and not the name, so the request is remembered for
+     * the whole group: a φ's names are one life, and which of them the colouring sees is the
+     * colouring's business.
+     */
+    private void takePreferences(Selection selection) {
+        Map<String, String> asked = new LinkedHashMap<String, String>();
+        Set<String> withdrawn = new LinkedHashSet<String>();
+        for (Selection.Piece piece : selection.pieces()) {
+            for (Instruction instruction : piece.instructions()) {
+                boolean accumulatorIsShorter = accumulatorMayBeShorter(instruction);
+                String wanted = target.preferredRegister(instruction);
+                if (wanted == null && !accumulatorIsShorter) {
+                    continue;
+                }
+                for (String name : mentioned(instruction)) {
+                    String value = groupOf(name);
+                    if (accumulatorIsShorter) {
+                        withdrawn.add(value);
+                    }
+                    if (wanted != null) {
+                        asked.put(value, wanted);
+                    }
+                }
+            }
+        }
+        for (Map.Entry<String, String> entry : asked.entrySet()) {
+            String value = entry.getKey();
+            if (withdrawn.contains(value) || isByteWide(value)
+                    || addresses.contains(value)) {
+                continue;
+            }
+            preferred.put(value, entry.getValue());
+        }
+    }
+
+    /**
+     * Whether this machine may have a shorter form of this instruction in one register.
+     *
+     * <p>Three shapes, and they are the shapes a value's register can be felt in: an access to an
+     * address with no register in it, which the accumulator has a direct form for; a move between a
+     * value and a register the target named by hand, which is a sequence that has already chosen;
+     * and a literal too wide for the short immediate form, where the accumulator's own immediate is
+     * the shorter one. Anything else is a question for the target, and the target is asked the other
+     * half of it ({@link Target#preferredRegister}).
+     */
+    private static boolean accumulatorMayBeShorter(Instruction instruction) {
+        boolean namesARegister = false;
+        boolean mentionsAValue = false;
+        boolean wideImmediate = false;
+        for (Operand operand : instruction.operands()) {
+            if (operand instanceof Operand.Memory) {
+                if (!hasRegister((Operand.Memory) operand)) {
+                    return true;
+                }
+            } else if (operand instanceof Operand.Name) {
+                namesARegister = true;
+            } else if (operand instanceof Operand.Virtual || operand instanceof Operand.LowByte) {
+                mentionsAValue = true;
+            } else if (operand instanceof Operand.Number
+                    && !fitsInAByte(((Operand.Number) operand).value())) {
+                wideImmediate = true;
+            }
+        }
+        return (namesARegister || wideImmediate) && mentionsAValue;
+    }
+
+    /** Whether a literal is one the machine's short immediate form can hold. */
+    private static boolean fitsInAByte(long value) {
+        return value >= -128 && value <= 127;
+    }
+
+    /** Whether an access is made through a register, as opposed to a bare address. */
+    private static boolean hasRegister(Operand.Memory memory) {
+        for (Operand.Memory.Atom atom : memory.atoms()) {
+            if (atom.isVirtual()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

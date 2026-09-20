@@ -156,6 +156,12 @@ public final class CompilerTest {
                 CompilerTest::buildsTheZeroAgainAfterAnInterrupt);
         suite.add("Compiler builds the zero again after a label",
                 CompilerTest::buildsTheZeroAgainAfterALabel);
+        suite.add("Compiler gives a countdown the register the machine counts in",
+                CompilerTest::countsDownInTheCountingRegister);
+        suite.add("Compiler withdraws that request where the accumulator is shorter",
+                CompilerTest::withdrawsTheRequestForTheAccumulator);
+        suite.add("Compiler leaves an address out of the counting register",
+                CompilerTest::leavesAnAddressOutOfTheCountingRegister);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -661,8 +667,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    inc ax\n"
-                + "    add ax, 1\n"
+                + "    inc cx\n"
+                + "    add cx, 1\n"
                 + "    jc $l0\n"
                 + "\n"
                 + "$l0:\n"
@@ -1133,7 +1139,7 @@ public final class CompilerTest {
                 + "    jc $l0\n"
                 + "$l0:\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    shl ax, 1\n    shl ax, 1\n"),
+        Assert.assertTrue(assembly.contains("    shl cx, 1\n    shl cx, 1\n"),
                 "four times x is two shifts in place: " + assembly);
     }
 
@@ -1249,8 +1255,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    add ax, 1\n"
-                        + "    add ax, 1\n"
+                        + "    add cx, 1\n"
+                        + "    add cx, 1\n"
                         + "    int 0x21\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -1710,12 +1716,12 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov ax, 3\n"
+                + "    mov cx, 3\n"
                 + "\n"
                 + "$top:\n"
                 + "    hlt\n"
-                + "    dec ax\n"
-                + "    test ax, ax\n"
+                + "    dec cx\n"
+                + "    test cx, cx\n"
                 + "    jnz $top\n"
                 + "    jz $other\n"
                 + "\n"
@@ -2014,6 +2020,119 @@ public final class CompilerTest {
                         + "$again:\n"
                         + "    movreg es, 0\n"
                         + "    ret\n"));
+    }
+
+    // --- the register the machine counts in (a hint) ------------------------
+
+    /**
+     * A countdown with nothing else wanting a register: without the hint the counter takes {@code ax}
+     * — the register the allocator reaches for first — and the counted instruction cannot be used at
+     * all, because it counts in {@code cx}. What the hint buys is the loop: two bytes where three
+     * instructions are three, and the comparison that was already redundant gone with them.
+     *
+     * <p>This is the program that made the hint worth writing. Before it, whether {@code loop}
+     * appeared depended on which registers happened to be busy when the counter was coloured: adding
+     * the fold above freed {@code al}, the counter moved into {@code ax}, and the loop's byte and the
+     * fold's byte cancelled exactly.
+     */
+    private static void countsDownInTheCountingRegister() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $parts\n"
+                        + "    mov cx, 4\n"
+                        + "\n"
+                        + "$top:\n"
+                        + "    cmp byte [bx], 0x80\n"
+                        + "    jz $stop\n"
+                        + "    add bx, 0x10\n"
+                        + "    loop $top\n"
+                        + "\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: times 4 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var n: u16\n"
+                        + "    var flag: u8\n"
+                        + "    var base: u16\n"
+                        + "    base = $parts\n"
+                        + "    n = 4\n"
+                        + "$top:\n"
+                        + "    flag = byte [base]\n"
+                        + "    cmp flag, 0x80\n"
+                        + "    jz $stop\n"
+                        + "    base = eval(base + 16)\n"
+                        + "    n = eval(n - 1)\n"
+                        + "    cmp n, 0\n"
+                        + "    jnz $top\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: pad 4\n"));
+    }
+
+    /**
+     * The must-not that the request is conditional on: this counter is written to a fixed address
+     * every turn, and there the accumulator's direct form is a byte shorter — {@code mov [0x40], ax}
+     * is three bytes where {@code mov [0x40], cx} is four. So the request is withdrawn and the
+     * counter stays where it was, which is a byte better than taking the hint would have been.
+     */
+    private static void withdrawsTheRequestForTheAccumulator() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, 4\n"
+                        + "\n"
+                        + "$top:\n"
+                        + "    mov [0x40], ax\n"
+                        + "    dec ax\n"
+                        + "    jnz $top\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var n: u16\n"
+                        + "    n = 4\n"
+                        + "$top:\n"
+                        + "    volatile [0x40] = n\n"
+                        + "    n = eval(n - 1)\n"
+                        + "    cmp n, 0\n"
+                        + "    jnz $top\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not that is about the value rather than the shapes around it: this counter is an
+     * address, and an address lives in {@code bx}, {@code si} or {@code di} and nowhere else. The
+     * request is for a register the value may not have, so there is nothing for it to do — and the
+     * loop stays three instructions, because the machine counts in a register this value is not in.
+     */
+    private static void leavesAnAddressOutOfTheCountingRegister() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $parts\n"
+                        + "\n"
+                        + "$top:\n"
+                        + "    mov al, byte [bx]\n"
+                        + "    dec bx\n"
+                        + "    jnz $top\n"
+                        + "    mov [0x42], al\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: times 4 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var c: u8\n"
+                        + "    p = $parts\n"
+                        + "$top:\n"
+                        + "    c = byte [p]\n"
+                        + "    p = eval(p - 1)\n"
+                        + "    cmp p, 0\n"
+                        + "    jnz $top\n"
+                        + "    volatile [0x42] = c\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: pad 4\n"));
     }
 
     // --- reading the machine's own registers (docs/ir.md §8.1) --------------
@@ -2996,9 +3115,9 @@ public final class CompilerTest {
                 + "    i = 0\n    n = 3\n"
                 + "    .while i < n\n        i = eval(i + 1)\n    .endw\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("    jmp ..@lbl1\n\n..@lbl0:\n    inc ax\n"),
+        Assert.assertTrue(assembly.contains("    jmp ..@lbl1\n\n..@lbl0:\n    inc cx\n"),
                 "the loop body comes first and the test is jumped to: " + assembly);
-        Assert.assertTrue(assembly.contains("..@lbl1:\n    cmp ax, 3\n    jc ..@lbl0\n"),
+        Assert.assertTrue(assembly.contains("..@lbl1:\n    cmp cx, 3\n    jc ..@lbl0\n"),
                 "and the constant is folded into the comparison: " + assembly);
     }
 

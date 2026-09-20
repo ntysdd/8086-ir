@@ -324,6 +324,25 @@ public interface Target {
     }
 
     /**
+     * The register this instruction would rather its operand were in, or null when it does not care.
+     *
+     * <p>A machine is not uniform about its registers. On this one, {@code loop} counts in {@code cx}
+     * and nowhere else, so a value an instruction counts down is a byte cheaper there — while the
+     * register the allocator reaches for first is the accumulator, whose direct-address and immediate
+     * forms are shorter than the general ones. What that makes this is a <b>hint</b> rather than a
+     * constraint: the allocator tries the answer before its own order and falls back to the order when
+     * it does not fit, which is the difference between preferring a register and pinning a value to
+     * one ({@code docs/ir.md} §12 item 12).
+     *
+     * <p>Which instructions those are is the target's to say, and so is whether it says anything at
+     * all: a target whose registers are interchangeable answers null for everything and its allocator
+     * behaves as it did.
+     */
+    default String preferredRegister(Instruction instruction) {
+        return null;
+    }
+
+    /**
      * A sequence that multiplies two registers, or null when this target has none.
      *
      * <p>The 8086 has one instruction and it is not an ordinary one: {@code mul r}

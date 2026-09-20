@@ -195,7 +195,12 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    here is spilling — needing more registers than the machine has is a hard error
    (`docs/ir.md` §8.2), which is a promise rather than a shortfall — and
    pre-coloured nodes, which are not needed: what the machine insists on is handled
-   by the copies its own sequences are written with. That an address has three
+   by the copies its own sequences are written with. What the target may do is
+   *ask*: a register it would be a byte cheaper holding a value in — this one counts
+   a loop down in `cx` and nowhere else — is tried before the allocator's own order
+   and the order is what is left when it does not fit. That is a preference and not
+   a pre-coloured node: nothing is forced, and a request the value cannot take, or
+   one that would cost more than it saves, is simply not made. That an address has three
    registers to live in rather than six is the one place a value's class is narrower
    than the machine when the value is a word; a byte value is narrower still:
    it lives in the low half of one of the four registers that has a half, so `si`
