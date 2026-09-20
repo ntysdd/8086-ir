@@ -3,9 +3,11 @@ package i8086.ir;
 import i8086.CompileError;
 import i8086.SourcePos;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -30,6 +32,31 @@ public final class Names {
 
     /** The flag set: the one name a module uses without declaring it (§4.1). */
     public static final String FLAGS = "flags";
+
+    /**
+     * The direction flag: the one flag that is not part of {@link #FLAGS} (§4.1).
+     *
+     * <p>It is kept apart because the arithmetic flags are not the only thing a statement can do
+     * something with, and because what sets it is a different sort of statement: {@code cld} and
+     * {@code std} are about where a copy goes, not about what a computation produced, and every
+     * comparison and branch in the program is indifferent to them. Anything that walks the flags
+     * asks for the one it means by name.
+     */
+    public static final String DIRECTION = "direction";
+
+    /** The flags, in the order everything that walks them walks them. */
+    private static final List<String> FLAG_NAMES = Collections.unmodifiableList(
+            Arrays.asList(FLAGS, DIRECTION));
+
+    /** The names of the flags, the arithmetic ones first. */
+    public static List<String> flagNames() {
+        return FLAG_NAMES;
+    }
+
+    /** Whether this name is one of the flags, which no module declares. */
+    public static boolean isFlag(String name) {
+        return FLAG_NAMES.contains(name);
+    }
 
     private final Map<String, Type> variables;
     private final Set<String> labels;
@@ -73,9 +100,9 @@ public final class Names {
 
     private static void declareVariable(Set<String> labels, Map<String, Type> variables,
                                        Item.Var variable) {
-        require(!variable.name().equals(FLAGS), variable.position(),
-                "'" + FLAGS + "' is the flag set, which every module already has, so it cannot "
-                        + "be declared");
+        require(!isFlag(variable.name()), variable.position(),
+                "'" + variable.name() + "' is one of the flags, which every module already has, "
+                        + "so it cannot be declared (docs/ir.md §4.1)");
         require(!variables.containsKey(variable.name()), variable.position(),
                 "the variable '" + variable.name() + "' is already declared");
         require(!labels.contains(variable.name()), variable.position(),

@@ -32,6 +32,8 @@ public final class SsaBuilderTest {
                 SsaBuilderTest::readBeforeWrite);
         suite.add("Ssa renames variables and not labels", SsaBuilderTest::labelsStay);
         suite.add("Ssa renames the flags like any other variable", SsaBuilderTest::renamesFlags);
+        suite.add("Ssa renames the direction flag apart from them",
+                SsaBuilderTest::theDirectionFlagIsSeparate);
         suite.add("Ssa leaves unreachable code to itself", SsaBuilderTest::unreachable);
         suite.add("Ssa keeps a volatile access volatile", SsaBuilderTest::keepsTheVolatileMark);
         suite.add("Ssa does not touch the module", SsaBuilderTest::moduleUntouched);
@@ -210,6 +212,27 @@ public final class SsaBuilderTest {
                         + "block1 (l0) <- block0:\n"
                         + "    ret\n",
                 dump("    var x: u16\n    cmp x, 0\n    jnz l0\nl0:\n    ret\n"));
+    }
+
+    /**
+     * The direction flag is renamed apart from the arithmetic ones, and a statement that makes one
+     * of them its own leaves the other exactly where it was ({@code docs/ir.md} §4.2).
+     */
+    private static void theDirectionFlagIsSeparate() {
+        Assert.assertEquals("; SSA form of target 8086, entry main\n"
+                        + "\n"
+                        + "block0 (main):\n"
+                        + "    var x: u16\n"
+                        + "    x#1 = word [0x40]\n"
+                        + "    flags#2 = cmp x#1, 0x80\n"
+                        + "    direction#3 = cld\n"
+                        + "    direction#4 = std\n"
+                        + "    jc l0\n"
+                        + "\n"
+                        + "block1 (l0) <- block0:\n"
+                        + "    ret\n",
+                dump("    var x: u16\n    x = word [0x40]\n    cmp x, 0x80\n    cld\n    std\n"
+                        + "    jc l0\nl0:\n    ret\n"));
     }
 
     private static void unreachable() {

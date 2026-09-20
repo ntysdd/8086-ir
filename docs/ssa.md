@@ -83,11 +83,22 @@ A statement that also defines a value does not repeat itself — `i#3 = eval(...
 defines the flags too, and the version it leaves is what a later branch reads,
 since there is only ever one of those at a time.
 
-An item that gives the flags **up** — a value computed with `expr`, a conversion,
-or an inline block that declares it clobbers them ([`docs/ir.md`](ir.md) §4.2,
-§9) — leaves the flags' undefined value in force, `flags#undef` (§5). Nothing can
+An item that gives a flag **up** — a value computed with `expr`, a conversion,
+or an inline block, which declares its registers and nothing about them ([`docs/ir.md`](ir.md)
+§4.2, §9) — leaves that flag's undefined value in force, `flags#undef` (§5). Nothing can
 read it, because the surface refuses a read of a flag nobody defined, so the state
 is recorded faithfully and never used.
+
+There are two flags, `flags` and `direction`, and they are renamed apart
+(§4 of [`docs/ir.md`](ir.md)). A statement may define one, the other, both, or neither, and
+what it defines is written beside it:
+
+    flags#2 = cmp x#1, 0x80
+    direction#3 = cld
+
+Everything that reads a flag names the one it means, which today is the arithmetic flags — a
+branch reads them, and so does an operation that asks for the carry — while nothing reads
+`direction` yet.
 
 **No φ for the flags can appear today.** A φ for them would need a flags value
 that is live across a join, and the surface's flags rule refuses every program

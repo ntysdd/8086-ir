@@ -99,10 +99,20 @@ public final class DeadValueElimination implements Pass {
         if (Effects.hasEffect(item)) {
             return true;
         }
-        if (statement.definedFlags() != null && uses.isUsed(statement.definedFlags())) {
+        if (anyUsed(statement, uses)) {
             return true;
         }
         String written = Effects.writtenVariable(item);
         return written != null && uses.isUsed(written);
+    }
+
+    /** Whether any flag version this statement defines is read anywhere. */
+    private static boolean anyUsed(SsaStatement statement, Uses uses) {
+        for (String version : statement.definedFlags().values()) {
+            if (uses.isUsed(version)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -209,8 +209,8 @@ public final class Effects {
     }
 
     /**
-     * Whether this item leaves the flags defined: a value of its own, rather than the one from
-     * before it ({@code docs/ir.md} §4.2).
+     * The flags this item leaves a value of its own in: what it computed, rather than what was
+     * there before it ({@code docs/ir.md} §4.2).
      *
      * <p>The three states are asked together and they are not the same question. An arithmetic
      * statement computes flags, so what is in force afterwards is what it computed. A conversion
@@ -221,31 +221,41 @@ public final class Effects {
      * whatever the machine happened to have.
      *
      * <p>A machine statement is where the surface cannot say which of the last two it means, and the
-     * target is asked instead ({@link i8086.target.Target#machineWritesFlags}): a clobber list that
-     * does not name the flags says they are not destroyed, and whether the statement <em>made</em>
-     * them is a fact about the instruction. An inline block is not asked, because there is nobody to
-     * ask: it destroys the flags, and a program that needs what it left behind says so with a
-     * statement the compiler understands ({@link #killsFlags}).
+     * target is asked instead ({@link i8086.target.Target#machineFlags}): a clobber list that does
+     * not name a flag says it is not destroyed, and whether the statement <em>made</em> it is a fact
+     * about the instruction. An inline block is not asked, because there is nobody to ask: it
+     * destroys the flags, and a program that needs what it left behind says so with a statement the
+     * compiler understands ({@link #flagsKilled}).
      */
-    public static boolean writesFlags(Item item) {
+    public static Set<String> flagsDefined(Item item) {
+        Set<String> defined = new LinkedHashSet<String>();
+        for (String flag : Names.flagNames()) {
+            if (defines(item, flag)) {
+                defined.add(flag);
+            }
+        }
+        return defined;
+    }
+
+    /** Whether this item makes this flag its own. */
+    private static boolean defines(Item item, String flag) {
         if (item instanceof Item.Compare || item instanceof Item.Eval) {
-            return true;
+            return flag.equals(Names.FLAGS);
         }
         if (item instanceof Item.Assign) {
-            return ((Item.Assign) item).value() instanceof Value.Eval;
-        }
-        if (item instanceof Item.InlineAsm) {
-            return false;
+            return flag.equals(Names.FLAGS)
+                    && ((Item.Assign) item).value() instanceof Value.Eval;
         }
         if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
-            return machine.writesFlags() && !clobbersFlags(machine.clobbers());
+            return machine.definedFlags().contains(flag)
+                    && !clobbersFlag(machine.clobbers(), flag);
         }
         return false;
     }
 
     /**
-     * Whether this item destroys the flags, leaving them undefined ({@code docs/ir.md} §4.2).
+     * The flags this item destroys, leaving nothing in their place ({@code docs/ir.md} §4.2).
      *
      * <p>A block destroys them whatever its list says. The list is about registers, and about the
      * code the compiler cannot see the only honest answer for the flags is the worst one: most of
@@ -256,42 +266,62 @@ public final class Effects {
      * a block left behind has to say so in a form the compiler understands, which a machine
      * statement is ({@code docs/ir.md} §11).
      */
-    public static boolean killsFlags(Item item) {
+    public static Set<String> flagsKilled(Item item) {
+        Set<String> killed = new LinkedHashSet<String>();
+        for (String flag : Names.flagNames()) {
+            if (kills(item, flag)) {
+                killed.add(flag);
+            }
+        }
+        return killed;
+    }
+
+    /** Whether this item destroys this flag. */
+    private static boolean kills(Item item, String flag) {
         if (item instanceof Item.Assign) {
             Value value = ((Item.Assign) item).value();
-            return value instanceof Value.Expr || value instanceof Value.Convert;
+            return flag.equals(Names.FLAGS)
+                    && (value instanceof Value.Expr || value instanceof Value.Convert);
         }
         if (item instanceof Item.InlineAsm) {
             return true;
         }
         if (item instanceof Item.Machine) {
-            return clobbersFlags(((Item.Machine) item).clobbers());
+            return clobbersFlag(((Item.Machine) item).clobbers(), flag);
         }
         return false;
     }
 
     /**
-     * Whether a clobber list says the flags are destroyed.
+     * Whether a clobber list says a flag is destroyed.
      *
      * <p>One rule for the two things that carry a list — an inline block and a machine
-     * statement — because they mean the same thing by it: a list that names the flags
-     * takes them away, and one that does not leaves them standing.
+     * statement — because they mean the same thing by it: a list that names a flag
+     * takes it away, and one that does not leaves it standing.
      */
-    private static boolean clobbersFlags(List<String> clobbers) {
-        return clobbers.contains(Names.FLAGS);
+    private static boolean clobbersFlag(List<String> clobbers, String flag) {
+        return clobbers.contains(flag);
     }
 
     /**
-     * Whether this item reads the flags.
+     * The flags this item reads.
      *
-     * <p>An inline block is a promise rather than an answer: it may read the flags
-     * and the surface has no way to say so yet ({@code docs/ir.md} §9), so it is
-     * taken to read none — which costs nothing, because it destroys them anyway
-     * ({@link #killsFlags}) and a read of them is refused. That is the verifier's
-     * model too, and it is the honest one: this compiler cannot see inside the
-     * block.
+     * <p>A branch reads the arithmetic ones and so does an operation that asks for the carry. An
+     * inline block is a promise rather than an answer: it may read the flags and the surface has no
+     * way to say so yet ({@code docs/ir.md} §9), so it is taken to read none — which costs nothing,
+     * because it destroys them anyway ({@link #flagsKilled}) and a read of them is refused. That is
+     * the verifier's model too, and it is the honest one: this compiler cannot see inside the block.
      */
-    public static boolean readsFlags(Item item) {
+    public static Set<String> flagsRead(Item item) {
+        Set<String> read = new LinkedHashSet<String>();
+        if (readsTheArithmeticFlags(item)) {
+            read.add(Names.FLAGS);
+        }
+        return read;
+    }
+
+    /** Whether this item reads the arithmetic flags, which is the only kind anything reads yet. */
+    private static boolean readsTheArithmeticFlags(Item item) {
         if (item instanceof Item.Branch) {
             return true;
         }
@@ -311,7 +341,7 @@ public final class Effects {
     /**
      * The variables this item reads, in the order it mentions them.
      *
-     * <p>The flags count as a variable here, because that is what they are
+     * <p>The flags count as variables here, because that is what they are
      * ({@code docs/ir.md} §4.1): a branch reads them, and an operation that reads
      * the carry reads them, so both make them live.
      */
@@ -322,22 +352,19 @@ public final class Effects {
                 read.add(occurrence.name());
             }
         }
-        if (readsFlags(item)) {
-            read.add(Names.FLAGS);
-        }
+        read.addAll(flagsRead(item));
         return read;
     }
 
-    /** The variables this item defines, flags included. */
+    /** The variables this item defines, the flags included. */
     public static Set<String> definedBy(Item item) {
         Set<String> defined = new LinkedHashSet<String>();
         String variable = writtenVariable(item);
         if (variable != null) {
             defined.add(variable);
         }
-        if (writesFlags(item) || killsFlags(item)) {
-            defined.add(Names.FLAGS);
-        }
+        defined.addAll(flagsDefined(item));
+        defined.addAll(flagsKilled(item));
         return defined;
     }
 

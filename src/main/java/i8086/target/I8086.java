@@ -7,6 +7,7 @@ import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
+import i8086.ir.Names;
 import i8086.ir.Operator;
 import i8086.isel.Selection;
 import i8086.ssa.SsaForm;
@@ -437,6 +438,8 @@ public final class I8086 implements Target {
         statements.put("sti", Integer.valueOf(0));
         statements.put("nop", Integer.valueOf(0));
         statements.put("iret", Integer.valueOf(0));
+        statements.put("cld", Integer.valueOf(0));
+        statements.put("std", Integer.valueOf(0));
         return Collections.unmodifiableMap(statements);
     }
 
@@ -459,18 +462,31 @@ public final class I8086 implements Target {
     }
 
     /**
-     * {@code int} and {@code iret} leave flags of their own: the handler's, and the ones the
-     * interrupted program had.
+     * The flags each of these leaves a value of its own in, and the ones it leaves standing.
      *
-     * <p>The rest of what this machine can be told to do is a command about machine state — an
-     * interrupt flag, a halt, a no-op — and the arithmetic flags come through all of them
-     * unchanged. That is what makes a {@code cmp} in front of a {@code cli} still the comparison a
-     * branch behind it reads, and reading it the other way round deletes the comparison
-     * ({@code Effects}).
+     * <p>{@code int} makes the arithmetic flags its own, because the handler decides them and an
+     * author who wrote {@code jc} behind it means the handler's carry; the direction flag is not
+     * the handler's, because a handler returns through {@code iret}, which restores the flags the
+     * interrupted program had. {@code iret} restores both. {@code cld} and {@code std} are the
+     * other way round: what a copy does next is the one thing they decide, and the arithmetic flags
+     * come through them untouched, so a comparison in front of one is still the comparison a branch
+     * behind it reads.
+     *
+     * <p>The rest — {@code nop}, {@code cli}, {@code sti}, {@code hlt} — are commands about machine
+     * state, and nothing about them is a value a later statement reads.
      */
     @Override
-    public boolean machineWritesFlags(String mnemonic) {
-        return mnemonic.equals("int") || mnemonic.equals("iret");
+    public Set<String> machineFlags(String mnemonic) {
+        if (mnemonic.equals("int")) {
+            return Collections.singleton(Names.FLAGS);
+        }
+        if (mnemonic.equals("iret")) {
+            return new LinkedHashSet<String>(Names.flagNames());
+        }
+        if (mnemonic.equals("cld") || mnemonic.equals("std")) {
+            return Collections.singleton(Names.DIRECTION);
+        }
+        return Collections.emptySet();
     }
 
     /**

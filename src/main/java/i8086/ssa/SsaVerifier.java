@@ -122,18 +122,19 @@ public final class SsaVerifier {
                 count(counts, phi.name(), phi.position());
             }
             for (SsaStatement statement : form.statements(block)) {
-                require((statement.definedFlags() != null)
-                                == Effects.writesFlags(statement.item()),
+                require(statement.definedFlags().keySet()
+                                .equals(Effects.flagsDefined(statement.item())),
                         statement.item().position(),
-                        "this statement disagrees with itself about the flags: it "
-                                + (statement.definedFlags() == null
-                                ? "defines none" : "defines '" + statement.definedFlags() + "'"));
+                        "this statement disagrees with itself about the flags: it answers with "
+                                + (statement.definedFlags().isEmpty()
+                                ? "none"
+                                : statement.definedFlags().keySet().toString()));
                 String written = Effects.writtenVariable(statement.item());
                 if (written != null) {
                     count(counts, written, statement.item().position());
                 }
-                if (statement.definedFlags() != null) {
-                    count(counts, statement.definedFlags(), statement.item().position());
+                for (String version : statement.definedFlags().values()) {
+                    count(counts, version, statement.item().position());
                 }
             }
         }
@@ -280,10 +281,10 @@ public final class SsaVerifier {
                     // checkNames' business.
                     continue;
                 }
-                checkUse(current, occurrence.name(), occurrence.position());
+                checkUse(current, null, occurrence.name(), occurrence.position());
             }
-            if (Effects.readsFlags(statement.item())) {
-                checkUse(current, null, statement.item().position());
+            for (String flag : Effects.flagsRead(statement.item())) {
+                checkUse(current, flag, null, statement.item().position());
             }
             define(current, statement);
         }
@@ -301,11 +302,11 @@ public final class SsaVerifier {
      * use of a version is allowed exactly when that version is the one that
      * arrives — not another one, and not nothing.
      */
-    private void checkUse(Set<String> current, String version, SourcePos where) {
+    private void checkUse(Set<String> current, String flag, String version, SourcePos where) {
         if (version == null) {
-            List<String> flags = versionsOf(current, Names.FLAGS);
-            require(flags.size() == 1, where, "the flags are read here, but what reaches is "
-                    + describe(flags, Names.FLAGS));
+            List<String> reached = versionsOf(current, flag);
+            require(reached.size() == 1, where, "'" + flag + "' is read here, but what reaches "
+                    + "is " + describe(reached, flag));
             return;
         }
         String variable = form.variableOf(version);
@@ -347,11 +348,14 @@ public final class SsaVerifier {
             drop(current, form.variableOf(written));
             current.add(written);
         }
-        if (statement.definedFlags() != null) {
-            drop(current, Names.FLAGS);
-            current.add(statement.definedFlags());
-        } else if (Effects.killsFlags(statement.item())) {
-            drop(current, Names.FLAGS);
+        for (String flag : Names.flagNames()) {
+            String version = statement.definedFlag(flag);
+            if (version != null) {
+                drop(current, flag);
+                current.add(version);
+            } else if (Effects.flagsKilled(statement.item()).contains(flag)) {
+                drop(current, flag);
+            }
         }
     }
 

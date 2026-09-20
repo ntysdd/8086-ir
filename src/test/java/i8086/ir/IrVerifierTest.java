@@ -34,7 +34,7 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesReadIntoTheWrongWidth);
         suite.add("Ir verifier refuses a register read into something that is not a variable",
                 IrVerifierTest::refusesReadIntoWhatIsNotAVariable);
-        suite.add("Ir verifier accepts the flag set in a clobber list",
+        suite.add("Ir verifier accepts the flags in a clobber list",
                 IrVerifierTest::acceptsFlagsClobber);
         suite.add("Ir verifier refuses an unknown name", IrVerifierTest::refusesUnknownName);
         suite.add("Ir verifier refuses a volatile access inside an expression",
@@ -43,7 +43,7 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesLabelAsDestination);
         suite.add("Ir verifier refuses a label defined twice", IrVerifierTest::refusesDuplicateLabel);
         suite.add("Ir verifier refuses one name for two things", IrVerifierTest::refusesNameClash);
-        suite.add("Ir verifier refuses a declaration of the flag set",
+        suite.add("Ir verifier refuses a declaration of a flag",
                 IrVerifierTest::refusesFlagsDeclaration);
         suite.add("Ir verifier refuses a width mismatch", IrVerifierTest::refusesWidthMismatch);
         suite.add("Ir verifier refuses a literal too wide for its place",
@@ -404,6 +404,11 @@ public final class IrVerifierTest {
 
     private static void acceptsFlagsClobber() {
         verify("    asm clobbers(ax, dx, flags) {\n        int 0x21\n    }\n");
+        // Both flags may be named, because both are things a list can destroy
+        // (docs/ir.md §4.1). Naming one a block destroys anyway is allowed and says
+        // nothing: a block destroys them all whatever the list says.
+        verify("    asm clobbers(direction) {\n        nop\n    }\n");
+        verify("    cld\n    std\n");
     }
 
     // --- what has to be refused --------------------------------------------
@@ -438,6 +443,7 @@ public final class IrVerifierTest {
 
     private static void refusesFlagsDeclaration() {
         refuses("test.ir:6:5", "    var flags: u16\n");
+        refuses("test.ir:6:5", "    var direction: u16\n");
     }
 
     private static void refusesWidthMismatch() {

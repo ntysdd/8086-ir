@@ -6,7 +6,9 @@ import i8086.asm.Size;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * One thing a module is made of, in source order.
@@ -548,10 +550,10 @@ public abstract class Item {
      * machine statement says what it destroys the same way a block does.
      *
      * <p>Whether it <em>leaves</em> flags of its own is stamped beside them, from the
-     * target, because the clobber list cannot say it: a list that does not name the
-     * flags means "these are not destroyed", and that covers both a statement the
-     * arithmetic flags pass through and a statement that went into a handler
-     * ({@link i8086.target.Target#machineWritesFlags}).
+     * target, because the clobber list cannot say it: a list that does not name a flag
+     * means "it is not destroyed", and that covers both a statement the arithmetic
+     * flags pass through and a statement that went into a handler
+     * ({@link i8086.target.Target#machineFlags}).
      */
     public static final class Machine extends Item {
 
@@ -559,16 +561,17 @@ public abstract class Item {
         private final List<Long> operands;
         private final List<String> clobbers;
         private final List<Argument> arguments;
-        private final boolean writesFlags;
+        private final Set<String> definedFlags;
 
         public Machine(SourcePos position, String mnemonic, List<Long> operands,
-                       List<String> clobbers, List<Argument> arguments, boolean writesFlags) {
+                       List<String> clobbers, List<Argument> arguments,
+                       Set<String> definedFlags) {
             super(position);
             this.mnemonic = mnemonic;
             this.operands = Collections.unmodifiableList(new ArrayList<Long>(operands));
             this.clobbers = Collections.unmodifiableList(new ArrayList<String>(clobbers));
             this.arguments = Collections.unmodifiableList(new ArrayList<Argument>(arguments));
-            this.writesFlags = writesFlags;
+            this.definedFlags = Collections.unmodifiableSet(new LinkedHashSet<String>(definedFlags));
         }
 
         public String mnemonic() {
@@ -586,15 +589,15 @@ public abstract class Item {
         }
 
         /**
-         * Whether the flags after it are its own, rather than the ones from before it.
+         * The flags whose value after it is its own, rather than the one from before it.
          *
-         * <p>The target's answer for the mnemonic, and it is only consulted when the
-         * clobber list does not name the flags: what the list names is destroyed, and
-         * what it does not name is left standing, which is two different things only one
-         * of which leaves a value behind ({@code Effects.writesFlags}).
+         * <p>The target's answer for the mnemonic, and it is only consulted for flags the
+         * clobber list does not name: what the list names is destroyed, and what it does not
+         * name is left standing, which is two different things only one of which leaves a
+         * value behind ({@code Effects.flagsDefined}).
          */
-        public boolean writesFlags() {
-            return writesFlags;
+        public Set<String> definedFlags() {
+            return definedFlags;
         }
 
         /** The registers it is given, from its {@code with} clause ({@code docs/ir.md} §11). */

@@ -63,7 +63,7 @@ public final class Uses {
 
         Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
         for (Block block : form.cfg().blocks()) {
-            String flags = null;
+            Map<String, String> flags = new LinkedHashMap<String, String>();
             for (Phi phi : form.phis(block)) {
                 for (String operand : phi.operands()) {
                     count(counts, operand, form);
@@ -75,13 +75,14 @@ public final class Uses {
                         count(counts, occurrence.name(), form);
                     }
                 }
-                if (Effects.readsFlags(statement.item())) {
-                    count(counts, flags, form);
+                for (String flag : Effects.flagsRead(statement.item())) {
+                    count(counts, flags.get(flag), form);
                 }
-                if (statement.definedFlags() != null) {
-                    flags = statement.definedFlags();
-                } else if (Effects.killsFlags(statement.item())) {
-                    flags = null;
+                for (Map.Entry<String, String> defined : statement.definedFlags().entrySet()) {
+                    flags.put(defined.getKey(), defined.getValue());
+                }
+                for (String killed : Effects.flagsKilled(statement.item())) {
+                    flags.remove(killed);
                 }
             }
         }

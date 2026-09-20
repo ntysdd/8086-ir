@@ -32,6 +32,10 @@ public final class MachineTest {
         suite.add("The flags survive what does not touch them", MachineTest::flagsSurvive);
         suite.add("The flags are the handler's after an interrupt",
                 MachineTest::flagsAreTheHandlersAfterAnInterrupt);
+        suite.add("The direction flag is a flag of its own",
+                MachineTest::theDirectionFlagIsItsOwn);
+        suite.add("A statement about where a copy goes writes itself",
+                MachineTest::writesItselfToo);
         suite.add("The flags do not survive an interrupt", MachineTest::flagsDieAtAnInterrupt);
         suite.add("The target says which statements it has", MachineTest::theTargetSays);
         suite.add("A machine statement refuses an immediate that does not fit",
@@ -72,6 +76,18 @@ public final class MachineTest {
                         + "    hlt\n"
                         + "    nop\n"
                         + "    iret\n"));
+    }
+
+    /**
+     * And two more write themselves with nothing after them: their list is empty, and the
+     * canonical form writes what the compiler assumes, so a statement that destroys nothing says
+     * nothing.
+     */
+    private static void writesItselfToo() {
+        Assert.assertEquals("    cld\n"
+                        + "    std\n",
+                became("    cld\n"
+                        + "    std\n"));
     }
 
     private static void saysWhatItDestroys() {
@@ -132,10 +148,36 @@ public final class MachineTest {
     }
 
     /**
-     * And the other way round, which is why the target is asked at all: an interrupt goes into
-     * code this module has never seen, so the flags after it are the handler's and the comparison
-     * in front of it is nobody's. The branch is still a branch the surface may write, because what
-     * it reads is a value that exists ({@code docs/ir.md} §4.3).
+     * And the direction flag is a flag of its own, which is what makes {@code cld} writable at all:
+     * it decides where the next copy goes and has nothing to say about the comparison in front of
+     * it, so the comparison is still there and the branch behind it still reads it.
+     */
+    private static void theDirectionFlagIsItsOwn() {
+        String body = "    var x: u16\n"
+                + "    x = word [0x40]\n"
+                + "    cmp x, 0x80\n"
+                + "    cld\n"
+                + "    std\n"
+                + "    jb there\n"
+                + "there:\n"
+                + "    ret\n";
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    cmp word [0x40], 0x80\n"
+                        + "    cld\n"
+                        + "    std\n"
+                        + "    jc $there\n"
+                        + "\n"
+                        + "$there:\n"
+                        + "    ret\n",
+                assembly(body));
+    }
+
+    /**
+     * A machine statement takes its flags from the target, and the flags are not the list's to
+     * describe: {@code cli} may not name the flags and still leave a comparison standing, while
+     * {@code int 0x13 clobbers(ax, bx, cx, dx)} means the handler's carry is what the branch reads.
      */
     private static void flagsAreTheHandlersAfterAnInterrupt() {
         String body = "    var x: u16\n"
@@ -173,7 +215,7 @@ public final class MachineTest {
 
     private static void theTargetSays() {
         I8086 target = (I8086) Targets.byName("8086");
-        Assert.assertEquals("[int, hlt, cli, sti, nop, iret]",
+        Assert.assertEquals("[int, hlt, cli, sti, nop, iret, cld, std]",
                 target.machineStatements().keySet().toString());
         Assert.assertEquals(Integer.valueOf(1), target.machineStatements().get("int"));
         Assert.assertEquals(Integer.valueOf(0), target.machineStatements().get("hlt"));
@@ -183,13 +225,16 @@ public final class MachineTest {
         Assert.assertEquals("[]", target.machineClobbers("cli").toString());
         // The flags are the ones the statement leaves for these two, and the ones from
         // before it for the rest: clearing an interrupt flag and doing nothing are not
-        // ways of computing a flag.
-        Assert.assertTrue(target.machineWritesFlags("int"), "int");
-        Assert.assertTrue(target.machineWritesFlags("iret"), "iret");
-        Assert.assertFalse(target.machineWritesFlags("cli"), "cli");
-        Assert.assertFalse(target.machineWritesFlags("sti"), "sti");
-        Assert.assertFalse(target.machineWritesFlags("hlt"), "hlt");
-        Assert.assertFalse(target.machineWritesFlags("nop"), "nop");
+        // ways of computing a flag. `cld` and `std` are the direction flag's own, which is
+        // the whole reason the two are asked apart.
+        Assert.assertEquals("[flags]", target.machineFlags("int").toString());
+        Assert.assertEquals("[flags, direction]", target.machineFlags("iret").toString());
+        Assert.assertEquals("[direction]", target.machineFlags("cld").toString());
+        Assert.assertEquals("[direction]", target.machineFlags("std").toString());
+        Assert.assertEquals("[]", target.machineFlags("cli").toString());
+        Assert.assertEquals("[]", target.machineFlags("sti").toString());
+        Assert.assertEquals("[]", target.machineFlags("hlt").toString());
+        Assert.assertEquals("[]", target.machineFlags("nop").toString());
     }
 
     private static void refusesWideImmediate() {
@@ -203,8 +248,7 @@ public final class MachineTest {
         Assert.assertTrue(refused.getMessage().contains("immediate"), refused.getMessage());
     }
 
-    private static void roundTrips() {
-        String body = "    int 0x13 clobbers(ax, bx, flags)\n    hlt\n";
+    private static void roundTrips() {        String body = "    int 0x13 clobbers(ax, bx, flags)\n    hlt\n";
         String once = printed(body);
         Assert.assertEquals(once, IrPrinter.print(IrParser.parse("test.ir", once)));
         // A list may name nothing at all, which is what a statement that touches no

@@ -73,7 +73,7 @@ public final class SsaBuilder {
         this.liveness = Liveness.of(cfg, names);
 
         tracked.addAll(names.variables());
-        tracked.add(Names.FLAGS);
+        tracked.addAll(Names.flagNames());
         for (int i = 0; i < cfg.blocks().size(); i++) {
             phiVariables.add(new ArrayList<String>());
             phis.add(new ArrayList<Phi>());
@@ -200,16 +200,19 @@ public final class SsaBuilder {
                 stacks.push(defined, version);
                 pushed.add(defined);
             }
-            String flags = null;
-            if (Effects.writesFlags(item)) {
-                flags = fresh(Names.FLAGS, item.position());
-                stacks.push(Names.FLAGS, flags);
-                pushed.add(Names.FLAGS);
-            } else if (Effects.killsFlags(item)) {
-                // Giving the flags up is a state, not a value: what is in force
-                // afterwards is that nothing is.
-                stacks.push(Names.FLAGS, SsaForm.undefined(Names.FLAGS));
-                pushed.add(Names.FLAGS);
+            Map<String, String> flags = new LinkedHashMap<String, String>();
+            for (String flag : Names.flagNames()) {
+                if (Effects.flagsDefined(item).contains(flag)) {
+                    String version = fresh(flag, item.position());
+                    flags.put(flag, version);
+                    stacks.push(flag, version);
+                    pushed.add(flag);
+                } else if (Effects.flagsKilled(item).contains(flag)) {
+                    // Giving a flag up is a state, not a value: what is in force
+                    // afterwards is that nothing is.
+                    stacks.push(flag, SsaForm.undefined(flag));
+                    pushed.add(flag);
+                }
             }
             out.add(new SsaStatement(renamed, flags));
         }

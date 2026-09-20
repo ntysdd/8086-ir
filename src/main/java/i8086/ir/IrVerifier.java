@@ -132,24 +132,29 @@ public final class IrVerifier {
     // --- items -------------------------------------------------------------
 
     private void checkItems() {
-        boolean flagsDefined = false;
+        Set<String> flagsDefined = new LinkedHashSet<String>();
         for (Item item : module.items()) {
             flagsDefined = checkItem(item, flagsDefined);
             if (namesSomething(item)) {
-                flagsDefined = false;
+                flagsDefined.clear();
             }
         }
     }
 
     /**
-     * Checks one item, and answers with whether the flags are defined after it.
+     * Checks one item, and answers with which flags are defined after it.
      *
      * <p>Which is the whole of the flags rule for now: what defines them, what
      * throws them away, and what leaves them alone. A move leaves them alone
      * (§4.2), {@code eval} defines them, {@code expr} gives them up (§5.2), and a
      * conversion is assumed to disturb them (§3.5).
+     *
+     * <p>The answer is a set of names because the flags are not one thing (§4.1): the
+     * arithmetic ones and the direction flag are decided by different statements and read by
+     * different ones, and {@code cld} is the statement that makes that visible — it destroys
+     * every claim about where the next copy goes and leaves every comparison standing.
      */
-    private boolean checkItem(Item item, boolean flagsDefined) {
+    private Set<String> checkItem(Item item, Set<String> flagsDefined) {
         if (item instanceof Item.Assign) {
             Item.Assign assign = (Item.Assign) item;
             checkAssign(assign);
@@ -159,7 +164,7 @@ public final class IrVerifier {
             Operation operation = ((Item.Eval) item).operation();
             widthOfOperation(operation, null);
             requireCarryIsDefined(operation.readsFlags(), flagsDefined, item.position());
-            return true;
+            return definedAmong(flagsDefined, Names.FLAGS);
         }
         if (item instanceof Item.Compare) {
             Item.Compare compare = (Item.Compare) item;
@@ -167,7 +172,7 @@ public final class IrVerifier {
             requireCarryIsDefined(
                     expressionReadsFlagsOf(compare.left()) || expressionReadsFlagsOf(compare.right()),
                     flagsDefined, item.position());
-            return true;
+            return definedAmong(flagsDefined, Names.FLAGS);
         }
         if (item instanceof Item.InlineAsm) {
             Item.InlineAsm block = (Item.InlineAsm) item;
@@ -177,7 +182,7 @@ public final class IrVerifier {
             // writes the flags, so what is in force after it is not something the surface
             // can claim to know (i8086.ssa.Effects). A program that wants the flags a
             // block left behind says so with a statement the compiler understands.
-            return false;
+            return new LinkedHashSet<String>();
         }
         if (item instanceof Item.Pad) {
             checkPad(item);
@@ -200,7 +205,7 @@ public final class IrVerifier {
             checkArguments(far.arguments());
             // Nothing after this runs on the way out of the image, and the scan goes on
             // to the next item regardless.
-            return false;
+            return new LinkedHashSet<String>();
         }
         if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
@@ -208,21 +213,24 @@ public final class IrVerifier {
                     item.position(),
                     "'" + machine.mnemonic() + "' is not a statement this target provides");
             for (String destroyed : machine.clobbers()) {
-                require(target.isRegister(destroyed) || destroyed.equals(Names.FLAGS),
+                require(target.isRegister(destroyed) || Names.isFlag(destroyed),
                         item.position(),
-                        "'" + destroyed + "' is neither a register nor '" + Names.FLAGS + "'");
+                        "'" + destroyed + "' is neither a register nor a flag");
             }
             checkArguments(machine.arguments());
-            // The flags are the one thing a machine statement may leave standing: 'cli'
-            // does not touch the arithmetic flags, and a comparison may be read after it.
-            // Whether the statement made flags of its own instead is the target's to say
-            // ({@code i8086.target.Target#machineWritesFlags}), and it is the question SSA
-            // asks of the same statement ({@code i8086.ssa.Effects}) — asked here of the
-            // module, because this pass runs before there is a form to ask.
-            if (machine.clobbers().contains(Names.FLAGS)) {
-                return false;
+            // A flag is the one thing a machine statement may leave standing, and which flags it
+            // makes its own instead is the target's to say ({@code i8086.target.Target#machineFlags}
+            // and {@code i8086.ssa.Effects}) — asked here of the module, because this pass runs
+            // before there is a form to ask. A flag the list names is destroyed; the rest answer for
+            // themselves, and one a statement preserves is still whatever was in force before it.
+            for (String flag : Names.flagNames()) {
+                if (machine.clobbers().contains(flag)) {
+                    flagsDefined.remove(flag);
+                } else if (machine.definedFlags().contains(flag)) {
+                    flagsDefined.add(flag);
+                }
             }
-            return machine.writesFlags() || flagsDefined;
+            return flagsDefined;
         }
         if (item instanceof Item.Data) {
             checkData((Item.Data) item);
@@ -235,7 +243,7 @@ public final class IrVerifier {
         if (item instanceof Item.Branch) {
             Item.Branch branch = (Item.Branch) item;
             checkLabelTarget(branch.target(), item.position());
-            require(flagsDefined, branch.position(),
+            require(flagsDefined.contains(Names.FLAGS), branch.position(),
                     "this branch reads the flags, but nothing on the way here defines them; "
                             + "only 'cmp' and 'test' do so far, and a label clears them, "
                             + "because another path may arrive there (docs/ir.md §4.3)");
@@ -243,30 +251,48 @@ public final class IrVerifier {
         return flagsDefined;
     }
 
-    /** Whether an operation needs the flags to be defined before it runs. */
-    private void requireCarryIsDefined(boolean readsFlags, boolean flagsDefined, SourcePos where) {
-        require(!readsFlags || flagsDefined, where,
+    /**
+     * Whether an operation needs the flags to be defined before it runs.
+     *
+     * <p>What it reads is the arithmetic flags: the direction flag is not something an operation
+     * has an opinion about ({@code docs/ir.md} §4.1).
+     */
+    private void requireCarryIsDefined(boolean readsFlags, Set<String> flagsDefined, SourcePos where) {
+        require(!readsFlags || flagsDefined.contains(Names.FLAGS), where,
                 "this operation reads the carry flag, so something has to define the flags "
                         + "before it; only 'cmp' and 'test' do so far (docs/ir.md §4.3)");
     }
 
-    /** Whether the flags are defined after a value has been computed. */
-    private boolean flagsAfterValue(Value value, boolean flagsDefined) {
+    /** Which flags are defined after a value has been computed. */
+    private Set<String> flagsAfterValue(Value value, Set<String> flagsDefined) {
         if (value instanceof Value.Eval) {
             Operation operation = ((Value.Eval) value).operation();
             requireCarryIsDefined(operation.readsFlags(), flagsDefined, value.position());
-            return true;
+            return definedAmong(flagsDefined, Names.FLAGS);
         }
         if (value instanceof Value.Expr) {
-            return false;
+            return without(flagsDefined, Names.FLAGS);
         }
         if (value instanceof Value.Convert) {
             // Assume the worst: on this machine widening is an instruction that
-            // touches the flags. Which it is, is the target's to say (§4.2), and
-            // until it does, the safe answer is the one that refuses more.
-            return false;
+            // touches the arithmetic flags, and the direction flag is not its business.
+            return without(flagsDefined, Names.FLAGS);
         }
         return flagsDefined;
+    }
+
+    /** The same set with this flag added to it. */
+    private static Set<String> definedAmong(Set<String> flagsDefined, String flag) {
+        Set<String> defined = new LinkedHashSet<String>(flagsDefined);
+        defined.add(flag);
+        return defined;
+    }
+
+    /** The same set with this flag taken out of it. */
+    private static Set<String> without(Set<String> flagsDefined, String flag) {
+        Set<String> defined = new LinkedHashSet<String>(flagsDefined);
+        defined.remove(flag);
+        return defined;
     }
 
     private static boolean expressionReadsFlagsOf(Value value) {
@@ -640,8 +666,8 @@ public final class IrVerifier {
 
     private void checkInlineAsm(Item.InlineAsm block) {
         for (String clobber : block.clobbers()) {
-            require(target.isRegister(clobber) || clobber.equals(Names.FLAGS), block.position(),
-                    "'" + clobber + "' is neither a register nor '" + Names.FLAGS + "'");
+            require(target.isRegister(clobber) || Names.isFlag(clobber), block.position(),
+                    "'" + clobber + "' is neither a register nor a flag");
         }
         for (Instruction instruction : block.body()) {
             if (instruction.isLabel()) {

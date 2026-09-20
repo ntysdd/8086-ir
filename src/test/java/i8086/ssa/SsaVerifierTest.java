@@ -15,6 +15,7 @@ import i8086.testing.Suite;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -214,7 +215,8 @@ public final class SsaVerifierTest {
 
         form.statements(0).add(statement(assign("x#1", 1)));
         form.statements(0).add(statement(compareThose("y#undef"), "flags#2"));
-        form.statements(0).add(new SsaStatement(branch("jnc", "l0"), null));
+        form.statements(0).add(new SsaStatement(branch("jnc", "l0"),
+                Collections.<String, String>emptyMap()));
         form.statements(1).add(statement(assign("x#3", 2)));
 
         Phi phi = new Phi(AT, "x", Type.U16, 2);
@@ -223,7 +225,8 @@ public final class SsaVerifierTest {
         phi.setOperand(1, "x#3");
         form.phis(2).add(phi);
         form.statements(2).add(statement(evalAdd("y#5", "x#4"), "flags#6"));
-        form.statements(2).add(new SsaStatement(new Item.Return(AT), null));
+        form.statements(2).add(new SsaStatement(new Item.Return(AT),
+                Collections.<String, String>emptyMap()));
         return form;
     }
 
@@ -254,11 +257,11 @@ public final class SsaVerifierTest {
     }
 
     private static SsaStatement statement(Item item) {
-        return new SsaStatement(item, null);
+        return new SsaStatement(item, Collections.<String, String>emptyMap());
     }
 
     private static SsaStatement statement(Item item, String definedFlags) {
-        return new SsaStatement(item, definedFlags);
+        return new SsaStatement(item, Names.FLAGS, definedFlags);
     }
 
     /**

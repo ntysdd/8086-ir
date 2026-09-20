@@ -200,8 +200,8 @@ public final class SsaForm {
                 if (written != null) {
                     defined.add(written);
                 }
-                if (statement.definedFlags() != null) {
-                    defined.add(statement.definedFlags());
+                for (String version : statement.definedFlags().values()) {
+                    defined.add(version);
                 }
             }
         }

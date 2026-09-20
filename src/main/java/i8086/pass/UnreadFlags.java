@@ -2,6 +2,7 @@ package i8086.pass;
 
 import i8086.ir.Expression;
 import i8086.ir.Item;
+import i8086.ir.Names;
 import i8086.ir.Operation;
 import i8086.ir.Value;
 import i8086.ssa.Block;
@@ -64,7 +65,8 @@ public final class UnreadFlags implements Pass {
     }
 
     private static SsaStatement relax(SsaStatement statement, Uses uses) {
-        if (statement.definedFlags() == null || uses.isUsed(statement.definedFlags())
+        String flags = statement.definedFlag(Names.FLAGS);
+        if (flags == null || uses.isUsed(flags)
                 || !(statement.item() instanceof Item.Assign)) {
             return statement;
         }
@@ -78,7 +80,8 @@ public final class UnreadFlags implements Pass {
         }
         Value expression = new Value.Expr(assign.value().position(), tree(operation));
         return new SsaStatement(
-                new Item.Assign(assign.position(), assign.place(), expression), null);
+                new Item.Assign(assign.position(), assign.place(), expression),
+                Names.FLAGS, null);
     }
 
     /** Whether {@code expr} can hold this operation. */

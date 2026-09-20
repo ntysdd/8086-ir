@@ -2,6 +2,7 @@ package i8086.ssa;
 
 import i8086.ir.Item;
 import i8086.ir.IrPrinter;
+import i8086.ir.Names;
 
 import java.util.List;
 
@@ -89,12 +90,33 @@ public final class SsaPrinter {
             return;
         }
         String text = IrPrinter.print(statement.item());
-        if (statement.definedFlags() != null && writesNothing(statement.item())) {
-            out.append(INDENT).append(statement.definedFlags()).append(" = ")
+        if (!statement.definedFlags().isEmpty() && writesNothing(statement.item())) {
+            out.append(INDENT).append(versions(statement)).append(" = ")
                     .append(body(text));
         } else {
             out.append(text);
         }
+    }
+
+    /**
+     * The flag versions a statement defines, in the order the flags are asked in.
+     *
+     * <p>One version is the common case and reads as it always has, {@code flags#4 = cmp i#3, n#2}.
+     * Two are two names on the line, which is what a statement that restores every flag at once
+     * gets ({@code docs/ssa.md} §4).
+     */
+    private static String versions(SsaStatement statement) {
+        StringBuilder out = new StringBuilder();
+        for (String flag : Names.flagNames()) {
+            String version = statement.definedFlag(flag);
+            if (version != null) {
+                if (out.length() > 0) {
+                    out.append(", ");
+                }
+                out.append(version);
+            }
+        }
+        return out.toString();
     }
 
     /** Whether an item defines no value, so that its only result is the flags. */

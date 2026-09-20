@@ -178,15 +178,25 @@ public final class ConstantPropagation implements Pass {
     private static SsaStatement rewrite(SsaStatement statement, Map<String, Long> constants,
                                         Uses uses, SsaForm form) {
         Item item = replaceConstants(statement.item(), constants, form);
-        String definedFlags = statement.definedFlags();
+        Map<String, String> definedFlags = new LinkedHashMap<String, String>(statement.definedFlags());
 
         String written = Effects.writtenVariable(item);
         Long value = written == null ? null : constants.get(written);
-        if (value != null && (definedFlags == null || !uses.isUsed(definedFlags))) {
+        if (value != null && !used(definedFlags, uses)) {
             item = literal((Item.Assign) item, value.longValue());
-            definedFlags = null;
+            definedFlags.clear();
         }
         return new SsaStatement(item, definedFlags);
+    }
+
+    /** Whether any of these flag versions is read anywhere. */
+    private static boolean used(Map<String, String> definedFlags, Uses uses) {
+        for (String version : definedFlags.values()) {
+            if (uses.isUsed(version)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The same statement with a value that is a literal instead of a computation. */

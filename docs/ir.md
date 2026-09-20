@@ -629,7 +629,7 @@ there is nothing to narrow from.
 
 ## 4. Flags
 
-### 4.1 `flags` is an ordinary variable — [decided]
+### 4.1 The flags are variables — [decided]
 
 `flags` is a mutable variable, like `x`. Arithmetic, logic, shifts, `cmp` and
 `test` write it; conditions read it. SSA construction renames it like any other
@@ -637,14 +637,19 @@ variable, and materialises it — through a target-declared expansion — when a
 flag value has to survive an instruction that defines those flags. The user
 never writes `LAHF`, `SAHF` or `PUSHF` by hand.
 
-It is **predeclared**: no module declares it, and a module that tries to declare
-that name is refused, because one name cannot be two things.
+**The direction flag is a second one, `direction`**, and it is separate because it is a different
+kind of thing. It says which way a copy goes, not what a computation produced: `cld` and `std` are
+its only writers among the statements the surface has, no operation touches it, and every
+comparison and branch in the program is indifferent to it. Keeping it in the same value as the
+carry would make `cld` either destroy a comparison's flags or claim to have computed them, and
+both of those are wrong ({@code docs/ir.md} §4.2). Neither name is written by the author — the
+statements do that — and both are **predeclared**: no module declares them, and a module that tries
+is refused, because one name cannot be two things.
 
 ### 4.2 Flag effects are three-state and belong to the target — [decided]
 
-For every operation, the target description states per flag whether it is
-**defined**, **undefined**, or **preserved**. Three examples of why each state
-matters:
+For every flag, the target description states whether it is **defined**, **undefined**, or
+**preserved**. Three examples of why each state matters:
 
 * `INC` and `DEC` preserve `CF`. So `ADD r, 1` may only become `INC r` when `CF`
   is dead. With flags as values this is an ordinary dead-value check, not a trap
@@ -682,17 +687,23 @@ what the target promises about the flags, and by nothing else.
 
 **A statement has the same three states, and the target is what says which** — because a
 statement's clobber list cannot. A list says what a statement destroys, so a list that does
-not name the flags says they are not destroyed, and that covers two opposite things:
+not name a flag says it is not destroyed, and that covers two opposite things:
 `cli` clears the interrupt flag and leaves the arithmetic flags exactly as they were, while
-`int 0x10` goes into code this module has never seen and what comes back in the flags is
+`int 0x10` goes into code this module has never seen and what comes back in the arithmetic flags is
 what the handler left. The first is a value that has to **survive** the statement and the
 second is a value the statement **made**, and the difference is exactly the difference
 between deleting the comparison in front of it and keeping it: with `cli` the `cmp` is still
 what the branch behind it reads, and with `int` it is nobody's. So the target answers per
-mnemonic (`Target.machineWritesFlags`), the clobber list overrules it when the author names
-the flags, and a statement kind the target says nothing about is taken to leave the flags
+flag and per mnemonic (`Target.machineFlags`), the clobber list overrules it when the author names
+the flag, and a statement kind the target says nothing about is taken to leave every flag
 alone — the direction whose mistake is a comparison that stays rather than a branch that
 reads whatever was in the register.
+
+**Two of those answers are worth reading twice**, because they are what the two names are for.
+`cld` and `std` make the direction flag their own and leave the arithmetic flags standing, so a
+comparison in front of one is still the comparison a branch behind it reads. `int` is the other way
+round: the arithmetic flags after it are the handler's, and the direction flag is not, because a
+handler returns through `iret` and `iret` restores the flags the interrupted program had.
 
 ### 4.3 Undefined flags — [decided]
 
@@ -1573,8 +1584,10 @@ them:
 
 ```
 cli
+cld
 int 0x10                       ; destroys everything, because silence cannot promise more
-int 0x13 clobbers(ax, bx, cx, dx, flags)
+int 0x13 clobbers(ax, bx, cx, dx)
+std
 sti
 hlt
 nop
@@ -1609,16 +1622,18 @@ Five things about the form are deliberate:
   has ever been, and the reason the default is the worst case rather than the
   friendliest: silence is the only answer the target can give honestly.
 * **The flags are not the list's to describe.** A list says what a statement destroys, so not
-  naming the flags covers two opposite statements: `cli` leaves the arithmetic flags exactly as
-  they were, and `int 0x10` leaves whatever the handler left. The target answers for the mnemonic
-  instead (§4.2), the list overrules it when the author names the flags, and those two answers are
-  what say whether the comparison in front of the statement is still the comparison a branch
-  behind it reads — which is the difference between branching on it and branching on whatever the
-  machine happened to have. **A block is not asked, because there is nobody to ask:** it destroys
-  the flags whatever its list says, since most of what this machine does writes them and an author
-  who has to remember every one of those will sometimes not. GCC's x86 back end takes the same
-  line — `cc` is implicit in every `asm` statement there — and the cost is the same: a program that
-  needs the flags a block left behind says so with a statement the compiler understands.
+  naming a flag covers two opposite statements: `cli` leaves the arithmetic flags exactly as
+  they were, and `int 0x10` leaves whatever the handler left. The target answers per flag and per
+  mnemonic instead (§4.2), the list overrules it when the author names the flag, and those two
+  answers are what say whether the comparison in front of the statement is still the comparison a
+  branch behind it reads — which is the difference between branching on it and branching on
+  whatever the machine happened to have. `cld` and `std` are the same rule seen from the other
+  side: they make the direction flag their own and leave every comparison standing. **A block is
+  not asked, because there is nobody to ask:** it destroys every flag whatever its list says,
+  since most of what this machine does writes them and an author who has to remember every one of
+  those will sometimes not. GCC's x86 back end takes the same line — `cc` is implicit in every
+  `asm` statement there — and the cost is the same: a program that needs the flags a block left
+  behind says so with a statement the compiler understands.
 
 **A statement that is an interface may be given its registers.** A BIOS call wants its
 arguments where the machine wants them, and the surface says so on the statement that

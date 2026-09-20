@@ -71,7 +71,7 @@ final class Renamer {
             Item.Machine machine = (Item.Machine) item;
             return new Item.Machine(item.position(), machine.mnemonic(), machine.operands(),
                     machine.clobbers(), rename(machine.arguments(), versions),
-                    machine.writesFlags());
+                    machine.definedFlags());
         }
         if (item instanceof Item.FarJump) {
             Item.FarJump far = (Item.FarJump) item;

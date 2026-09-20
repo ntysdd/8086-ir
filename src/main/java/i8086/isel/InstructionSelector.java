@@ -416,7 +416,7 @@ public final class InstructionSelector {
             for (int at = statements.size() - 1; at >= 0; at--) {
                 Item item = statements.get(at).item();
                 flags.after.put(item, Boolean.valueOf(alive));
-                alive = Effects.readsFlags(item)
+                alive = Effects.flagsRead(item).contains(Names.FLAGS)
                         || (alive && !Effects.definedBy(item).contains(Names.FLAGS));
                 flags.before.put(item, Boolean.valueOf(alive));
             }
