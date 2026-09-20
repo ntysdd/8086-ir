@@ -148,6 +148,14 @@ public final class CompilerTest {
                 CompilerTest::leavesAVolatileAccessWhereItIs);
         suite.add("Compiler compares with an access on the other side",
                 CompilerTest::comparesWithAnAccessOnTheOtherSide);
+        suite.add("Compiler builds one zero for three segment registers",
+                CompilerTest::buildsOneZeroForThreeSegments);
+        suite.add("Compiler reuses a constant that is not a zero",
+                CompilerTest::reusesAConstantThatIsNotAZero);
+        suite.add("Compiler builds the zero again after an interrupt",
+                CompilerTest::buildsTheZeroAgainAfterAnInterrupt);
+        suite.add("Compiler builds the zero again after a label",
+                CompilerTest::buildsTheZeroAgainAfterALabel);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -1913,6 +1921,99 @@ public final class CompilerTest {
                         + "    ret\n"
                         + "\n"
                         + "$here: pad 2\n"));
+    }
+
+    // --- a constant already in the register (the target's second tail) -------
+
+    /**
+     * The first thing a boot loader does, and the reason this pass exists: three segment registers
+     * set to zero are one build and three moves, because a register that already holds the constant
+     * does not need it built again. A person writing this by hand knows that {@code ax} still holds
+     * what it did a moment ago; a statement cannot see another statement's literal, so the knowledge
+     * has to be re-established where the registers exist.
+     */
+    private static void buildsOneZeroForThreeSegments() {
+        Assert.assertEquals("org 0x7c00\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    xor ax, ax\n"
+                        + "    mov ds, ax\n"
+                        + "    mov es, ax\n"
+                        + "    mov ss, ax\n"
+                        + "    mov sp, 0x7c00\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
+                        + "    movreg ds, 0\n"
+                        + "    movreg es, 0\n"
+                        + "    movreg ss, 0\n"
+                        + "    movreg sp, 0x7c00\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * Nothing here is about zero: it is about a constant, and this one is not zero. The second build
+     * goes, and the move that wanted it stays — which is the shape of the whole pass, seen on a value
+     * the machine has to put in a register before a segment register can take it.
+     */
+    private static void reusesAConstantThatIsNotAZero() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, 0xb800\n"
+                        + "    mov es, ax\n"
+                        + "    mov ds, ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    movreg es, 0xb800\n"
+                        + "    movreg ds, 0xb800\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The must-not that a wrong first version of this pass walked straight into: an interrupt
+     * destroys the registers its declaration names, and one of them was holding the zero. What the
+     * declaration says is the allocator's question and this pass does not read it — it forgets every
+     * constant at a statement that declares one, which costs nothing here and cannot be wrong.
+     */
+    private static void buildsTheZeroAgainAfterAnInterrupt() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    xor ax, ax\n"
+                        + "    mov ds, ax\n"
+                        + "    int 0x13\n"
+                        + "    xor ax, ax\n"
+                        + "    mov es, ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    movreg ds, 0\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx)\n"
+                        + "    movreg es, 0\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not that is about the block: a label is a place another path can arrive at, and a
+     * path that arrives there did not build this constant. The knowledge stops where the graph says a
+     * block stops — the graph's own answer, asked of the form rather than worked out again from the
+     * items.
+     */
+    private static void buildsTheZeroAgainAfterALabel() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    xor ax, ax\n"
+                        + "    mov ds, ax\n"
+                        + "\n"
+                        + "$again:\n"
+                        + "    xor ax, ax\n"
+                        + "    mov es, ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    movreg ds, 0\n"
+                        + "$again:\n"
+                        + "    movreg es, 0\n"
+                        + "    ret\n"));
     }
 
     // --- reading the machine's own registers (docs/ir.md §8.1) --------------

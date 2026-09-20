@@ -1070,12 +1070,13 @@ public final class I8086 implements Target {
     }
 
     /**
-     * A countdown is three instructions where this machine has one, and this is where that is
-     * said: see {@link CountedLoops} for what it looks for and what it asks first.
+     * Two cleanups, in the order they are worth doing: a constant a register already holds is not
+     * built again ({@link RepeatedConstants}), and a countdown is done the way this machine counts it
+     * down ({@link CountedLoops}).
      */
     @Override
     public Selection tail(SsaForm form, Selection selection) {
-        return CountedLoops.clean(form, selection);
+        return CountedLoops.clean(form, RepeatedConstants.clean(this, form, selection));
     }
 
     /**
