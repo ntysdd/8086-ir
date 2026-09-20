@@ -18,6 +18,8 @@ import i8086.ir.Signedness;
 import i8086.ir.Type;
 import i8086.ir.Value;
 import i8086.ssa.Block;
+import i8086.ssa.Effects;
+import i8086.ssa.Liveness;
 import i8086.ssa.Phi;
 import i8086.ssa.SsaForm;
 import i8086.ssa.SsaStatement;
@@ -85,6 +87,16 @@ public final class InstructionSelector {
     private int temps;
     private List<Instruction> out;
 
+    /**
+     * Whether the flags can still be read in front of the item being selected.
+     *
+     * <p>What decides whether an instruction that writes them may be used where the surface asked
+     * for one that leaves them alone — building a zero with {@code xor r, r} rather than
+     * {@code mov r, 0}, which is a byte shorter on a word ({@code docs/ir.md} §4.2). Live is the
+     * safe answer, and it is the answer wherever the question has not been worked out.
+     */
+    private boolean flagsLiveHere = true;
+
     public InstructionSelector(SsaForm form, Target target) {
         this.target = target;
         this.form = form;
@@ -109,6 +121,7 @@ public final class InstructionSelector {
     private Selection run() {
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
         List<List<String>> groups = new ArrayList<List<String>>();
+        Map<Item, Boolean> flagsLive = flagsLiveBefore(Liveness.of(form.cfg(), names));
         for (Block block : form.cfg().blocks()) {
             // A φ is not an item and not an instruction. What it says is that the values
             // reaching it are one value as far as a register is concerned, because there
@@ -120,12 +133,53 @@ public final class InstructionSelector {
             for (SsaStatement statement : form.statements(block)) {
                 Item item = statement.item();
                 out = new ArrayList<Instruction>();
+                flagsLiveHere = isLive(flagsLive.get(item));
                 select(item);
                 pieces.add(new Selection.Piece(item, out));
             }
         }
         Map<String, String> variables = variables();
         return new Selection(pieces, groups, variables, homes(variables), types());
+    }
+
+    /**
+     * Whether the flags can still be read in front of each item, by item.
+     *
+     * <p>The ordinary backward question about one variable, and the variable is {@code flags}
+     * ({@code docs/ir.md} §4.1): they are live where something reads them before writing them
+     * again. What a block hands its successors is where those blocks are live coming in, which is
+     * the liveness SSA construction already asks about φ's — asked of the same {@code flags} name,
+     * because that is what the name is.
+     *
+     * <p>Live is the answer that costs a byte and never costs correctness, so nothing here has to
+     * be precise: a block nothing reaches, an item that reads the flags without defining them, and
+     * an item missing from the answer all end up saying the flags are live.
+     *
+     * <p>The items are the form's rather than the module's, which is what the statement a selector
+     * is given holds: a renamed item is a different object from the one the block was built with,
+     * and the question "is this the item in front of me" has to have an answer that survives that.
+     */
+    private Map<Item, Boolean> flagsLiveBefore(Liveness liveness) {
+        Map<Item, Boolean> live = new LinkedHashMap<Item, Boolean>();
+        for (Block block : form.cfg().blocks()) {
+            boolean alive = false;
+            for (Block successor : block.successors()) {
+                alive = alive || liveness.isLiveIn(successor, Names.FLAGS);
+            }
+            List<SsaStatement> statements = form.statements(block);
+            for (int at = statements.size() - 1; at >= 0; at--) {
+                Item item = statements.get(at).item();
+                alive = Effects.readsFlags(item)
+                        || (alive && !Effects.definedBy(item).contains(Names.FLAGS));
+                live.put(item, Boolean.valueOf(alive));
+            }
+        }
+        return live;
+    }
+
+    /** Whether the answer that was worked out for an item was that the flags are live. */
+    private static boolean isLive(Boolean answer) {
+        return answer == null || answer.booleanValue();
     }
 
     /**
@@ -373,11 +427,14 @@ public final class InstructionSelector {
     private void emitMovReg(Item.MovReg movreg) {
         // The verifier has already said that the name is one this target has and that the source is
         // a value or a segment register; what is left is the target's own answer about how (or
-        // whether) it can set it.
+        // whether) it can set it. The flags are part of that answer: a segment register takes no
+        // immediate, so a zero goes through a scratch register, and building one there is cheaper
+        // than moving it wherever they can still be read (docs/ir.md §4.2).
         Operand value = movreg.source() != null
                 ? new Operand.Name(movreg.position(), movreg.source())
                 : operandOf(movreg.value());
-        Expansion sequence = target.writeState(movreg.position(), movreg.name(), value);
+        Expansion sequence = target.writeState(movreg.position(), movreg.name(), value,
+                flagsLiveHere);
         if (sequence == null) {
             throw new CompileError(movreg.position(),
                     "this target has no way to set '" + movreg.name() + "' (docs/ir.md §8.1)");
@@ -560,12 +617,34 @@ public final class InstructionSelector {
                 written = candidate;
             }
         }
+
+        // A comparison with zero says what a test of the operand against itself says, when the
+        // target promises the two leave the same flags (docs/ir.md §4.2) — and it says it without
+        // the zero, so it is a byte shorter wherever a register form is shorter than an immediate
+        // one. Which instruction it is, is the target's: the operand goes on both sides and the
+        // forms are the ones the target has for a test.
+        if (best != null && compare.kind() == Item.Compare.Kind.CMP
+                && target.zeroComparisonIsATest() && isZero(compare.right())) {
+            List<Operand> asTest = operands(virtual(first, compare.position()),
+                    virtual(first, compare.position()));
+            Form candidate = smallest(target.compareForms(Item.Compare.Kind.TEST), asTest);
+            if (candidate != null && candidate.bytes() < best.bytes()) {
+                out.add(new Instruction(compare.position(), candidate.mnemonic(), asTest));
+                return;
+            }
+        }
+
         if (best == null) {
             throw new CompileError(compare.position(),
                     "no way to compare these operands is available yet: a memory operand is not "
                             + "handled yet");
         }
         out.add(new Instruction(compare.position(), best.mnemonic(), written));
+    }
+
+    /** Whether a value is the literal zero, which says nothing a test of an operand does not. */
+    private static boolean isZero(Value value) {
+        return value instanceof Value.Number && ((Value.Number) value).value() == 0;
     }
 
     /** Whether the flags this value leaves can be read by anything afterwards. */
@@ -583,6 +662,13 @@ public final class InstructionSelector {
         }
         if (value instanceof Value.Number) {
             Value.Number literal = (Value.Number) value;
+            if (literal.value() == 0) {
+                // The one place a zero is known to be a zero, so it is the one place a shorter
+                // instruction can build it instead of moving it (docs/ir.md §4.2).
+                out.add(target.zero(literal.position(), virtual(destination, literal.position()),
+                        sizeOf(destination), flagsLiveHere));
+                return;
+            }
             out.add(new Instruction(literal.position(), "mov", operands(
                     virtual(destination, literal.position()),
                     new Operand.Number(literal.position(), literal.value(), literal.spelling()))));
@@ -811,6 +897,19 @@ public final class InstructionSelector {
     /** The type of an operand that names one, or null when it is a literal. */
     private Type typeOf(Value value) {
         return value instanceof Value.Name ? form.typeOf(((Value.Name) value).name()) : null;
+    }
+
+    /**
+     * How wide a value is, for the target's one question about width.
+     *
+     * <p>A word when nothing says otherwise: the selector has no type for a temporary of its own,
+     * and a value the form does not know the width of is one the allocator will put in a whole
+     * register, which is what the mode bits of an instruction are chosen from anyway
+     * ({@code docs/ir.md} §3.4).
+     */
+    private Size sizeOf(String name) {
+        Type type = form.typeOf(name);
+        return type == null ? Size.WORD : Size.ofBytes(type.bytes());
     }
 
     /**

@@ -343,7 +343,11 @@ Working today:
   `jmp`, the `jcc` family, loads and stores of a byte or a word, narrowing a value to its
   low byte or its low word, widening a byte with `xor ah, ah` or `cbw` — the sequences this
   machine needs where a 386 says `movzx` and `movsx` — and `*`, `/` and `%` signed and
-  unsigned. `volatile` is honoured: a read marked volatile happens even when nothing
+  unsigned. The smallest instruction is taken where the flags allow it: a comparison with
+  zero is a test of the operand against itself, and a zero is built with `xor r, r` rather
+  than moved wherever nothing can read the flags afterwards — two bytes instead of three in
+  both cases, and never where they are still wanted ([`docs/ir.md`](docs/ir.md) §4.2).
+  `volatile` is honoured: a read marked volatile happens even when nothing
   uses its value, while a plain read nobody uses is removed.
 * **A target that says what its instructions do to registers**: which registers an
   instruction destroys (`mov cl, n` writes one no value was given, `mul` leaves half

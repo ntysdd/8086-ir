@@ -3,6 +3,7 @@ package i8086.target;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.asm.Size;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
 import i8086.ir.Operator;
@@ -92,6 +93,26 @@ public interface Target {
      * The forms that set the flags from two values: {@code cmp} and {@code test}.
      */
     List<Form> compareForms(Item.Compare.Kind kind);
+
+    /**
+     * Whether a comparison with zero may be written as a test of the operand against itself, or
+     * false when this target has no such instruction or cannot promise the flags
+     * ({@code docs/ir.md} §4.2).
+     *
+     * <p>Two different instructions, one answer, and only the machine can say so: on the 8086 both
+     * clear the carry and the overflow flag and both take ZF, SF and PF from the operand, so every
+     * condition it can test reads the same after either. The one flag they do not promise the same
+     * thing about is the auxiliary carry, and no condition this machine has reads it — which is
+     * what a target that answers yes is claiming, and why the answer is a fact about the target
+     * rather than a trick of selection. A target that answers no keeps the comparison.
+     *
+     * <p>Which instruction it is, is the target's to write: the caller takes the operand from the
+     * comparison and asks for the forms of a {@code test} ({@link #compareForms}), so the machine's
+     * own words stay on this side of the boundary ({@code AGENTS.md}, invariant 2).
+     */
+    default boolean zeroComparisonIsATest() {
+        return false;
+    }
 
     /**
      * Whether a mnemonic is one that goes somewhere.
@@ -398,8 +419,14 @@ public interface Target {
      * which register that is, is the machine's business. The operand the caller passes may be a
      * value it chose, a literal, or a register it wrote by hand — the last being how
      * {@code movreg ds, cs} reaches here.
+     *
+     * <p>{@code flagsMayBeRead} is whether anything can still look at the flags afterwards
+     * ({@code docs/ir.md} §4.2). A state register takes no immediate, so a value without a register
+     * of its own has to be built first, and the shortest way to build a zero writes the flags
+     * rather than leaving them alone. When they can still be read the sequence has to keep them,
+     * which is the {@code mov} this target would otherwise have used.
      */
-    Expansion writeState(SourcePos where, String name, Operand value);
+    Expansion writeState(SourcePos where, String name, Operand value, boolean flagsMayBeRead);
 
     /**
      * A sequence that reads one of this target's own registers into a value, or null when this
@@ -411,4 +438,17 @@ public interface Target {
      * directly — and a machine on which it is more says so by answering with the sequence.
      */
     Expansion readState(SourcePos where, Operand destination, String register);
+
+    /**
+     * The instruction that puts a zero of this width into a register ({@code docs/ir.md} §4.2).
+     *
+     * <p>{@code flagsMayBeRead} is the half of the question that is about the flags: a zero can be
+     * moved in, which leaves them alone, or cleared, which writes them — and a target that clears
+     * has to say so by answering with an instruction the caller may only use where they are dead.
+     *
+     * <p>The width is the other half, and it is why the caller passes it: clearing a word with
+     * {@code xor r, r} is shorter than moving the literal there, and on a byte the two cost the
+     * same, so a target that has both answers with the shorter one for the width it is given.
+     */
+    Instruction zero(SourcePos where, Operand register, Size size, boolean flagsMayBeRead);
 }

@@ -45,6 +45,22 @@ public final class CompilerTest {
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
         suite.add("Compiler keeps the flags under eval and spends them under expr",
                 CompilerTest::keepsAndSpendsFlags);
+        suite.add("Compiler builds a zero by clearing the register",
+                CompilerTest::buildsAZeroByClearing);
+        suite.add("Compiler moves a zero the flags are still waiting on",
+                CompilerTest::movesAZeroTheFlagsAreWaitingOn);
+        suite.add("Compiler moves a zero between two comparisons",
+                CompilerTest::movesAZeroBetweenTwoComparisons);
+        suite.add("Compiler builds a zero where the flags are already spent",
+                CompilerTest::buildsAZeroWhereTheFlagsAreAlreadySpent);
+        suite.add("Compiler leaves a byte's zero as a move", CompilerTest::leavesABytesZeroAsAMove);
+        suite.add("Compiler tests a value against zero without the zero",
+                CompilerTest::testsAgainstZero);
+        suite.add("Compiler tests a sugar's zero the same way",
+                CompilerTest::testsASugarsZeroTheSameWay);
+        suite.add("Compiler tests a byte against zero", CompilerTest::testsAByteAgainstZero);
+        suite.add("Compiler leaves a test the writer wrote alone",
+                CompilerTest::leavesATestThatWasWritten);
         suite.add("Compiler expands a constant multiply into shifts",
                 CompilerTest::expandsMultiply);
         suite.add("Compiler refuses a form whose flags are still wanted",
@@ -328,6 +344,223 @@ public final class CompilerTest {
                         + "    ret\n"));
     }
 
+    // --- the shorter instruction, where the flags allow (docs/ir.md §4.2) ---
+
+    /**
+     * A zero is built rather than moved where nothing can look at the flags: {@code xor r, r} is two
+     * bytes and {@code mov r, 0} is three, and the register holds zero either way. The value here is
+     * written before anything has defined the flags at all, so there is nothing a clear can destroy.
+     */
+    private static void buildsAZeroByClearing() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    xor ax, ax\n    mov [0x40], ax\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n"
+                        + "    a = 0\n"
+                        + "    [0x40] = a\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the other half of it, which is what makes it an optimisation rather than a rewrite: where
+     * the flags can still be read the zero is moved, because the clear writes them and the move does
+     * not. The branch reads what the comparison left, so those flags are live across the assignment.
+     */
+    private static void movesAZeroTheFlagsAreWaitingOn() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    cmp ax, 1\n"
+                        + "    mov ax, 0\n"
+                        + "    jnz $skip\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$skip:\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n    var $b: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    cmp a, 1\n"
+                        + "    b = 0\n"
+                        + "    jnz $skip\n"
+                        + "    ret\n"
+                        + "$skip:\n"
+                        + "    [0x42] = b\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The flags are live where something still reads them, even though a comparison just before
+     * defined them: the branch reads what the last comparison left, so the assignment in between
+     * must not write them ({@code docs/ir.md} §4.2).
+     *
+     * <p>What the first comparison is doing in the source is being removed — its flags are read by
+     * nothing, so dead value elimination takes the whole statement away — and that is what this test
+     * is really about. A selector that worked out the flags question by counting items would be
+     * counting the items of the module, where that statement still is, against the statements of the
+     * form, where it is not: one item out, and the answer belongs to the wrong instruction.
+     */
+    private static void movesAZeroBetweenTwoComparisons() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    cmp ax, 2\n"
+                        + "    mov ax, 0\n"
+                        + "    jnz $skip\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$skip:\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n    var $b: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    cmp a, 1\n"
+                        + "    cmp a, 2\n"
+                        + "    b = 0\n"
+                        + "    jnz $skip\n"
+                        + "    ret\n"
+                        + "$skip:\n"
+                        + "    [0x42] = b\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A byte's zero is a move either way — {@code mov al, 0} and {@code xor al, al} are two bytes
+     * each — so nothing is given up for nothing and the value stays the instruction it was written
+     * as ({@code docs/ir.md} §4.2).
+     */
+    private static void leavesABytesZeroAsAMove() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    mov al, 0\n    mov [0x40], al\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $c: u8\n"
+                        + "    c = 0\n"
+                        + "    [0x40] = c\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The flags are dead in a block that nothing reads them in, even though the block before defined
+     * them: the branch at the top spent what the comparison left, and nothing after it asks again.
+     * That is the ordinary liveness question asked of the one variable, and the answer is what lets
+     * the clear be used away from the top of the program as well.
+     */
+    private static void buildsAZeroWhereTheFlagsAreAlreadySpent() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    cmp ax, 1\n"
+                        + "    jz $done\n"
+                        + "    xor ax, ax\n"
+                        + "    mov [0x42], ax\n"
+                        + "\n"
+                        + "$done:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n    var $b: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    cmp a, 1\n"
+                        + "    jz $done\n"
+                        + "    b = 0\n"
+                        + "    [0x42] = b\n"
+                        + "$done:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * Comparing with zero is a test of the operand against itself, which is the same answer and does
+     * not need the zero: on this machine both clear the carry and the overflow flag and both take
+     * ZF, SF and PF from the operand ({@code docs/ir.md} §4.2). So the instruction is a byte shorter
+     * than the comparison it stands for.
+     */
+    private static void testsAgainstZero() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    test ax, ax\n"
+                        + "    jz $done\n"
+                        + "    mov [0x42], ax\n"
+                        + "\n"
+                        + "$done:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    cmp a, 0\n"
+                        + "    jz $done\n"
+                        + "    [0x42] = a\n"
+                        + "$done:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The sugar says {@code .if a == 0} and is normalised to a comparison and a branch, so the same
+     * choice reaches it: what the writer asked is the question, and which instruction asks it is the
+     * back end's ({@code docs/ir.md} §7.2, §4.2).
+     */
+    private static void testsASugarsZeroTheSameWay() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    test ax, ax\n"
+                        + "    jnz ..@lbl0\n"
+                        + "    mov [0x42], ax\n"
+                        + "\n"
+                        + "..@lbl0:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    .if a == 0\n"
+                        + "        [0x42] = a\n"
+                        + "    .endif\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A byte is tested against itself as well, and it is the case where nothing is saved by it:
+     * {@code cmp al, 0} has a two-byte encoding of its own. What is kept is one rule for one
+     * question — a comparison with zero is a test — rather than a size comparison the selector would
+     * have to guess at.
+     */
+    private static void testsAByteAgainstZero() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $c: u8\n"
+                + "    c = byte [0x44]\n"
+                + "    cmp c, 0\n"
+                + "    jz $done\n"
+                + "$done:\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    test al, al\n"),
+                "a byte is tested against itself too: " + assembly);
+    }
+
+    /**
+     * A test the writer wrote is left alone, and so is a comparison with anything that is not zero:
+     * {@code test a, 0} tests a literal rather than the operand, which always sets ZF, and a
+     * comparison with one is a comparison ({@code docs/ir.md} §4.2).
+     */
+    private static void leavesATestThatWasWritten() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $a: u16\n"
+                + "    a = word [0x40]\n"
+                + "    test a, 0\n"
+                + "    jz $done\n"
+                + "    cmp a, 1\n"
+                + "    jz $done\n"
+                + "$done:\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    test ax, 0\n"),
+                "the operand is not the literal, so the test stays as it was written: " + assembly);
+        Assert.assertTrue(assembly.contains("    cmp ax, 1\n"),
+                "and a comparison with something that is not zero is a comparison: " + assembly);
+    }
+
     /** The 8086 has no multiply by a constant, so the target hands over a shift trick. */
     private static void expandsMultiply() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -545,13 +778,15 @@ public final class CompilerTest {
      * <p>The loop is where that shows. The counter is written before the loop, read and
      * written inside it, and read by the test at the bottom; the φ joins all three, so
      * they are one life and the increment happens in place. Without that the loop would
-     * cost a copy per turn and the value the test reads would be the wrong one.
+     * cost a copy per turn and the value the test reads would be the wrong one. What it
+     * starts from is a zero, and the machine builds one without moving it
+     * ({@code docs/ir.md} §4.2).
      */
     private static void loopCarriedValue() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov ax, 0\n"
+                        + "    xor ax, ax\n"
                         + "    jmp ..@lbl1\n"
                         + "\n"
                         + "..@lbl0:\n"
@@ -710,7 +945,7 @@ public final class CompilerTest {
                 + "    movreg ds, cs\n"
                 + "    ret\n");
         Assert.assertEquals("org 0x7c00\n\n$main:\n"
-                + "    mov ax, 0\n"
+                + "    xor ax, ax\n"
                 + "    mov ds, ax\n"
                 + "    mov sp, 0x7c00\n"
                 + "    mov ax, 0xb800\n"
@@ -723,7 +958,8 @@ public final class CompilerTest {
     /**
      * The sequence a segment move needs writes {@code ax}, and the allocator is told: a value alive
      * across the move is kept out of that register, because the register is written by the sequence
-     * and not by anything the program wrote.
+     * and not by anything the program wrote. The zero it is set up through is built rather than
+     * moved, because the flags are dead this early in the program ({@code docs/ir.md} §4.2).
      */
     private static void keepsValuesOutOfTheSegmentScratch() {
         String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
@@ -733,7 +969,7 @@ public final class CompilerTest {
                 + "    movreg ds, 0\n"
                 + "    word [0x42] = x\n"
                 + "    ret\n");
-        Assert.assertTrue(assembly.contains("mov ax, 0\n    mov ds, ax\n"), assembly);
+        Assert.assertTrue(assembly.contains("xor ax, ax\n    mov ds, ax\n"), assembly);
         Assert.assertFalse(assembly.contains("mov word [0x42], ax"),
                 "the value did not wait in the register the sequence uses: " + assembly);
     }

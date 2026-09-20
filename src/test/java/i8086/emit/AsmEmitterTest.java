@@ -236,7 +236,9 @@ public final class AsmEmitterTest {
     /**
      * A loop, from the sugar to the text, with nothing in between but the pieces
      * that were already there. The two variables live across a label, so they get a
-     * register each and keep it.
+     * register each and keep it — and the counter starts at zero, which is the one
+     * value this machine builds with a shorter instruction than a move
+     * ({@code docs/ir.md} §4.2).
      */
     private static void writesALoop() {
         String assembly = emit("target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -251,7 +253,7 @@ public final class AsmEmitterTest {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
                 + "$main:\n"
-                + "    mov cx, 0\n"
+                + "    xor cx, cx\n"
                 + "    mov ax, 3\n"
                 + "    jmp ..@lbl1\n"
                 + "\n"

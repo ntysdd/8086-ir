@@ -646,6 +646,26 @@ matters:
   propagated as though it had a value.
 * `MOV` and loads do not touch flags at all.
 
+**Two instructions may stand for one another when they leave the same flags**, and which
+ones do is the target's to say rather than the back end's to assume. On this machine:
+
+* **a comparison with zero is a test of the operand against itself.** `test r, r` clears `CF`
+  and `OF` the way `r - 0` does, and `ZF`, `SF` and `PF` come from the operand either way;
+  the one flag the two do not promise the same thing about is `AF`, and no condition this
+  machine has reads it. So `cmp r, 0` is written as `test r, r` — two bytes where the
+  comparison is three, and the same question asked of the same operand. A target on which a
+  condition reads `AF` says no, and the comparison stays;
+* **a zero is built by clearing the register rather than moving it**, where the flags are
+  dead. `xor r, r` is two bytes where `mov r, 0` is three, and the flags are what make it a
+  question at all: the clear writes them and the move leaves them alone. The shorter one is
+  therefore used exactly where nothing can read them, which is the ordinary liveness question
+  asked of the one name `flags` (§4.1) — live where something reads them before writing them
+  again.
+
+Both are choices of instruction rather than changes to the program: the writer said which
+value and which question, and which instruction carries it is the back end's — bounded by
+what the target promises about the flags, and by nothing else.
+
 ### 4.3 Undefined flags — [decided]
 
 `expr(...)` leaves `flags` undefined, and the IR must be able to say so.

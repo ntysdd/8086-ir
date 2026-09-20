@@ -2,7 +2,9 @@ package i8086.target;
 
 import i8086.SourcePos;
 import i8086.asm.Instruction;
+import i8086.asm.Numbers;
 import i8086.asm.Operand;
+import i8086.asm.Size;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
 import i8086.ir.Operator;
@@ -718,6 +720,22 @@ public final class I8086 implements Target {
         return kind == Item.Compare.Kind.TEST ? TEST_FORMS : COMPARE_FORMS;
     }
 
+    /**
+     * Comparing with zero and testing the operand against itself leave the same answer to every
+     * question this machine can ask about the flags.
+     *
+     * <p>{@code test r, r} clears CF and OF, as subtracting zero does, and ZF, SF and PF come from
+     * the operand either way — {@code r - 0} is {@code r} and {@code r & r} is {@code r}. The
+     * auxiliary carry is the one flag the two do not promise the same thing about, and no condition
+     * this machine has reads it: {@code CONDITIONS} holds carry, zero, sign, parity and overflow
+     * tests and nothing else. So a comparison with zero can be written without the zero, which is a
+     * byte shorter wherever the immediate form is.
+     */
+    @Override
+    public boolean zeroComparisonIsATest() {
+        return true;
+    }
+
     @Override
     public List<Form> forms(Operator operator) {
         List<Form> forms = FORMS.get(operator);
@@ -872,18 +890,56 @@ public final class I8086 implements Target {
      * {@code mov ds, memory}, so the value goes through {@code ax} first. The copy is stated even
      * when it turns out to be unnecessary, which is how the rest of this class writes a sequence:
      * the allocator is the one that finds out, and drops a copy of a register into itself.
+     *
+     * <p>A zero is built with {@code xor} rather than moved, when nothing can look at the flags
+     * afterwards: {@code xor r, r} is one byte shorter than {@code mov r, 0} on a word, and it is
+     * the same register cleared either way ({@code docs/ir.md} §4.2). The flags are what make it a
+     * question at all — {@code xor} writes them, {@code mov} leaves them alone — so where they can
+     * still be read the sequence does what it did before.
      */
     @Override
-    public Expansion writeState(SourcePos where, String name, Operand value) {
+    public Expansion writeState(SourcePos where, String name, Operand value, boolean flagsMayBeRead) {
         List<Instruction> instructions = new ArrayList<Instruction>();
         if (SEGMENT_REGISTERS.contains(name)) {
             Operand scratch = new Operand.Name(where, SEGMENT_SCRATCH);
-            instructions.add(instruction(where, "mov", scratch, value));
+            instructions.add(built(where, scratch, value, flagsMayBeRead));
             instructions.add(instruction(where, "mov", new Operand.Name(where, name), scratch));
             return new Expansion(instructions, true);
         }
-        instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
+        instructions.add(built(where, new Operand.Name(where, name), value, flagsMayBeRead));
         return new Expansion(instructions, true);
+    }
+
+    /**
+     * The instruction that puts {@code value} into a register: a literal zero goes through
+     * {@link #zero}, anything else is moved.
+     *
+     * <p>A value that happens to hold zero is not a literal zero: this is the one place a zero is
+     * known to be one, and a register is moved like any other value.
+     */
+    private Instruction built(SourcePos where, Operand register, Operand value,
+                              boolean flagsMayBeRead) {
+        if (value instanceof Operand.Number && ((Operand.Number) value).value() == 0) {
+            return zero(where, register, Size.WORD, flagsMayBeRead);
+        }
+        return instruction(where, "mov", register, value);
+    }
+
+    /**
+     * Clearing a register, which is what this machine does with a zero it does not have to move.
+     *
+     * <p>{@code xor r, r} is two bytes where {@code mov r, 0} is three, and it is the same register
+     * with the same zero in it — the difference is the flags, which is the parameter
+     * ({@code docs/ir.md} §4.2). On a byte the two are two bytes each, so the move stays: there is
+     * nothing to win and one more thing for a reader to work out.
+     */
+    @Override
+    public Instruction zero(SourcePos where, Operand register, Size size, boolean flagsMayBeRead) {
+        if (flagsMayBeRead || size.bytes() < Size.WORD.bytes()) {
+            return instruction(where, "mov", register,
+                    new Operand.Number(where, 0, Numbers.spelling(0)));
+        }
+        return instruction(where, "xor", register, register);
     }
 
     /**

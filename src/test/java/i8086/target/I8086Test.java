@@ -3,6 +3,7 @@ package i8086.target;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.asm.Size;
 import i8086.ir.Operator;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
@@ -31,6 +32,9 @@ public final class I8086Test {
     public static void register(Suite suite) {
         suite.add("I8086 says which register can hold a byte", I8086Test::byteHalves);
         suite.add("I8086 widens a byte with the instructions it has", I8086Test::widensBytes);
+        suite.add("I8086 builds a zero the way the flags allow",
+                I8086Test::buildsZeroesTheWayTheFlagsAllow);
+        suite.add("I8086 says a comparison with zero is a test", I8086Test::comparesZeroWithATest);
         suite.add("I8086 writes only registers a value cannot live in",
                 I8086Test::writableStateHoldsNoValues);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
@@ -63,7 +67,7 @@ public final class I8086Test {
                     "'" + register + "' is not somewhere a value may live");
             Assert.assertFalse(target.addressRegisters().contains(register),
                     "'" + register + "' is not somewhere an address may live");
-            Assert.assertNotNull(target.writeState(AT, register, number(1)),
+            Assert.assertNotNull(target.writeState(AT, register, number(1), false),
                     "and this target can write it: " + register);
         }
         for (String register : target.valueRegisters()) {
@@ -218,6 +222,34 @@ public final class I8086Test {
         Expansion signed = target.widen(AT, destination, source, true);
         Assert.assertEquals("mov, cbw, mov", mnemonics(signed));
         Assert.assertEquals("[ax]", clobbers("cbw").toString());
+    }
+
+    /**
+     * A zero into a register, which the flags decide between: {@code xor r, r} writes them and
+     * {@code mov r, 0} leaves them alone, and the clear is shorter only on a word — where the two
+     * are the same two bytes and the value stays the instruction it was written as
+     * ({@code docs/ir.md} §4.2).
+     */
+    private static void buildsZeroesTheWayTheFlagsAllow() {
+        Target target = Targets.byName("8086");
+        Operand register = new Operand.Virtual(AT, "x#1");
+        Assert.assertEquals("xor", target.zero(AT, register, Size.WORD, false).mnemonic());
+        Assert.assertEquals("mov", target.zero(AT, register, Size.WORD, true).mnemonic());
+        Assert.assertEquals("mov", target.zero(AT, register, Size.BYTE, false).mnemonic());
+
+        // The operand is on both sides, which is what makes it a clear rather than an exclusive-or
+        // of one register with another.
+        Instruction cleared = target.zero(AT, register, Size.WORD, false);
+        Assert.assertEquals(cleared.operands().get(0), cleared.operands().get(1));
+    }
+
+    /**
+     * And a comparison with zero, which this machine says is a test of the operand against itself:
+     * the same condition either way, and a byte shorter without the zero ({@code docs/ir.md} §4.2).
+     */
+    private static void comparesZeroWithATest() {
+        Assert.assertTrue(Targets.byName("8086").zeroComparisonIsATest(),
+                "both clear CF and OF and take ZF, SF and PF from the operand");
     }
 
     /** The mnemonics of a sequence, in order, so that its shape can be compared. */
