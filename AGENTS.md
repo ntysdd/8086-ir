@@ -48,10 +48,11 @@ These hold for every change, with no exceptions and no "just for now".
    cannot write a test where the transformation must *not* fire, the
    transformation is under-specified.
 5. **Round-trips are invariants.**
-   `parse(print(ir)) == ir`, and the assembler's decoder and encoder are
-   inverses on every encoding the emitter can produce. Break either and the
-   change is wrong. The decoder exists for that check: it is a test aid, not a
-   general 8086 disassembler, and no product path may depend on it.
+   `parse(print(ir)) == ir`, which is the one that exists today and holds for every
+   module in the tree. The other is a rule for the future: an assembler of our own would
+   have an encoder and a decoder, and they would have to be inverses on every encoding
+   the emitter can produce. Break either and the change is wrong. Such a decoder is a
+   test aid, not a general 8086 disassembler, and no product path may depend on it.
 6. **Output is deterministic.**
    Same input, same bytes, every run. Never let hash iteration order reach
    output, error messages, or pass scheduling. Use insertion- or
@@ -126,7 +127,7 @@ working; a change that leaves `build.bat` red is not done.
 ```
 build.bat                                   # compile everything, run all tests
 build.bat run optimize examples/hello.ir -o hello.asm
-build.bat run assemble hello.asm -o hello.bin
+nasm -f bin hello.asm -o hello.bin          # not ours yet: see invariant 5
 ```
 
 * Plain batch only. No PowerShell-only constructs, no downloaded tools, no
@@ -154,9 +155,11 @@ static methods, collected by a small hand-written runner:
   exit code if anything failed.
 * Assertions are small hand-written helpers (`assertEquals`,
   `assertRefused`, ...). Keep them dependency-free and readable.
-* `src/test/resources/` holds golden files: IR samples, expected assembly,
-  expected instruction encodings. Tests compare against them and report a
-  readable diff on mismatch.
+* Goldens live in the tests as strings, next to the case they belong to, and a
+  mismatch says what was expected and what was found. There is no golden-file
+  directory: an IR sample worth a file of its own belongs in `examples/`, which is
+  where `mbr7.ir` sits next to the hand-written `mbr7.hand.asm` kept for the size
+  comparison.
 
 Adding a test framework is a change to the project's dependency policy, not a
 convenience refactor. Ask first.
@@ -165,10 +168,13 @@ convenience refactor. Ask first.
 
 * A new or changed pass: SSA verification on both sides, at least one case
   where it fires and one where it must not, and a pipeline registration.
-* A new instruction or addressing form: exact-byte encoder test plus
-  disassemble/reassemble round-trip.
-* A pass-ordering or IR-shape change: end-to-end test over a sample program,
-  comparing observable results against the unoptimized run.
+* A new instruction or addressing form: the assembly the emitter writes for it,
+  pinned in a golden, and the size `nasm` gives it, written down where the size is
+  claimed. The byte-level encoder test and the disassemble/reassemble round-trip wait
+  on an assembler of our own (invariant 5).
+* A pass-ordering or IR-shape change: an end-to-end test over a sample program,
+  pinning what comes out — the assembly, exactly — so that the change is visible where
+  it matters and a later pass cannot quietly undo it.
 * Anything touching error paths: a test for the error, including its position
   information.
 
@@ -182,10 +188,11 @@ ssa/        dominators, phi insertion, SSA construction
 pass/       generic analysis and transformation passes
 target/     target descriptions, target-specific late passes, ISA + encodings
 isel/       instruction form selection and addressing modes (no lowering)
-regalloc/   allocation, coalescing, spilling
+regalloc/   allocation, and the copies of a register into itself that turn out
+            to be unnecessary
 emit/       assembly text emitter
-asm/        mini-assembler: lexer, parser, encoder, decoder, linker
-sim/        reference interpreter for the 8086; end-to-end tests only
+asm/        the assembly text as data: its tokens, the instruction model, how it
+            prints, and the dialect it is written in
 cli/        command-line entry points
 ```
 
