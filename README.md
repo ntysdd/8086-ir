@@ -370,8 +370,9 @@ Working today:
   on variables and control flow: `var`, assignments, `eval`, `expr`, `cmp`, `test`,
   `jmp`, the `jcc` family, loads and stores of a byte or a word, narrowing a value to its
   low byte or its low word, widening a byte with `xor ah, ah` or `cbw` — the sequences this
-  machine needs where a 386 says `movzx` and `movsx` — and `*`, `/` and `%` signed and
-  unsigned. The smallest instruction is taken where the flags allow it: a comparison with
+  machine needs where a 386 says `movzx` and `movsx` — `*`, `/` and `%` signed and
+  unsigned, and a shift whose count is a value, which goes through `cl` because this machine has no
+  shift by an immediate that is not one. The smallest instruction is taken where the flags allow it: a comparison with
   zero is a test of the operand against itself, and a zero is built with `xor r, r` rather
   than moved wherever nothing can read the flags afterwards — two bytes instead of three in
   both cases, and never where they are still wanted ([`docs/ir.md`](docs/ir.md) §4.2).

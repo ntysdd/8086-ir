@@ -286,6 +286,10 @@ public final class CompilerTest {
         suite.add("Compiler refuses five byte values at one point",
                 CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
+        suite.add("Compiler shifts by a count that is a value", CompilerTest::shiftsByAValue);
+        suite.add("Compiler shifts a computed value by a value", CompilerTest::shiftsATreeByAValue);
+        suite.add("Compiler refuses a value shift whose flags are read",
+                CompilerTest::refusesAValueShiftWhoseFlagsAreRead);
         suite.add("Compiler keeps a small shift to single steps", CompilerTest::repeatsSmallShifts);
         suite.add("Compiler writes an instruction's prefix in front of it",
                 CompilerTest::writesAPrefixedInstruction);
@@ -3128,6 +3132,72 @@ public final class CompilerTest {
                 "two single shifts: " + assembly);
         Assert.assertFalse(assembly.contains("cl"),
                 "and no count register at all: " + assembly);
+    }
+
+    /**
+     * And the count may be a value, which is what "a shift count held in a variable" means
+     * ({@code docs/ir.md} §5.6): the machine's count is a byte in {@code cl}, so the sequence takes
+     * the low byte of the value and shifts by it.
+     *
+     * <p>The low byte and not the whole value, and that is exact rather than a guess: this machine
+     * takes its count modulo 32, so nothing above the low byte can change the answer —
+     * {@code (n mod 256) mod 32} is {@code n mod 32} ({@code docs/ir.md} §12 item 14).
+     */
+    private static void shiftsByAValue() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dx, word [0x40]\n"
+                        + "    mov ax, word [0x42]\n"
+                        + "    mov cl, al\n"
+                        + "    shl dx, cl\n"
+                        + "    mov word [0x44], dx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n    var n: u16\n"
+                        + "    x = word [0x40]\n"
+                        + "    n = word [0x42]\n"
+                        + "    x = eval(x shl n)\n"
+                        + "    volatile word [0x44] = x\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The same where the value being shifted is a tree rather than a name: the left side is computed
+     * into the destination first, and the count arrives in {@code cl} after it. Nothing moves twice
+     * — the sequence's copy into itself is the allocator's to drop, which is why the two ways into
+     * it are one shape ({@code InstructionSelector} and {@code Target.shiftByValue}).
+     */
+    private static void shiftsATreeByAValue() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var x: u16\n    var a: u16\n    var b: u16\n    var n: u16\n"
+                + "    x = word [0x40]\n    a = word [0x42]\n    b = word [0x44]\n"
+                + "    n = word [0x46]\n"
+                + "    x = expr((a + b) shr n)\n"
+                + "    volatile word [0x48] = x\n"
+                + "    ret\n");
+        Assert.assertTrue(assembly.contains("    add dx, cx\n    mov cl, al\n    shr dx, cl\n"),
+                "the sum, then the count, then one shift: " + assembly);
+    }
+
+    /**
+     * The must-not: a shift by a count that is a value is not a single shift, so it leaves the
+     * flags a single shift would leave only for a count of one — and a count that is a value is not
+     * known to be one. Where the flags are read, the short form is refused rather than guessed at.
+     */
+    private static void refusesAValueShiftWhoseFlagsAreRead() {
+        CompileError refused = Assert.assertRefused("t.ir:10:16",
+                () -> Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n    var n: u16\n"
+                        + "    x = word [0x40]\n"
+                        + "    n = word [0x42]\n"
+                        + "    x = eval(x sar n)\n"
+                        + "    jnz $skip\n"
+                        + "    volatile word [0x44] = x\n"
+                        + "$skip:\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("leaves different flags"),
+                refused.getMessage());
     }
 
     /**

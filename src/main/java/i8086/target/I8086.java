@@ -1048,6 +1048,33 @@ public final class I8086 implements Target {
         return repeatedShift(where, mnemonic, destination, source, (int) count, count == 1);
     }
 
+    /**
+     * A shift by one of the values this machine has, or null when the count has to come from
+     * somewhere else ({@code docs/ir.md} §5.6).
+     *
+     * <p>The count is a value and the machine's count is a byte in {@code cl}, so the sequence takes
+     * the low byte of the value: which register that value got, and which half of it is wanted, is
+     * the allocator's to decide, and {@link Operand.LowByte} is how a sequence says so. The value
+     * itself is not destroyed — a shift reads its count and does not write it — and what the
+     * sequence <em>does</em> destroy is {@code cx}, which the allocator learns the same way it
+     * learns about any other instruction: {@link #clobbers} finds a register written where a value
+     * could have been.
+     */
+    @Override
+    public Expansion shiftByValue(SourcePos where, String mnemonic, Operand destination,
+                                  Operand source, String count) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        if (!sameRegister(destination, source)) {
+            instructions.add(instruction(where, "mov", destination, source));
+        }
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "cl"),
+                new Operand.LowByte(where, count)));
+        instructions.add(instruction(where, mnemonic, destination, new Operand.Name(where, "cl")));
+        // Not the flags of a single shift: how many steps this is depends on what the count turns
+        // out to be, and the flags after the last one are the ones the operation is said to leave.
+        return new Expansion(instructions, false);
+    }
+
     @Override
     public List<String> stateRegisters() {
         return STATE_REGISTERS;

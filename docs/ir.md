@@ -972,7 +972,9 @@ nothing else and cost nothing.
 
 * The 8086 has no shift by immediate (`SHL r/m, imm8` arrived with the 80186):
   `eval(x << 3)` is three `SHL x, 1`, and a shift count held in a variable must
-  go through `CL`.
+  go through `CL`. What goes there is the **low byte** of the count, and that is exact rather than a
+  guess: this machine takes its count modulo 32, and nothing above the low byte can change a count
+  modulo 32. So `x << n` is legal whatever `n` holds, a count larger than the value included.
 * Neither does `MUL` have an immediate form, and it forces `AX` (plus `DX` for
   the wide product). It costs 118+ cycles where `ADD` costs 3, and a 32×32
   multiply is three `MUL`s plus a carry chain — on the order of 400+ cycles.

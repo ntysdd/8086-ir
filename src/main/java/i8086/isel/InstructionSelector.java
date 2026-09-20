@@ -1162,6 +1162,16 @@ public final class InstructionSelector {
      */
     private Expansion expansionFor(Operator operator, Value right, String source,
                                    String destination, SourcePos where) {
+        // A shift whose count is a value rather than a literal: the machine takes the count from
+        // `cl`, which is a register no operand of the operation names, so the sequence is the
+        // target's to declare (docs/ir.md §5.6).
+        if (isShift(operator) && right instanceof Value.Name && source != null) {
+            String shift = onlyFormMnemonic(operator);
+            if (shift != null) {
+                return target.shiftByValue(where, shift, virtual(destination, where),
+                        virtual(source, where), ((Value.Name) right).name());
+            }
+        }
         if (source == null || !(right instanceof Value.Number)) {
             return null;
         }
@@ -1179,6 +1189,12 @@ public final class InstructionSelector {
                     : target.shiftByConstant(where, shift, target0, source0, constant);
         }
         return null;
+    }
+
+    /** Whether this operator shifts, which is the three the surface has and not the rotates. */
+    private static boolean isShift(Operator operator) {
+        return operator == Operator.SHIFT_LEFT || operator == Operator.SHIFT_RIGHT
+                || operator == Operator.SHIFT_ARITHMETIC;
     }
 
     /**
@@ -1964,6 +1980,19 @@ public final class InstructionSelector {
     private void emitInPlace(Operator operator, String destination, Value second, Boolean signed,
                              SourcePos where, boolean flagsMayBeRead) {
         List<Form> forms = target.forms(operator);
+        // The same sequence for a count that is a value, where the first operand is already in the
+        // destination: the target elides the copy into itself, so the two callers are one shape.
+        if (isShift(operator) && second instanceof Value.Name) {
+            String shift = onlyFormMnemonic(operator);
+            Expansion counted = shift == null ? null
+                    : target.shiftByValue(where, shift, virtual(destination, where),
+                            virtual(destination, where), ((Value.Name) second).name());
+            if (counted != null) {
+                requireFlagsMayBeLost(counted.keepsFlags(), where, operator, flagsMayBeRead);
+                out.addAll(counted.instructions());
+                return;
+            }
+        }
         if (forms.isEmpty()) {
             Expansion sequence = sequenceFor(operator, destination, second, signed, where);
             if (sequence == null) {
@@ -2022,8 +2051,8 @@ public final class InstructionSelector {
         }
         return new CompileError(where,
                 "no form this target has fits '" + operator.spelling() + "' with these "
-                        + "operands: a memory operand is not handled yet, and neither is a "
-                        + "shift by a count that is not a small constant");
+                        + "operands: an operand that is a load is not handled yet, and a shift's "
+                        + "count has to be a value or a small constant");
     }
 
     /**

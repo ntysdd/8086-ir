@@ -246,6 +246,20 @@ public interface Target {
     }
 
     /**
+     * A shift by one of the values this machine has, or null when the count has to come from
+     * somewhere else ({@code docs/ir.md} §5.6).
+     *
+     * <p>This machine's count is a literal or nothing: {@code SHL r/m, imm8} arrived with the 80186,
+     * so a value has to go to {@code cl} first — the same register whatever the value is, which is
+     * the other half of the reason the sequence is the target's to declare and not selection's to
+     * invent.
+     */
+    default Expansion shiftByValue(SourcePos where, String mnemonic, Operand destination,
+                                   Operand source, String count) {
+        return null;
+    }
+
+    /**
      * The registers a value may live in, in the order they should be used up.
      *
      * <p>This is the register class the allocator colours against: what is in the
