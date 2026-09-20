@@ -46,6 +46,8 @@ public final class CompilerTest {
                 CompilerTest::keepsTheExampleLoopInRegisters);
         suite.add("Compiler keeps the copies around an operation with a form",
                 CompilerTest::keepsTheCopiesAroundAnOperationWithAForm);
+        suite.add("Compiler writes a literal into the register its sequence names",
+                CompilerTest::writesALiteralIntoTheRegisterItsSequenceNames);
         suite.add("Compiler keeps a temporary for a tree on the right",
                 CompilerTest::keepsATemporaryForATreeOnTheRight);
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
@@ -298,6 +300,35 @@ public final class CompilerTest {
                         + "    c = word [0x44]\n"
                         + "    x = expr((a + b) * c)\n"
                         + "    [0x46] = x\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A literal a sequence needs in a register is put there by the selector, and every use of it
+     * names that register — because nothing else is keeping the two together. When the copy was
+     * written as a value instead, the allocator placed it wherever it liked and the division divided
+     * by that register: the FAT12 offset below divided by whatever was in {@code cx}, silently.
+     *
+     * <p>The shape is worth having as a test beyond that: {@code (cluster * 3) / 2} is how a FAT12
+     * table is indexed, and the two constants in it are what the back end does least well.
+     */
+    private static void writesALiteralIntoTheRegisterItsSequenceNames() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov ax, 3\n"
+                        + "    mul cx\n"
+                        + "    mov bx, 2\n"
+                        + "    xor dx, dx\n"
+                        + "    div bx\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $cluster: u16\n    var $off: u16\n"
+                        + "    cluster = word [0x40]\n"
+                        + "    off = expr(cluster * 3 / 2)\n"
+                        + "    [0x42] = off\n"
                         + "    ret\n"));
     }
 

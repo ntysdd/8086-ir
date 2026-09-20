@@ -802,7 +802,7 @@ public final class RegisterAllocator {
     }
 
     /**
-     * Refuses a value wider than a register, before anything tries to place one.
+     * Refuses a value whose width is known to be more than a register, before anything places one.
      *
      * <p>A register holds one register's worth of value, and the only answer for more is two of
      * them — which nothing here can name, so a value of four bytes is refused where it is first
@@ -811,20 +811,23 @@ public final class RegisterAllocator {
      * thinks it has thirty-two of, and a store of it would write half of it out
      * ({@code docs/ir.md} §3.4).
      *
+     * <p>A value whose width is <em>not</em> known is not refused: the widths a target's sequences
+     * name by hand have no type at all, and a value nobody stated the width of is placed as a whole
+     * register, which is what the mode bits of an instruction follow ({@code docs/ir.md} §3.2).
+     *
      * <p>The work the value is doing can be done, and the message says how: as two halves the
      * program moves itself, or as bytes in memory ({@code docs/ir.md} §10).
      */
     private void requireValuesFitInARegister(Selection selection) {
         for (String value : values) {
-            if (fitsInARegister(value)) {
+            Type type = selection.typeOf(value);
+            if (type == null || type.bytes() <= Size.WORD.bytes()) {
                 continue;
             }
-            Type type = selection.typeOf(value);
             throw new CompileError(positions.get(value),
-                    "a " + (type == null ? "value" : type.spelling()) + " is wider than a register, "
-                            + "and nothing here can name a pair: write it as two halves the program "
-                            + "moves itself, or keep it in memory and work on its parts "
-                            + "(docs/ir.md §3.4)");
+                    "a " + type.spelling() + " is wider than a register, and nothing here can name "
+                            + "a pair: write it as two halves the program moves itself, or keep it "
+                            + "in memory and work on its parts (docs/ir.md §3.4)");
         }
     }
 

@@ -198,9 +198,16 @@ public final class I8086 implements Target {
         return HALVES.get(name);
     }
 
-    /** Instructions that write no register at all, or only read the operand written first. */
+    /**
+     * Instructions that write no register at all, or only read the operand written first.
+     *
+     * <p>{@code mul}, {@code imul}, {@code div} and {@code idiv} read their operand: what they write
+     * is the pair the machine keeps its answer in, and that is stated as an implicit clobber instead.
+     * Saying otherwise costs registers — a value is kept out of a register nothing was going to touch
+     * — and it is not what the instruction does.
+     */
     private static final Set<String> READS_FIRST_OPERAND = names(
-            "cmp", "test", "push");
+            "cmp", "test", "push", "mul", "imul", "div", "idiv");
 
     /** Instructions that go somewhere, and so write nothing. */
     private static final Set<String> BRANCHES = names("jmp", "ret", "hlt", "nop", "cli", "sti",

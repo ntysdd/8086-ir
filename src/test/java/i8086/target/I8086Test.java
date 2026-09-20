@@ -189,6 +189,10 @@ public final class I8086Test {
     private static void destroyedRegisters() {
         Assert.assertEquals("[ax, dx]", clobbers("mul", name("ax")).toString());
         Assert.assertEquals("[ax, dx]", clobbers("div", name("ax")).toString());
+        // The operand is read, not written: what a multiply writes is the pair it keeps its answer
+        // in, so a register it is given is not destroyed by being given to it.
+        Assert.assertEquals("[ax, dx]", clobbers("mul", name("bx")).toString());
+        Assert.assertEquals("[ax, dx]", clobbers("idiv", name("si")).toString());
         Assert.assertEquals("[ax, si]", clobbers("lodsw").toString());
         // A register the selector wrote itself: one no value was ever given.
         Assert.assertEquals("[cx]", clobbers("mov", name("cl"), number(4)).toString());

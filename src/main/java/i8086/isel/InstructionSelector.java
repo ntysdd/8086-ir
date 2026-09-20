@@ -1270,15 +1270,18 @@ public final class InstructionSelector {
         Operand right = operandOf(second);
         boolean isSigned = signed != null && signed.booleanValue();
         if (right instanceof Operand.Number) {
-            // The machine takes a register, so the literal needs one; the sequence
-            // says which and the allocator treats it as destroyed.
+            // The machine takes a register, so the literal needs one; the sequence says which, and it
+            // names it as a register everywhere it is used. Writing the value there instead would be
+            // an operand the allocator is free to place in another register than the copy wrote —
+            // which is a division by whatever happened to be in that one.
             List<Instruction> withLiteral = new ArrayList<Instruction>();
             withLiteral.add(new Instruction(where, "mov",
                     operands(new Operand.Name(where, LITERAL_SCRATCH), right)));
-            Operand scratch = new Operand.Virtual(where, LITERAL_SCRATCH);
             Expansion rest = multiplies
-                    ? target.multiply(where, inPlace, inPlace, scratch, isSigned)
-                    : target.divide(where, inPlace, inPlace, scratch, isSigned,
+                    ? target.multiply(where, inPlace, inPlace,
+                    new Operand.Name(where, LITERAL_SCRATCH), isSigned)
+                    : target.divide(where, inPlace, inPlace,
+                    new Operand.Name(where, LITERAL_SCRATCH), isSigned,
                     operator == Operator.REMAINDER);
             if (rest == null) {
                 return null;
