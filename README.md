@@ -4,11 +4,11 @@ A modern, SSA-based optimizer and code generator for the Intel 8086.
 
 `8086-ir` takes a textual, human-writable intermediate representation that
 describes 8086-level computation, optimizes it with a real SSA pipeline, and
-emits 8086 assembly text. It is built to ship with its own miniature assembler, so
-that the generated assembly can be turned into a flat binary without depending on
-an external toolchain — but that assembler is **not on the critical path**: the text
-it writes is NASM's dialect, so the image comes from `nasm -f bin` today, and
-[`docs/asm.md`](docs/asm.md) §1 lists the four differences between the two dialects.
+emits 8086 assembly text in NASM's dialect, on purpose: NASM is the assembler for a
+flat binary, it is already one command, and a dialect of our own would buy nothing.
+[`docs/asm.md`](docs/asm.md) is the description of record for the assembly an inline
+block is written in, and §1 lists the four differences between that dialect and the
+one the compiler writes.
 
 The whole thing is written in Java 8, with no third-party runtime dependencies.
 
@@ -49,14 +49,11 @@ The whole thing is written in Java 8, with no third-party runtime dependencies.
   size, the target's cost estimates break the tie. Speed is a tie-break, never
   the goal. Deliberately absent: loop unrolling, inlining for speed, and
   anything else that trades bytes for cycles.
-* **Self-contained.**
-  A bundled micro-assembler (`asm`) parses the emitted assembly, encodes it,
-  resolves labels and produces a flat binary. Same repo, same build, no NASM
-  required to get from IR to bytes.
 * **Verifiable.**
-  SSA form is checked, not assumed. Every pass runs on IR that is verified
-  before and after it. Where possible, results are validated by assembling and
-  executing, not just by eyeballing diffs.
+  SSA form is checked, not assumed: every pass runs on IR that is verified before
+  and after it. And what comes out is measured against something outside the
+  compiler — `nasm` accepts it, a golden test pins it, a hand-written reference says
+  how close it is — rather than against what the compiler expected of itself.
 
 ### Non-goals
 
@@ -65,12 +62,10 @@ The whole thing is written in Java 8, with no third-party runtime dependencies.
   other 16-bit architectures are later goals (see *Future targets*), which
   exist only to keep the target boundary honest — not to make the project
   generic for its own sake.
-* Not a cycle-accurate simulator, though a simple execution model is useful for
-  testing.
-* Not a disassembler. `asm` can decode exactly the instruction forms the
-  emitter can produce, so that encoder round-trips are testable; decoding
-  arbitrary 8086 machine code is not a goal, and nothing in the product path
-  depends on the decoder.
+* Not a cycle-accurate simulator, and no interpreter is planned. The assembly is
+  checked by assembling it, pinning it in a test, and reading it.
+* Not a disassembler. Nothing here decodes machine code, and decoding arbitrary 8086
+  machine code is not a goal of this project.
 
 ---
 
@@ -228,9 +223,9 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    given, resolves and relaxes labels (the shortest jump that reaches its
    target), and writes a flat binary or a listing. The syntax it reads and the
    emitter writes is specified in [`docs/asm.md`](docs/asm.md).
-   **Planned, and the largest thing missing**: the assembly this compiler writes
-   cannot yet be turned into bytes, which makes it a listing rather than a
-   program.
+   **Planned.** Nothing in the pipeline waits on it: `nasm -f bin` turns the text the
+   emitter writes into a flat binary today, which is how the example under *Building
+   and running* reaches a 512-byte image.
 
 This pass list is the description of record, and so is the state written beside
 each step: adding, removing, reordering or re-targeting a pass means updating it
@@ -245,17 +240,17 @@ src/main/java/.../pass/       generic analysis and transformation passes
 src/main/java/.../target/     target descriptions, target-specific late passes,
                               8086 ISA + encodings
 src/main/java/.../isel/       instruction selection and addressing modes
-src/main/java/.../regalloc/   allocation, coalescing, spilling
+src/main/java/.../regalloc/   allocation, and the copies of a register into itself
+                              that turn out to be unnecessary
 src/main/java/.../emit/       assembly text emitter
-src/main/java/.../asm/        mini-assembler: lexer, parser, encoder, decoder,
-                              linker
-src/main/java/.../sim/        reference interpreter for the 8086
+src/main/java/.../asm/        the assembly text as data: its tokens, its instruction
+                              model, how it prints, and the dialect it is written in
 src/main/java/.../cli/        command-line entry points
 src/test/java/...             unit tests, golden tests, round-trip tests
-src/test/resources/           golden files: IR samples, expected assembly/bytes
 examples/                     hand-written IR samples, and one hand-written assembly
                               reference to measure one of them against
 docs/ir.md                    the IR surface: syntax and semantics
+docs/ssa.md                   the SSA form: dominators, φ's, renaming, verification
 docs/asm.md                   the assembly text: syntax and encoding rules
 ```
 
@@ -359,23 +354,20 @@ bytes and `examples/sum.ir` is 38.
   says no pass lost a field when it rebuilt the item it kept (`RenamerTest`). Both are quiet about
   programs that do not have the disease, and each has a test of its own that hands it a case that
   does, so that "it never fires" cannot be told from "it has no teeth".
-* Assembler tests: encode each instruction form and check the exact bytes
-  against known-good encodings; decode them back and compare. The decoder
-  exists for this check only — it is not a general 8086 disassembler.
-* End-to-end: run sample IR through the pipeline, assemble the output, execute
-  it under the `sim` reference interpreter, and compare against the unoptimized
-  program's observable results (registers and memory). `sim` is a test aid and
-  a behavioural model of what the 8086 makes observable — it is not
-  cycle-accurate, and nothing in the pipeline may depend on it. Neither the
-  assembler nor `sim` exists yet, so end-to-end tests currently stop at the
-  assembly text, compared exactly.
+* End-to-end: run sample IR through the pipeline and compare the assembly it
+  produces against a golden, exactly. `examples/mbr7.ir` is the one with a reference
+  beside it (`examples/mbr7.hand.asm`), and that comparison is by bytes, because
+  there is nothing here that runs 8086 code.
+* Encodings and instruction bytes: there are no tests of them, because nothing in
+  this tree encodes an instruction. `nasm` does that, outside the build, and the
+  sizes that matter are read off its listing by hand.
 
 ---
 
 ## Status
 
 The pipeline runs end to end: IR text in, assembly text out, with SSA construction and
-three optimization passes — and the form is what the back end reads, rather than
+four optimization passes — and the form is what the back end reads, rather than
 something it is turned back into first. What is missing is the assembler that would
 turn that text into bytes, and the parts of the surface and the instruction set
 listed below.
@@ -401,10 +393,10 @@ Working today:
   into one is a φ — the register is what carries a value along each path, since there is
   no copy at a merge ([`docs/ssa.md`](docs/ssa.md) §8) — and a copy whose source dies at
   it. `optimize --emit ssa` prints the form.
-* **An optimiser**: constant propagation, dead value elimination, and giving up
-  flags nobody reads, in that order. Every pass runs on a verified form and has its
-  output verified in turn. `optimize --emit ir` prints what the passes left, in the
-  surface — which is a dump, because the back end no longer needs it.
+* **An optimiser**: constant propagation, load folding, dead value elimination, and
+giving up flags nobody reads, in that order. Every pass runs on a verified form and
+has its output verified in turn. `optimize --emit ir` prints what the passes left, in
+the surface — which is a dump, because the back end no longer needs it.
 * **Data, and padding that reaches a layout**: `db`/`dw`/`dd` inline where they sit
   — including a `dw` list of labels, which is a jump or vector table — and
   `pad N [, fill]` / `pad to N [, fill]` for bytes that exist in the image and
@@ -512,19 +504,20 @@ Planned milestones:
    rest of the pipeline reads 8086 facts from. **Done.**
 2. Bundled assembler (encode + label resolution + branch relaxation) for 8086.
    **Not started, and deliberately not on the critical path**: the emitted text is
-   NASM's dialect and `nasm -f bin` produces the image today, so what is missing is
-   self-containment rather than a working pipeline.
-3. SSA construction and verification. **Done**, apart from the flag
-   materialisation that waits on the target's per-flag effects.
-4. Core optimization passes. **Started**: constant propagation, dead value
-   elimination and unread flags; the rest of the list in *Implementation
+   NASM's dialect and `nasm -f bin` produces the image today, so an assembler of our
+   own would be a convenience rather than a capability.
+3. SSA construction and verification. **Done**, apart from materialising a flag
+   value that has to survive an instruction defining those flags: the target's
+   per-flag effects are there, the expansion that turns a flag into a value is not.
+4. Core optimization passes. **Started**: constant propagation, load folding, dead
+   value elimination and unread flags; the rest of the list in *Implementation
    approach* is not written.
 5. 8086 instruction selection and register allocation. **Partly done**: enough
    for arithmetic, comparisons, control flow, multiplication and division, and
-   16-bit loads and stores, and byte-wide ones; conversions are refused with a
-   reason.
-6. `sim` interpreter, and an end-to-end example that assembles and runs.
-7. A second backend on top of the existing target description, to prove that
+   loads and stores of a byte or a word, narrowing a value to its low half and
+   widening a byte into a word; `setcc` and a load inside an arithmetic operand are
+   refused with a reason.
+6. A second backend on top of the existing target description, to prove that
    the boundary holds without touching pass code.
 
 ## License
