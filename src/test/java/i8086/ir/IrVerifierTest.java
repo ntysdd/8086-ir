@@ -36,6 +36,10 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesReadIntoWhatIsNotAVariable);
         suite.add("Ir verifier accepts the flags in a clobber list",
                 IrVerifierTest::acceptsFlagsClobber);
+        suite.add("Ir verifier accepts the two halves of one register in a clause",
+                IrVerifierTest::acceptsTheTwoHalvesOfOneRegister);
+        suite.add("Ir verifier refuses a clause that names one register twice",
+                IrVerifierTest::refusesAClauseThatNamesOneRegisterTwice);
         suite.add("Ir verifier refuses an unknown name", IrVerifierTest::refusesUnknownName);
         suite.add("Ir verifier refuses a volatile access inside an expression",
                 IrVerifierTest::refusesVolatileInAnExpression);
@@ -409,6 +413,28 @@ public final class IrVerifierTest {
         // nothing: a block destroys them all whatever the list says.
         verify("    asm clobbers(direction) {\n        nop\n    }\n");
         verify("    cld\n    std\n");
+    }
+
+    /**
+     * One register, one argument: a clause cannot give a register a whole value and a half of it.
+     *
+     * <p>A clause is run as a sequence of moves and then the statement, so {@code with ah = 2,
+     * ax = 5} writes {@code ah} and then clears it — and no order of the moves can do better,
+     * because {@code ax = 5} is {@code ah = 0}. Nothing here guesses which of the two the writer
+     * meant ({@code AGENTS.md}, invariant 7).
+     */
+    private static void refusesAClauseThatNamesOneRegisterTwice() {
+        refuses("test.ir:6:44", "    int 0x13 clobbers(ax, bx) with ah = 2, ax = 5\n");
+        refuses("test.ir:6:44", "    int 0x13 clobbers(ax, bx) with ax = 5, ax = 5\n");
+    }
+
+    /**
+     * And the must-not, because the two halves of one register are two places: {@code al} and
+     * {@code ah} are written by two moves that neither of them disturbs, so a clause that names
+     * both is a clause that says exactly what it means.
+     */
+    private static void acceptsTheTwoHalvesOfOneRegister() {
+        verify("    int 0x13 clobbers(ax, bx) with al = 2, ah = 5\n");
     }
 
     // --- what has to be refused --------------------------------------------

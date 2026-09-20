@@ -550,14 +550,40 @@ public final class IrVerifier {
      * anything else states its own ({@code docs/ir.md} §3.2).
      */
     private void checkArguments(List<Item.Argument> arguments) {
-        for (Item.Argument argument : arguments) {
+        for (int i = 0; i < arguments.size(); i++) {
+            Item.Argument argument = arguments.get(i);
             int bytes = target.registerBytes(argument.register());
             Integer valueBytes = widthOf(argument.value(), Integer.valueOf(bytes));
             require(valueBytes == null || valueBytes.intValue() == bytes,
                     argument.value().position(),
                     "a " + valueBytes + "-byte value does not fit '" + argument.register()
                             + "', which is " + bytes + " byte(s) wide (docs/ir.md §11)");
+            for (int j = 0; j < i; j++) {
+                String other = arguments.get(j).register();
+                require(!overlap(argument.register(), other), argument.position(),
+                        "one register cannot be given a whole value and a half of it in one "
+                                + "clause: '" + argument.register() + "' and '" + other
+                                + "' are the same place, and the moves a clause is run as would "
+                                + "make one of them destroy the other. Name the register once, with "
+                                + "what the statement should find in it (docs/ir.md §11). Two "
+                                + "halves of one register are not an overlap: they are two places");
+            }
         }
+    }
+
+    /**
+     * Whether two registers a clause names are the same place, one being part of the other.
+     *
+     * <p>The target answers which register a name is part of ({@link Target#valueRegisterOf}), and
+     * that is the whole of the question: {@code ah} and {@code ax} are one place written twice over,
+     * while {@code al} and {@code ah} are two places in one register that no move disturbs for the
+     * other. A name with no register a value can be in — a segment register, {@code sp} — answers
+     * with null, so the same name twice is the only way for those to overlap.
+     */
+    private boolean overlap(String left, String right) {
+        return left.equals(right)
+                || left.equals(target.valueRegisterOf(right))
+                || right.equals(target.valueRegisterOf(left));
     }
 
     /**

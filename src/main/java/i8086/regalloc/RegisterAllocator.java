@@ -1234,6 +1234,7 @@ public final class RegisterAllocator {
                         + "machine left there, so no value may be in it up to that point "
                         + "(docs/ir.md §8.1)")
                         + homeProblem(value)
+                        + homeHint(value)
                         + byteProblem(value)
                         + ": this allocation does not spill, because a program that needs "
                         + "more registers than the machine has is refused rather than given "
@@ -1738,6 +1739,24 @@ public final class RegisterAllocator {
         }
         return "; and a byte value can only live in the registers that have a low half, which is "
                 + "four of them (docs/ir.md §3.2)";
+    }
+
+    /**
+     * What a value with no register left could be given instead: a home in memory of its own.
+     *
+     * <p>The other half of {@link #homeProblem}: a program that already declared a home is told what
+     * became of it, and a program that did not is told that this is a thing it can do. It is the one
+     * answer a boot loader has — there is no frame and nothing spilled ({@code docs/ir.md} §8.2) — so
+     * a refusal that does not mention it leaves the reader to find it in the document.
+     */
+    private String homeHint(String value) {
+        if (groupHomes.get(value) != null) {
+            return "";
+        }
+        Type type = selection.typeOf(value);
+        return "; or give it a home in memory — 'var " + selection.variableOf(value) + ": "
+                + (type == null ? "u16" : type.spelling()) + " in cell' — and the allocator keeps "
+                + "it there instead of in a register (docs/ir.md §3.1.2)";
     }
 
     /**

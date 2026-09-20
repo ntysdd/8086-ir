@@ -1570,6 +1570,12 @@ public final class CompilerTest {
                 () -> Compiler.compile("across.ir", acrossACall("")));
         Assert.assertTrue(refused.getMessage().contains("no register left for 'left'"),
                 refused.getMessage());
+        // And the one thing this program could do about it is named, because a refusal that leaves
+        // the reader to find the answer in the document is half a refusal (docs/ir.md §3.1.2).
+        Assert.assertTrue(refused.getMessage().contains("give it a home in memory"),
+                "the refusal says what a home is for: " + refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("var left: u16 in cell"),
+                "and shows it with this value's own name and width: " + refused.getMessage());
     }
 
     /** A value in a register where the pressure is low: the same program, with a home on it. */
@@ -2941,6 +2947,10 @@ public final class CompilerTest {
         Assert.assertTrue(
                 refused.getMessage().contains("its home 'cell' is written by the program"),
                 refused.getMessage());
+        // And the must-not for the hint: this program declared a home, so telling it to declare one
+        // would be telling it what it already did.
+        Assert.assertFalse(refused.getMessage().contains("give it a home in memory"),
+                "a program with a home is not told to give the value one: " + refused.getMessage());
     }
 
     /**
