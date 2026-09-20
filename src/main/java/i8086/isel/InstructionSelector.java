@@ -884,6 +884,19 @@ public final class InstructionSelector {
             return;
         }
 
+        // A right-hand side that is already a value in a register needs no register of its own: the
+        // operation reads it where it is, which is what the single-operation route does, and a move
+        // into a temporary would only undo that. On a machine with six registers that move is not one
+        // instruction, it is one register — and in a boot loader's loop it is the register the answer
+        // no longer fits in.
+        Value right = leafOf(apply.right());
+        if (right instanceof Value.Name) {
+            emitExpression(apply.left(), destination);
+            emitInPlace(operator, destination, right, Signedness.of(apply, form::typeOf),
+                    apply.position(), false);
+            return;
+        }
+
         // The right-hand side needs a register of its own, so it is computed
         // first, into a temp, and the left goes straight into the destination. The temp is as wide
         // as what the expression computes, which is as wide as where the answer is going: every

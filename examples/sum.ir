@@ -1,0 +1,47 @@
+; sum.ir - the little loop from a.example, written in this surface.
+;
+; A Python program that multiplies, divides and accumulates:
+;
+;     s = 20000
+;     d = 20000
+;     a = 1
+;     b = 3
+;     while d > 0:
+;         d = d * a // b
+;         a += 1
+;         b += 2
+;         s += d
+;     print(s)
+;
+; What the compiler does with it is worth reading: the four variables are one
+; register each, the multiply and the divide work in ax and dx where the machine
+; insists on them, and the two of them in a row cost no temporary and no copy.
+; `inc` and `add` appear where `eval` claimed the flags and gave them up again.
+;
+; `print` has no spelling in this surface yet (docs/ir.md §11 has no I/O), so
+; the answer is left where a program can find it: two bytes at 0x40.
+
+target 8086
+org    0x100
+entry  main
+
+main:
+    var s: i16
+    var d: i16
+    var a: i16
+    var b: i16
+
+    s = 20000
+    d = 20000
+    a = 1
+    b = 3
+
+    .while d > 0
+        d = expr(d * a / b)
+        a = eval(a + 1)
+        b = eval(b + 2)
+        s = eval(s + d)
+    .endw
+
+    [0x40] = s
+    ret

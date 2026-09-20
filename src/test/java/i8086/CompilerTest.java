@@ -42,6 +42,10 @@ public final class CompilerTest {
                 CompilerTest::compilesShippedExample);
         suite.add("Compiler folds a program with nothing unknown in it away",
                 CompilerTest::foldsWhatNothingReads);
+        suite.add("Compiler keeps the example loop in registers",
+                CompilerTest::keepsTheExampleLoopInRegisters);
+        suite.add("Compiler keeps a temporary for a tree on the right",
+                CompilerTest::keepsATemporaryForATreeOnTheRight);
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
         suite.add("Compiler keeps the flags under eval and spends them under expr",
                 CompilerTest::keepsAndSpendsFlags);
@@ -224,15 +228,88 @@ public final class CompilerTest {
                 Compiler.compile("t.ir", source, Compiler.Stage.IR));
     }
 
+    /**
+     * The second shipped example, and the reason it is one: a loop that multiplies, divides and
+     * accumulates needs six registers and gets them, because nothing is copied that does not have to
+     * be.
+     *
+     * <p>Read the body of the loop and the whole of the back end is in it. Four variables live across
+     * the loop — {@code s}, {@code d}, {@code a} and {@code b} — and {@code imul} and {@code idiv} work
+     * in {@code ax} and {@code dx} and nowhere else, which is six; the division reads {@code b} where
+     * it already is instead of copying it somewhere, which is the register that makes the count work.
+     * {@code inc} appears where the flags were claimed and given up again, and {@code test si, si} is
+     * the comparison with zero that does not need the zero.
+     */
+    private static void keepsTheExampleLoopInRegisters() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov di, 0x4e20\n"
+                        + "    mov si, 0x4e20\n"
+                        + "    mov bx, 1\n"
+                        + "    mov cx, 3\n"
+                        + "    jmp ..@lbl1\n"
+                        + "\n"
+                        + "..@lbl0:\n"
+                        + "    mov ax, si\n"
+                        + "    imul bx\n"
+                        + "    mov si, ax\n"
+                        + "    mov ax, si\n"
+                        + "    cwd\n"
+                        + "    idiv cx\n"
+                        + "    mov si, ax\n"
+                        + "    inc bx\n"
+                        + "    add cx, 2\n"
+                        + "    add di, si\n"
+                        + "\n"
+                        + "..@lbl1:\n"
+                        + "    test si, si\n"
+                        + "    jg ..@lbl0\n"
+                        + "    mov [0x40], di\n"
+                        + "    ret\n",
+                Compiler.compile("examples/sum.ir", readExample("examples/sum.ir")));
+    }
+
+    /**
+     * A right-hand side that is not a value but a tree needs a register of its own: the operation
+     * outside reads it after the left side has been computed, and computing one into the other would
+     * lose it. That is what the temporary is for, and it is still made where it is needed
+     * ({@code docs/ir.md} §3.2).
+     */
+    private static void keepsATemporaryForATreeOnTheRight() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, word [0x40]\n"
+                        + "    mov dx, word [0x42]\n"
+                        + "    mov ax, 3\n"
+                        + "    mul dx\n"
+                        + "    mov cx, ax\n"
+                        + "    add bx, cx\n"
+                        + "    mov [0x44], bx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u16\n    var $b: u16\n    var $x: u16\n"
+                        + "    a = word [0x40]\n"
+                        + "    b = word [0x42]\n"
+                        + "    x = expr(a + b * 3)\n"
+                        + "    [0x44] = x\n"
+                        + "    ret\n"));
+    }
+
     private static void compilesShippedExample() {
         Assert.assertEquals(EXPECTED_ASM, Compiler.compile("examples/hello.ir", readExample()));
     }
 
     private static String readExample() {
+        return readExample("examples/hello.ir");
+    }
+
+    private static String readExample(String path) {
         try {
-            return new String(Files.readAllBytes(new File("examples/hello.ir").toPath()), UTF_8);
+            return new String(Files.readAllBytes(new File(path).toPath()), UTF_8);
         } catch (IOException failure) {
-            Assert.fail("cannot read examples/hello.ir: " + failure.getMessage());
+            Assert.fail("cannot read " + path + ": " + failure.getMessage());
             return null; // unreachable: fail always throws
         }
     }
@@ -633,21 +710,23 @@ public final class CompilerTest {
     }
 
     /**
-     * An expression whose right-hand side outlives it gets a register of its own, and that register
-     * is as wide as the expression: a byte sum computed through a word register is two instructions
-     * no assembler takes ({@code docs/ir.md} §3.2). Every operand of one expression has one width,
-     * which is what makes the answer knowable here.
+     * An expression is computed where its operands already are: a right-hand side that is a value in
+     * a register is read there, and no temporary is made for it. A temporary is not one instruction,
+     * it is one register — and the register is what a two-address machine runs out of
+     * ({@code docs/ir.md} §3.2).
+     *
+     * <p>{@code b} is read again after the sum, so it has a register of its own to be read from, and
+     * the sum happens between the two registers.
      */
     private static void computesAByteExpressionInByteRegisters() {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov dl, byte [0x40]\n"
-                        + "    mov cl, byte [0x41]\n"
-                        + "    mov al, cl\n"
-                        + "    add dl, al\n"
-                        + "    mov [0x42], dl\n"
-                        + "    mov [0x43], cl\n"
+                        + "    mov cl, byte [0x40]\n"
+                        + "    mov al, byte [0x41]\n"
+                        + "    add cl, al\n"
+                        + "    mov [0x42], cl\n"
+                        + "    mov [0x43], al\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var $a: u8\n    var $b: u8\n    var $x: u8\n"
