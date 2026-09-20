@@ -71,7 +71,24 @@ public final class Instruction {
         return prefix;
     }
 
-    /** The lower-cased mnemonic, which is the form everything compares against. */
+    /**
+     * The same instruction with these operands instead, and nothing else changed.
+     *
+     * <p>An instruction is immutable, so the allocator — which decides where every operand goes and
+     * drops the copies that turn out to be of a register into itself — builds one of these for every
+     * instruction it keeps. It is here, next to the fields, rather than at the two places that ask
+     * for it: a field added to this class is then a field one method has to carry over, and the
+     * property test that renames every name to itself and compares the text is what says it did
+     * ({@code i8086.ssa.RenamerTest}). Getting that wrong once already lost an instruction's prefix,
+     * which turned a repeated copy into a single one.
+     */
+    public Instruction withOperands(List<Operand> operands) {
+        return new Instruction(position, prefix, mnemonic, operands, label);
+    }
+
+    /**
+     * The lower-cased mnemonic, which is the form everything compares against.
+     */
     public String mnemonic() {
         return mnemonic;
     }
