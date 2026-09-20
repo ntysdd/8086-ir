@@ -637,14 +637,22 @@ variable, and materialises it — through a target-declared expansion — when a
 flag value has to survive an instruction that defines those flags. The user
 never writes `LAHF`, `SAHF` or `PUSHF` by hand.
 
-**The direction flag is a second one, `direction`**, and it is separate because it is a different
-kind of thing. It says which way a copy goes, not what a computation produced: `cld` and `std` are
-its only writers among the statements the surface has, no operation touches it, and every
-comparison and branch in the program is indifferent to it. Keeping it in the same value as the
-carry would make `cld` either destroy a comparison's flags or claim to have computed them, and
-both of those are wrong ({@code docs/ir.md} §4.2). Neither name is written by the author — the
-statements do that — and both are **predeclared**: no module declares them, and a module that tries
-is refused, because one name cannot be two things.
+**The carry is a second one, `carry`,** and it is separate because this machine has instructions
+that change what a condition reads and leave the carry alone: `inc d` and `dec d` are exactly that,
+and so they are not spellings of `d = eval(d + 1)`. One name cannot hold both — an increment would
+have to say either that the carry is new, which loses a comparison's carry, or that the conditions
+are the ones from before, which loses the increment's zero flag ({@code docs/ir.md} §4.2, §7.3). So
+`flags` is what a condition reads apart from the carry — `ZF`, `SF`, `PF`, `AF` and `OF` — and
+`carry` is the one flag an operation may leave standing.
+
+**The direction flag is a third, `direction`**, and it is separate for a different reason: it says
+which way a copy goes, not what a computation produced. `cld` and `std` are its only writers among
+the statements the surface has, no operation touches it, and every comparison and branch in the
+program is indifferent to it.
+
+None of the three is written by the author — the statements do that — and all three are
+**predeclared**: no module declares them, and a module that tries is refused, because one name
+cannot be two things.
 
 ### 4.2 Flag effects are three-state and belong to the target — [decided]
 
@@ -653,17 +661,20 @@ For every flag, the target description states whether it is **defined**, **undef
 
 * `INC` and `DEC` preserve `CF`. So `ADD r, 1` may only become `INC r` when `CF`
   is dead. With flags as values this is an ordinary dead-value check, not a trap
-  waiting for a bad day.
+  waiting for a bad day. Which is what the surface does: `inc d` is a statement of its own,
+  meaning the conditions and not the carry, and the back end reaches the one-byte `inc r` for an
+  addition wherever the carry is not read.
 * `SHL` leaves `AF` **undefined** on the 8086. An undefined flag may not be
   propagated as though it had a value.
 * `MOV` and loads do not touch flags at all.
 
-**What is asked of them today is coarser than that.** A *form* answers with one boolean for the
-whole set — "the flags afterwards are the operation's" or not — so `ADD r, 1` may only become
-`INC r` where *no* flag is read afterwards, when the machine fact is that only `CF` differs.
-`d = eval(d + 1)` followed by a branch on `ZF` therefore spends the three bytes of the addition
-where the increment is one, and those two bytes are what asking per flag would buy back.
-**[open]** — none of the three states is a value yet; the whole set is one name (§4.1).
+**And it is asked per flag**, which is what the carry being a name of its own (§4.1) is for: a form
+says *which* flags it leaves differently — `inc` as a form of `add` says `carry` and nothing else —
+and it may be used exactly where none of those is read before being defined again. So
+`d = eval(d + 1)` followed by a branch on `ZF` is one byte, not three, and the two bytes that buys
+are the reason the carry is counted apart. What is still coarse is the *condition*: `jc` and `jnz`
+are two instructions with two different answers about which flag they need (§4.4), and the target
+says which for each of them.
 
 **Two instructions may stand for one another when they leave the same flags**, and which
 ones do is the target's to say rather than the back end's to assume. On this machine:
@@ -678,7 +689,7 @@ ones do is the target's to say rather than the back end's to assume. On this mac
   dead. `xor r, r` is two bytes where `mov r, 0` is three, and the flags are what make it a
   question at all: the clear writes them and the move leaves them alone. The shorter one is
   therefore used exactly where nothing can read them, which is the ordinary liveness question
-  asked of the one name `flags` (§4.1) — live where something reads them before writing them
+  asked of the flags (§4.1) — live where something reads them before writing them
   again.
 
 Both are choices of instruction rather than changes to the program: the writer said which
@@ -700,10 +711,16 @@ alone — the direction whose mistake is a comparison that stays rather than a b
 reads whatever was in the register.
 
 **Two of those answers are worth reading twice**, because they are what the two names are for.
-`cld` and `std` make the direction flag their own and leave the arithmetic flags standing, so a
+`cld` and `std` make the direction flag their own and leave the conditions standing, so a
 comparison in front of one is still the comparison a branch behind it reads. `int` is the other way
-round: the arithmetic flags after it are the handler's, and the direction flag is not, because a
-handler returns through `iret` and `iret` restores the flags the interrupted program had.
+round: the conditions and the carry after it are the handler's, and the direction flag is not,
+because a handler returns through `iret` and `iret` restores the flags the interrupted program had.
+
+**And the second list of them is shorter than it looks.** `inc` and `dec` are operations of their
+own ({@code docs/ir.md} §7.3) whose answer is "the conditions" and nothing else, and a branch that
+reads the conditions is the usual reason a flag is wanted at all — so a subtraction whose flags a
+`jnz` reads is still the one-byte `dec`, and only a branch that reads the carry insists on the
+subtraction ({@code docs/ir.md} §4.4).
 
 ### 4.3 Undefined flags — [decided]
 
@@ -780,6 +797,12 @@ The 8086 spells sixteen conditions thirty ways: `jb`, `jc` and `jnae` are one
 test of the carry flag, `je` and `jz` are one test of the zero flag. All thirty
 are accepted and normalised, so a condition is one word in the IR and the
 question "is this the same test" has an answer that does not need a table.
+
+**And the word says which flag it reads**, which the target answers one condition at a time: `jc`
+and `jnc` are the carry, `ja` and `jbe` are the carry and the zero flag together — that is what
+"above" means — and the rest read the conditions. It matters because a branch is the usual reason a
+flag is wanted at all: `d = eval(d + 1)` may be the one-byte `inc r` exactly where the branch behind
+it does not read the carry, and `jnz` is such a branch where `jc` is not ({@code docs/ir.md} §4.2).
 
 Turning a flag into a value uses the `setcc` family:
 
@@ -911,6 +934,12 @@ operator is left-associative, and, tightest first,
 | 5 | `&` |
 | 6 | `^` |
 | 7 | `\|` |
+
+Two operators are statements and not tree nodes: `inc d` and `dec d`, which are `d = eval(d + 1)`
+and `d = eval(d - 1)` **except for the carry**, which they leave exactly as they were
+({@code docs/ir.md} §7.3). They are not written inside an expression, because an expression is a
+value and what they say is partly about the flags; a bare `inc` in a value's place is the author's
+name, like any other word.
 
 A writer who would rather not remember that writes brackets, which change
 nothing else and cost nothing.
@@ -1137,6 +1166,8 @@ adc s, 1            ; exactly  s = eval(s adc 1)
 shl s, 1            ; exactly  s = eval(s shl 1)
 neg s               ; exactly  s = eval(-s)
 mov s, [p]          ; exactly  s = [p]
+inc s               ; s + 1, and the carry is left alone
+dec s               ; s - 1, and the carry is left alone
 ```
 
 The left operand is the destination, and the statement means the operation whose
@@ -1165,14 +1196,14 @@ familiar spelling, and the meaning would then be a guess. So:
   `add`, `sub`, `and`, `or`, `xor`, `not` (`~`), `neg`, and the operators already
   spelled as words — `adc`, `sbb`, `shl`, `shr`, `sar`, `rol`, `ror`, `rcl`,
   `rcr`, `mul`, `imul`, `div`, `idiv`.
+* **Accepted, and a statement of its own**: `inc d` and `dec d`. They are the case that gave the
+  carry a name (§4.1): the machine's `inc` is `d + 1` with `CF` left as it was, which is a
+  different program from `d = eval(d + 1)`, so it is a different operation and not a second
+  spelling. It is written as a statement and never inside an expression, and the printer writes it
+  back as the statement it is — a spelling that changed the carry would not be the same program
+  ({@code AGENTS.md}, invariant 5).
 * **Refused, with the reason**, because the machine's instruction and the surface
   operation it looks like are **not the same operation**:
-  * `inc d` / `dec d` — the carry is the difference, and it is exactly the kind a
-    reader would not see: `d = eval(d + 1)` defines `CF`, `inc` leaves it as it
-    was. Writing the `eval` form instead is *not* a substitute, because a later
-    carry consumer would read a different `CF`. The target description says the
-    same thing in its own vocabulary, which is why `inc` is a form of its own
-    marked as not keeping the flags (`Form.keepsFlags()`).
   * `mul r` / `imul r` / `div r` / `idiv r` / `cwd` / `cbw` — one operand or
     none, with `ax` and `dx` read and written behind the writer's back. The
     two-operand `mul d, s` is fine, because that one *is* the surface's
@@ -1649,7 +1680,7 @@ Five things about the form are deliberate:
   "all of it", and a value that has to live across one is refused until the author
   says what is really destroyed. That refusal is the compiler asking a question
   rather than guessing: `int 0x10` alone will not let a value live across it, and
-  `int 0x10 clobbers(ax, dx, flags)` will.
+  `int 0x10 clobbers(ax, dx, flags, carry)` will.
 * **The list is written back**, so the canonical form says what the compiler will
   assume on the author's behalf, and a re-read statement gets the list it was read
   with.
@@ -1659,18 +1690,20 @@ Five things about the form are deliberate:
   has ever been, and the reason the default is the worst case rather than the
   friendliest: silence is the only answer the target can give honestly.
 * **The flags are not the list's to describe.** A list says what a statement destroys, so not
-  naming a flag covers two opposite statements: `cli` leaves the arithmetic flags exactly as
-  they were, and `int 0x10` leaves whatever the handler left. The target answers per flag and per
-  mnemonic instead (§4.2), the list overrules it when the author names the flag, and those two
-  answers are what say whether the comparison in front of the statement is still the comparison a
-  branch behind it reads — which is the difference between branching on it and branching on
-  whatever the machine happened to have. `cld` and `std` are the same rule seen from the other
-  side: they make the direction flag their own and leave every comparison standing. **A block is
-  not asked, because there is nobody to ask:** it destroys every flag whatever its list says,
-  since most of what this machine does writes them and an author who has to remember every one of
-  those will sometimes not. GCC's x86 back end takes the same line — `cc` is implicit in every
-  `asm` statement there — and the cost is the same: a program that needs the flags a block left
-  behind says so with a statement the compiler understands.
+  naming a flag covers two opposite statements: `cli` leaves the conditions exactly as they were,
+  and `int 0x10` leaves whatever the handler left. The target answers per flag and per mnemonic
+  instead (§4.2), the list overrules it when the author names the flag, and those two answers are
+  what say whether the comparison in front of the statement is still the comparison a branch behind
+  it reads — which is the difference between branching on it and branching on whatever the machine
+  happened to have. There are three flags to name and not one: a list that names `flags` destroys
+  the conditions and says nothing about the carry, which the target may then answer for, and a list
+  that names neither is how a BIOS call keeps the carry its handler left. `cld` and `std` are the
+  same rule seen from the other side: they make the direction flag their own and leave every
+  comparison standing. **A block is not asked, because there is nobody to ask:** it destroys every
+  flag whatever its list says, since most of what this machine does writes them and an author who
+  has to remember every one of those will sometimes not. GCC's x86 back end takes the same line —
+  `cc` is implicit in every `asm` statement there — and the cost is the same: a program that needs
+  the flags a block left behind says so with a statement the compiler understands.
 
 **A statement that is an interface may be given its registers.** A BIOS call wants its
 arguments where the machine wants them, and the surface says so on the statement that
@@ -1732,7 +1765,7 @@ Three ways, and a real boot loader uses all three:
 
 ```
 ; 1. say what the handler keeps, and let the allocator find a register
-int 0x13 clobbers(ax, bx, cx, dx, flags)
+int 0x13 clobbers(ax, bx, cx, dx)
 
 ; 2. or keep the value in memory, and read it into a name of its own afterwards
 word [save] = n

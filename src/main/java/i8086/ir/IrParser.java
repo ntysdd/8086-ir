@@ -387,7 +387,8 @@ public final class IrParser {
         List<Item> out = new ArrayList<Item>();
         out.add(new Item.Compare(where, Item.Compare.Kind.CMP, condition.left, condition.right));
         String word = target.conditionFor(condition.comparison, condition.signed);
-        out.add(new Item.Branch(where, whenTrue ? word : target.negate(word), destination));
+        out.add(new Item.Branch(where, whenTrue ? word : target.negate(word), destination,
+                target.conditionFlags(whenTrue ? word : target.negate(word))));
         return out;
     }
 
@@ -523,7 +524,9 @@ public final class IrParser {
             next();
             String where = expect(TokenKind.IDENT, "a label to branch to").name();
             endOfLine();
-            return new Item.Branch(first.position(), target.condition(first.name()), where);
+            String condition = target.condition(first.name());
+            return new Item.Branch(first.position(), condition, where,
+                    target.conditionFlags(condition));
         }
         Integer immediate = target.machineStatements().get(first.name());
         if (immediate != null && !first.forced() && !isNameFollowing(TokenKind.PUNCT, "=")

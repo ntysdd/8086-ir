@@ -92,8 +92,8 @@ public final class UnreadFlagsTest {
                         + "\n"
                         + "block0 (main):\n"
                         + "    var x: u16\n"
-                        + "    flags#1 = cmp x#undef, 0\n"
-                        + "    x#2 = eval(x#undef adc 1)\n"
+                        + "    flags#1, carry#2 = cmp x#undef, 0\n"
+                        + "    x#3 = eval(x#undef adc 1)\n"
                         + "    ret\n",
                 after("    var x: u16\n"
                         + "    cmp x, 0\n"

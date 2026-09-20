@@ -7,7 +7,9 @@ import i8086.asm.Size;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * One thing a module is made of, in source order.
@@ -661,16 +663,23 @@ public abstract class Item {
      * <p>The condition is stored in the canonical spelling its target answered
      * with, so {@code jb}, {@code jc} and {@code jnae} all become {@code jc}.
      * That keeps one condition one word, and it is the word the printer writes.
+     *
+     * <p>Which flag that word tests is the target's to say, and it is stamped here
+     * for the same reason a machine statement's flag effects are: everything that
+     * asks what a branch reads — liveness, the verifier — gets one answer
+     * ({@link i8086.ssa.Effects}).
      */
     public static final class Branch extends Item {
 
         private final String condition;
         private final String target;
+        private final Set<String> flags;
 
-        public Branch(SourcePos position, String condition, String target) {
+        public Branch(SourcePos position, String condition, String target, Set<String> flags) {
             super(position);
             this.condition = condition;
             this.target = target;
+            this.flags = Collections.unmodifiableSet(new LinkedHashSet<String>(flags));
         }
 
         public String condition() {
@@ -679,6 +688,11 @@ public abstract class Item {
 
         public String target() {
             return target;
+        }
+
+        /** The flags this condition reads, by name. */
+        public Set<String> flags() {
+            return flags;
         }
     }
 

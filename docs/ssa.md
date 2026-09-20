@@ -89,12 +89,15 @@ or an inline block, which declares its registers and nothing about them ([`docs/
 read it, because the surface refuses a read of a flag nobody defined, so the state
 is recorded faithfully and never used.
 
-There are two flags, `flags` and `direction`, and they are renamed apart
+There are three flags, `flags`, `carry` and `direction`, and they are renamed apart
 (§4 of [`docs/ir.md`](ir.md)). A statement may define one, the other, both, or neither, and
 what it defines is written beside it:
 
-    flags#2 = cmp x#1, 0x80
-    direction#3 = cld
+    flags#2, carry#3 = cmp x#1, 0x80
+    direction#4 = cld
+
+An operation leaves the conditions and the carry, except that an increment or a decrement leaves the
+carry exactly as it found it — which is why it is a name of its own ({@code docs/ir.md} §4.1).
 
 Everything that reads a flag names the one it means: a branch reads the arithmetic flags, an
 operation that asks for the carry reads those, and a string operation reads `direction`

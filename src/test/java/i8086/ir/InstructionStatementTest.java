@@ -33,8 +33,8 @@ public final class InstructionStatementTest {
         suite.add("mov is the assignment", InstructionStatementTest::movesAreAssignments);
         suite.add("A word stays an ordinary name inside expressions",
                 InstructionStatementTest::wordsStayNames);
-        suite.add("An instruction statement refuses inc and dec",
-                InstructionStatementTest::refusesIncAndDec);
+        suite.add("An instruction statement takes inc and dec as the machine means them",
+                InstructionStatementTest::acceptsIncAndDec);
         suite.add("An instruction statement refuses the implicit registers",
                 InstructionStatementTest::refusesImplicitRegisters);
         suite.add("An instruction statement takes a register name as a name",
@@ -135,14 +135,20 @@ public final class InstructionStatementTest {
                         + "    s = eval(s + add)\n"));
     }
 
-    private static void refusesIncAndDec() {
-        // The whole point of the table being the target's: inc is not add 1, because
-        // it leaves CF alone, and a reader would not see the difference.
-        for (String word : new String[] {"inc", "dec"}) {
-            String message = refusal("    var s: i16\n    " + word + " s\n");
-            Assert.assertTrue(message.contains("CF"), message);
-            Assert.assertTrue(message.contains("docs/ir.md"), message);
-        }
+    /**
+     * And the two the surface gained: {@code inc} and {@code dec} are statements of their own, and
+     * what makes them so is the carry. An addition says the carry afterwards is the one it made; an
+     * increment says it is the one from before, so a comparison in front of it keeps its carry and a
+     * branch behind it still reads that ({@code docs/ir.md} §4.2).
+     */
+    private static void acceptsIncAndDec() {
+        Assert.assertEquals("    var $s: i16\n"
+                        + "    inc $s\n"
+                        + "    dec $s\n",
+                became("    var s: i16\n"
+                        + "    inc s\n"
+                        + "    dec s\n"));
+        Assert.assertThrows(CompileError.class, () -> parse("    var s: i16\n    inc s, 1\n"));
     }
 
     private static void refusesImplicitRegisters() {

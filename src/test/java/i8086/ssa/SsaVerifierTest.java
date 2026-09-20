@@ -124,7 +124,7 @@ public final class SsaVerifierTest {
         Form form = valid();
         form.phis(2).clear();
         form.forget("x#4");
-        form.statements(2).set(0, statement(evalAdd("y#5", "x#1"), "flags#6"));
+        form.statements(2).set(0, statement(evalAdd("y#5", "x#1"), "flags#6", "carry#8"));
         expectRefusal(form, "two versions of 'x' arrive with no φ to merge them");
     }
 
@@ -165,7 +165,7 @@ public final class SsaVerifierTest {
         // The use still says 'x'. That is not a wrong version but a name that
         // means every version at once, which is what renaming exists to remove.
         Form form = valid();
-        form.statements(2).set(0, statement(evalAdd("y#5", "x"), "flags#6"));
+        form.statements(2).set(0, statement(evalAdd("y#5", "x"), "flags#6", "carry#8"));
         expectRefusal(form, "was never renamed");
     }
 
@@ -207,14 +207,16 @@ public final class SsaVerifierTest {
         Form form = new Form();
         form.version("x#1", "x", Type.U16);
         form.version("flags#2", Names.FLAGS, null);
+        form.version("carry#7", Names.CARRY, null);
         form.version("x#3", "x", Type.U16);
         form.version("x#4", "x", Type.U16);
         form.version("y#5", "y", Type.U16);
         form.version("flags#6", Names.FLAGS, null);
+        form.version("carry#8", Names.CARRY, null);
         form.undef("y");
 
         form.statements(0).add(statement(assign("x#1", 1)));
-        form.statements(0).add(statement(compareThose("y#undef"), "flags#2"));
+        form.statements(0).add(statement(compareThose("y#undef"), "flags#2", "carry#7"));
         form.statements(0).add(new SsaStatement(branch("jnc", "l0"),
                 Collections.<String, String>emptyMap()));
         form.statements(1).add(statement(assign("x#3", 2)));
@@ -224,7 +226,7 @@ public final class SsaVerifierTest {
         phi.setOperand(0, "x#1");
         phi.setOperand(1, "x#3");
         form.phis(2).add(phi);
-        form.statements(2).add(statement(evalAdd("y#5", "x#4"), "flags#6"));
+        form.statements(2).add(statement(evalAdd("y#5", "x#4"), "flags#6", "carry#8"));
         form.statements(2).add(new SsaStatement(new Item.Return(AT),
                 Collections.<String, String>emptyMap()));
         return form;
@@ -243,7 +245,8 @@ public final class SsaVerifierTest {
     }
 
     private static Item.Branch branch(String condition, String target) {
-        return new Item.Branch(AT, condition, target);
+        return new Item.Branch(AT, condition, target,
+                new LinkedHashSet<String>(Arrays.asList(Names.FLAGS, Names.CARRY)));
     }
 
     private static Item.Assign evalAdd(String place, String operand) {
@@ -260,8 +263,18 @@ public final class SsaVerifierTest {
         return new SsaStatement(item, Collections.<String, String>emptyMap());
     }
 
-    private static SsaStatement statement(Item item, String definedFlags) {
-        return new SsaStatement(item, Names.FLAGS, definedFlags);
+    /**
+     * An operation's statement: the versions it gives the conditions and the carry.
+     *
+     * <p>Both, because both are what an operation leaves — the carry beside the conditions is the
+     * reason the two are named apart ({@code docs/ir.md} §4.1). The names are the test's own: a
+     * verifier test builds its form by hand and the numbering is only a numbering.
+     */
+    private static SsaStatement statement(Item item, String definedFlags, String definedCarry) {
+        Map<String, String> defined = new LinkedHashMap<String, String>();
+        defined.put(Names.FLAGS, definedFlags);
+        defined.put(Names.CARRY, definedCarry);
+        return new SsaStatement(item, defined);
     }
 
     /**

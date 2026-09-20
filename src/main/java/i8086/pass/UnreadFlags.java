@@ -6,6 +6,7 @@ import i8086.ir.Names;
 import i8086.ir.Operation;
 import i8086.ir.Value;
 import i8086.ssa.Block;
+import i8086.ssa.Effects;
 import i8086.ssa.Phi;
 import i8086.ssa.SsaForm;
 import i8086.ssa.SsaStatement;
@@ -65,9 +66,8 @@ public final class UnreadFlags implements Pass {
     }
 
     private static SsaStatement relax(SsaStatement statement, Uses uses) {
-        String flags = statement.definedFlag(Names.FLAGS);
-        if (flags == null || uses.isUsed(flags)
-                || !(statement.item() instanceof Item.Assign)) {
+        if (!(statement.item() instanceof Item.Assign)
+                || !holdsAnExpression(statement) || readsAFlag(statement, uses)) {
             return statement;
         }
         Item.Assign assign = (Item.Assign) statement.item();
@@ -82,6 +82,36 @@ public final class UnreadFlags implements Pass {
         return new SsaStatement(
                 new Item.Assign(assign.position(), assign.place(), expression),
                 Names.FLAGS, null);
+    }
+
+    /**
+     * Whether {@code expr} can hold this statement: whether it gives up every flag one would.
+     *
+     * <p>An operation that <em>preserves</em> a flag is not one {@code expr} can hold, because
+     * {@code expr} gives the flags up rather than leaving them alone. An increment is the case that
+     * matters: it changes the conditions and leaves the carry, so writing it as an {@code expr}
+     * would take away a carry an earlier comparison set — which is exactly what the increment exists
+     * not to do ({@code docs/ir.md} §4.2, §7.3).
+     */
+    private static boolean holdsAnExpression(SsaStatement statement) {
+        return Effects.flagsDefined(statement.item())
+                .containsAll(Effects.flagsAnExpressionGivesUp());
+    }
+
+    /**
+     * Whether anything reads a flag this statement defines.
+     *
+     * <p>Every one of them, and not just the conditions: an {@code expr} gives the flags <em>up</em>,
+     * which takes the carry with them, so relaxing an operation whose carry is read would leave the
+     * next branch reading nothing ({@code docs/ir.md} §4.2).
+     */
+    private static boolean readsAFlag(SsaStatement statement, Uses uses) {
+        for (String version : statement.definedFlags().values()) {
+            if (uses.isUsed(version)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether {@code expr} can hold this operation. */

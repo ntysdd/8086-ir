@@ -6,10 +6,12 @@ import i8086.ir.Item;
 import i8086.ir.MemoryOperand;
 import i8086.ir.Names;
 import i8086.ir.Operation;
+import i8086.ir.Operator;
 import i8086.ir.Place;
 import i8086.ir.Value;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -239,12 +241,12 @@ public final class Effects {
 
     /** Whether this item makes this flag its own. */
     private static boolean defines(Item item, String flag) {
-        if (item instanceof Item.Compare || item instanceof Item.Eval) {
-            return flag.equals(Names.FLAGS);
-        }
-        if (item instanceof Item.Assign) {
+        Operator operator = operatorOf(item);
+        if (operator != null) {
+            // An operation leaves the conditions and the carry, except that an increment and a
+            // decrement leave the carry exactly as they found it (docs/ir.md §4.2).
             return flag.equals(Names.FLAGS)
-                    && ((Item.Assign) item).value() instanceof Value.Eval;
+                    || (flag.equals(Names.CARRY) && !operator.keepsCarry());
         }
         if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
@@ -252,6 +254,42 @@ public final class Effects {
                     && !clobbersFlag(machine.clobbers(), flag);
         }
         return false;
+    }
+
+    /**
+     * The operation this item computes with, or null when it is not one.
+     *
+     * <p>A comparison and an {@code eval} are one operation; an assignment is one only when its
+     * value is an {@code eval}, because an {@code expr} gives the flags up and a conversion has its
+     * own business with them ({@code docs/ir.md} §4.2, §5.2).
+     */
+    private static Operator operatorOf(Item item) {
+        if (item instanceof Item.Compare) {
+            return Operator.SUBTRACT;
+        }
+        if (item instanceof Item.Eval) {
+            return ((Item.Eval) item).operation().operator();
+        }
+        if (item instanceof Item.Assign) {
+            Value value = ((Item.Assign) item).value();
+            if (value instanceof Value.Eval) {
+                return ((Value.Eval) value).operation().operator();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The flags a value computed with {@code expr} gives up.
+     *
+     * <p>The surface says an {@code expr} reads no flags and leaves them undefined
+     * ({@code docs/ir.md} §5.2), and this is which ones that is: the flags an operation computes and
+     * the carry with them. The direction flag is not here — a computation has no business with the
+     * way a copy walks — so a statement that leaves nothing but the direction flag standing is a
+     * statement {@code expr} can hold.
+     */
+    public static Set<String> flagsAnExpressionGivesUp() {
+        return new LinkedHashSet<String>(Arrays.asList(Names.FLAGS, Names.CARRY));
     }
 
     /**
@@ -280,7 +318,7 @@ public final class Effects {
     private static boolean kills(Item item, String flag) {
         if (item instanceof Item.Assign) {
             Value value = ((Item.Assign) item).value();
-            return flag.equals(Names.FLAGS)
+            return flagsAnExpressionGivesUp().contains(flag)
                     && (value instanceof Value.Expr || value instanceof Value.Convert);
         }
         if (item instanceof Item.InlineAsm) {
@@ -316,8 +354,12 @@ public final class Effects {
      */
     public static Set<String> flagsRead(Item item) {
         Set<String> read = new LinkedHashSet<String>();
-        if (readsTheArithmeticFlags(item)) {
-            read.add(Names.FLAGS);
+        if (item instanceof Item.Branch) {
+            // Which flag a condition reads is the target's answer, stamped on the statement when it
+            // was read: 'jc' is the carry and 'jz' is not (docs/ir.md §4.4).
+            read.addAll(((Item.Branch) item).flags());
+        } else if (readsTheCarry(item)) {
+            read.add(Names.CARRY);
         }
         if (item instanceof Item.Machine) {
             read.addAll(((Item.Machine) item).flags().read());
@@ -325,11 +367,13 @@ public final class Effects {
         return read;
     }
 
-    /** Whether this item reads the arithmetic flags, which is the only kind anything reads yet. */
-    private static boolean readsTheArithmeticFlags(Item item) {
-        if (item instanceof Item.Branch) {
-            return true;
-        }
+    /**
+     * Whether this item reads the carry, which is the one flag an operation can ask for.
+     *
+     * <p>The operators that do are the ones whose tag says so — {@code adc}, {@code sbb},
+     * {@code rcl}, {@code rcr} — and an operand of a comparison may be one of them.
+     */
+    private static boolean readsTheCarry(Item item) {
         if (item instanceof Item.Eval) {
             return ((Item.Eval) item).operation().readsFlags();
         }

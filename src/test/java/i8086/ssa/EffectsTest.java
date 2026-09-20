@@ -67,7 +67,7 @@ public final class EffectsTest {
         return "what was there";
     }
 
-    /** Both flags for each statement, arithmetic first, as one line per statement. */
+    /** Every flag for each statement, in the order the flags are asked in. */
     private static List<String> leaves(String body) {
         List<String> answers = new ArrayList<String>();
         for (Item item : statements(body)) {
@@ -75,22 +75,23 @@ public final class EffectsTest {
             for (String flag : Names.flagNames()) {
                 perFlag.add(leaves(item, flag));
             }
-            answers.add(perFlag.get(0) + ", and " + perFlag.get(1) + " for the other");
+            answers.add(String.join(" / ", perFlag));
         }
         return answers;
     }
 
     private static void threeStates() {
         // A move computes nothing, so what is in force after it is what was in force before; an
-        // operation computes flags; 'expr' and a conversion give them up — and neither of those
-        // has any business with an address, so the direction flag comes through them.
+        // operation computes the conditions and the carry; 'expr' and a conversion give both up —
+        // and none of that has any business with an address, so the direction flag comes through.
+        // The order is the flags, the carry, the direction flag.
         Assert.assertEquals(Arrays.asList(
-                        "what was there, and what was there for the other",
-                        "a value of its own, and what was there for the other",
-                        "nothing, and what was there for the other",
-                        "nothing, and what was there for the other",
-                        "a value of its own, and what was there for the other",
-                        "what was there, and what was there for the other"),
+                        "what was there / what was there / what was there",
+                        "a value of its own / a value of its own / what was there",
+                        "nothing / nothing / what was there",
+                        "nothing / nothing / what was there",
+                        "a value of its own / a value of its own / what was there",
+                        "what was there / what was there / what was there"),
                 leaves("    var x: u16\n    var y: u16\n"
                         + "    y = x\n"
                         + "    y = eval(x + 1)\n"
@@ -99,11 +100,11 @@ public final class EffectsTest {
                         + "    cmp x, 1\n"
                         + "    ret\n"));
 
-        // And a branch reads the arithmetic flags, which is a thing it does and not a state it
-        // leaves them in. The direction flag is not something a condition has an opinion about,
-        // but a copy is: where it walks is decided by it.
+        // And a branch reads them, which is a thing it does and not a state it leaves them in.
+        // It is taken to read both kinds, because nothing here reads the table that says which
+        // flag a condition tests.
         Item branch = statements("    jc $main\n").get(0);
-        Assert.assertEquals("[flags]", Effects.flagsRead(branch).toString());
+        Assert.assertEquals("[carry]", Effects.flagsRead(branch).toString());
         Assert.assertTrue(Effects.flagsDefined(branch).isEmpty(), "a branch writes nothing");
         Assert.assertTrue(Effects.flagsKilled(branch).isEmpty(), "a branch destroys nothing");
 
@@ -111,20 +112,27 @@ public final class EffectsTest {
         Assert.assertEquals("[direction]", Effects.flagsRead(copy).toString());
         Assert.assertTrue(Effects.flagsDefined(copy).isEmpty(), "a copy computes no flag");
         Assert.assertTrue(Effects.flagsKilled(copy).isEmpty(), "and destroys none of them");
+
+        // And the increment, which is why the carry is a name: it changes the conditions and
+        // leaves the carry exactly as it was.
+        Item increment = statements("    inc x\n").get(0);
+        Assert.assertEquals("[flags]", Effects.flagsDefined(increment).toString());
+        Assert.assertTrue(Effects.flagsKilled(increment).isEmpty(), "it destroys nothing");
+        Assert.assertTrue(Effects.flagsRead(increment).isEmpty(), "and reads nothing");
     }
 
     private static void theTargetSays() {
         Assert.assertEquals(Arrays.asList(
-                        "what was there, and what was there for the other",
-                        "what was there, and what was there for the other",
-                        "what was there, and what was there for the other",
-                        "what was there, and what was there for the other",
-                        "a value of its own, and what was there for the other",
-                        "nothing, and what was there for the other",
-                        "nothing, and what was there for the other",
-                        "what was there, and a value of its own for the other",
-                        "what was there, and a value of its own for the other",
-                        "a value of its own, and a value of its own for the other"),
+                        "what was there / what was there / what was there",
+                        "what was there / what was there / what was there",
+                        "what was there / what was there / what was there",
+                        "what was there / what was there / what was there",
+                        "a value of its own / a value of its own / what was there",
+                        "nothing / a value of its own / what was there",
+                        "nothing / a value of its own / what was there",
+                        "what was there / what was there / a value of its own",
+                        "what was there / what was there / a value of its own",
+                        "a value of its own / a value of its own / a value of its own"),
                 leaves("    nop\n"
                         + "    cli\n"
                         + "    sti\n"
@@ -139,8 +147,8 @@ public final class EffectsTest {
         // A block is not asked, because there is nobody to ask: it destroys the flags whatever
         // its list says, and what it left behind is not something a program may read.
         Assert.assertEquals(Arrays.asList(
-                        "nothing, and nothing for the other",
-                        "nothing, and nothing for the other"),
+                        "nothing / nothing / nothing",
+                        "nothing / nothing / nothing"),
                 leaves("    asm clobbers(ax) {\n        nop\n    }\n"
                         + "    asm clobbers(ax, flags) {\n        nop\n    }\n"));
     }

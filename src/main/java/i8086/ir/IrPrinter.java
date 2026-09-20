@@ -221,8 +221,26 @@ public final class IrPrinter {
     }
 
     private static void printAssign(StringBuilder text, Item.Assign assign, Target target) {
+        // An operation that is only ever a statement is written as one: 'inc d', and not
+        // 'd = eval(inc d)', which is not a spelling anybody has. Everything else is the '=' form,
+        // which is what makes that form canonical (docs/ir.md §7.3).
+        Operator operator = statementOperatorOf(assign);
+        if (operator != null) {
+            text.append(INDENT).append(operator.spelling()).append(' ')
+                    .append(printPlace(assign.place(), target)).append('\n');
+            return;
+        }
         text.append(INDENT).append(printPlace(assign.place(), target)).append(" = ")
                 .append(printValue(assign.value(), target)).append('\n');
+    }
+
+    /** The operation this assignment is a statement of, or null when it is the {@code =} form. */
+    private static Operator statementOperatorOf(Item.Assign assign) {
+        if (!(assign.value() instanceof Value.Eval)) {
+            return null;
+        }
+        Operator operator = ((Value.Eval) assign.value()).operation().operator();
+        return operator.inAnExpression() ? null : operator;
     }
 
     private static void printEvalStatement(StringBuilder text, Item.Eval item, Target target) {

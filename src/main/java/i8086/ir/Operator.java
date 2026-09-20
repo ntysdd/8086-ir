@@ -50,6 +50,20 @@ public enum Operator {
     ADD("+", 2, 5, Flags.VALUE),
     SUBTRACT("-", 2, 5, Flags.VALUE),
 
+    /**
+     * {@code inc d}: add one, and leave the carry exactly as it was.
+     *
+     * <p>Its own operation and not a spelling of {@code d = eval(d + 1)}, because those are two
+     * different programs: this one says the carry afterwards is the carry from before, and an
+     * addition says it is the one the addition made ({@code docs/ir.md} §7.3). Which is also why it
+     * is not reachable from an expression: {@code eval(inc d)} is not a thing anyone writes, and
+     * the statement is the spelling it has.
+     */
+    INCREMENT("inc", 1, 7, Flags.VALUE),
+
+    /** {@code dec d}: subtract one, and leave the carry exactly as it was. */
+    DECREMENT("dec", 1, 7, Flags.VALUE),
+
     /** {@code adc a, b}: add, and the carry that came in. It reads {@code CF}. */
     ADD_WITH_CARRY("adc", 2, 5, Flags.CARRY),
     SUBTRACT_WITH_BORROW("sbb", 2, 5, Flags.CARRY),
@@ -84,6 +98,31 @@ public enum Operator {
         this.arity = arity;
         this.precedence = precedence;
         this.flags = flags;
+    }
+
+    /**
+     * Whether this operation leaves the carry exactly as it was.
+     *
+     * <p>The machine's {@code INC} and {@code DEC} change the conditions and not the carry, and the
+     * operations that stand for them say the same thing, so a program written with one of them keeps
+     * a carry an earlier comparison set — which is the whole of why they are not an addition
+     * ({@code docs/ir.md} §4.2).
+     */
+    public boolean keepsCarry() {
+        return this == INCREMENT || this == DECREMENT;
+    }
+
+    /**
+     * Whether this operation can stand in an expression, or is only ever a statement.
+     *
+     * <p>{@code inc} and {@code dec} are statements and not trees: what they mean — the conditions
+     * change and the carry does not — is not something an expression says, and the spelling the
+     * machine gives them is the statement's ({@code docs/ir.md} §7.3). So the lookups that read an
+     * operator out of a word leave them out, which is also what lets a variable be called
+     * {@code inc}.
+     */
+    public boolean inAnExpression() {
+        return this != INCREMENT && this != DECREMENT;
     }
 
     public String spelling() {
@@ -156,7 +195,7 @@ public enum Operator {
         String name = word.toLowerCase(Locale.ROOT);
         Operator unary = null;
         for (Operator operator : values()) {
-            if (!operator.spelling.equals(name)) {
+            if (!operator.spelling.equals(name) || !operator.inAnExpression()) {
                 continue;
             }
             if (operator.arity != 1) {
@@ -174,7 +213,8 @@ public enum Operator {
     public static Operator prefix(String word) {
         String name = word.toLowerCase(Locale.ROOT);
         for (Operator operator : values()) {
-            if (operator.arity == 1 && operator.spelling.equals(name)) {
+            if (operator.arity == 1 && operator.inAnExpression()
+                    && operator.spelling.equals(name)) {
                 return operator;
             }
         }

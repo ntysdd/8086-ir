@@ -4,6 +4,7 @@ import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
 import i8086.asm.Size;
+import i8086.ir.Names;
 import i8086.ir.Operator;
 import i8086.testing.Assert;
 import i8086.testing.Suite;
@@ -11,7 +12,9 @@ import i8086.testing.Suite;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Tests for what the target says about its own instructions.
@@ -25,6 +28,11 @@ import java.util.List;
 public final class I8086Test {
 
     private static final SourcePos AT = new SourcePos("test.asm", 1, 1);
+
+    /** The flags nothing reads, and the flags everything may: what a form is judged against. */
+    private static final Set<String> NOTHING_READ = Collections.emptySet();
+    private static final Set<String> ALL_FLAGS = Collections.unmodifiableSet(
+            new LinkedHashSet<String>(Arrays.asList(Names.FLAGS, Names.CARRY)));
 
     private I8086Test() {
     }
@@ -40,6 +48,7 @@ public final class I8086Test {
         suite.add("I8086 writes only registers a value cannot live in",
                 I8086Test::writableStateHoldsNoValues);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
+        suite.add("I8086 says which flag a condition reads", I8086Test::saysWhatAConditionReads);
         suite.add("I8086 names the register a read has to find untouched",
                 I8086Test::readsNameTheWholeRegister);
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
@@ -69,7 +78,7 @@ public final class I8086Test {
                     "'" + register + "' is not somewhere a value may live");
             Assert.assertFalse(target.addressRegisters().contains(register),
                     "'" + register + "' is not somewhere an address may live");
-            Assert.assertNotNull(target.writeState(AT, register, number(1), false),
+            Assert.assertNotNull(target.writeState(AT, register, number(1), NOTHING_READ),
                     "and this target can write it: " + register);
         }
         for (String register : target.valueRegisters()) {
@@ -144,13 +153,30 @@ public final class I8086Test {
     }
 
     /**
+     * Which flag a condition reads, one condition at a time, because that is what decides whether a
+     * one-byte increment may stand where an addition was written: it leaves the carry alone, so only
+     * a branch that reads the carry can tell the difference ({@code docs/ir.md} §4.2, §4.4).
+     */
+    private static void saysWhatAConditionReads() {
+        Target target = Targets.byName("8086");
+        Assert.assertEquals("[carry]", target.conditionFlags("jc").toString());
+        Assert.assertEquals("[carry]", target.conditionFlags("jnc").toString());
+        Assert.assertEquals("[flags]", target.conditionFlags("jz").toString());
+        Assert.assertEquals("[flags]", target.conditionFlags("jnz").toString());
+        Assert.assertEquals("[flags]", target.conditionFlags("jl").toString());
+        Assert.assertEquals("[flags]", target.conditionFlags("jo").toString());
+        // The two conditions this machine words as a combination: "above" is above the carry and not
+        // zero, and "below or equal" is the other half of the same question.
+        Assert.assertEquals("[carry, flags]", target.conditionFlags("ja").toString());
+        Assert.assertEquals("[carry, flags]", target.conditionFlags("jbe").toString());
+    }
+
+    /**
      * The words a statement may begin with, and which operation each one names.
      *
-     * <p>A word is here only when the operation it names on this machine is the
-     * operation the surface already has, which is why {@code inc} is not: it is one
-     * byte where {@code add} is three, and shorter precisely because it does not touch
-     * the carry, so it is not a spelling of {@code d = eval(d + 1)}
-     * ({@code docs/ir.md} §7.3).
+     * <p>A word is here when the operation it names is one the surface has: {@code add} is a second
+     * spelling of {@code +}, and {@code inc} is a statement of its own, because an increment is not
+     * an addition — it leaves the carry where it found it ({@code docs/ir.md} §4.2, §7.3).
      */
     private static void namesStatementOperations() {
         Target target = Targets.byName("8086");
@@ -162,18 +188,14 @@ public final class I8086Test {
         Assert.assertEquals(Operator.SHIFT_LEFT, target.statementOperator("shl"));
         Assert.assertEquals(Operator.MULTIPLY_UNSIGNED, target.statementOperator("mul"));
         Assert.assertEquals(Operator.DIVIDE_SIGNED, target.statementOperator("idiv"));
-        Assert.assertNull(target.statementOperator("inc"), "inc is not an operation");
-        Assert.assertNull(target.statementOperator("dec"), "dec is not an operation");
+        Assert.assertEquals(Operator.INCREMENT, target.statementOperator("inc"));
+        Assert.assertEquals(Operator.DECREMENT, target.statementOperator("dec"));
         Assert.assertNull(target.statementOperator("xchg"), "xchg is not an operation");
         Assert.assertNull(target.statementOperator("tuesday"), "nor is a word of its own");
     }
 
     private static void explainsStatementRefusals() {
         Target target = Targets.byName("8086");
-        // The carry is the difference between inc and add 1, and a reader would not
-        // see it, so the refusal has to say so rather than list what is allowed.
-        Assert.assertTrue(target.statementProblem("inc", 1).contains("CF"),
-                target.statementProblem("inc", 1));
         // One operand, and ax and dx read and written behind the writer's back.
         Assert.assertTrue(target.statementProblem("mul", 1).contains("dx"),
                 target.statementProblem("mul", 1));
@@ -239,13 +261,13 @@ public final class I8086Test {
     private static void buildsZeroesTheWayTheFlagsAllow() {
         Target target = Targets.byName("8086");
         Operand register = new Operand.Virtual(AT, "x#1");
-        Assert.assertEquals("xor", target.zero(AT, register, Size.WORD, false).mnemonic());
-        Assert.assertEquals("mov", target.zero(AT, register, Size.WORD, true).mnemonic());
-        Assert.assertEquals("mov", target.zero(AT, register, Size.BYTE, false).mnemonic());
+        Assert.assertEquals("xor", target.zero(AT, register, Size.WORD, NOTHING_READ).mnemonic());
+        Assert.assertEquals("mov", target.zero(AT, register, Size.WORD, ALL_FLAGS).mnemonic());
+        Assert.assertEquals("mov", target.zero(AT, register, Size.BYTE, NOTHING_READ).mnemonic());
 
         // The operand is on both sides, which is what makes it a clear rather than an exclusive-or
         // of one register with another.
-        Instruction cleared = target.zero(AT, register, Size.WORD, false);
+        Instruction cleared = target.zero(AT, register, Size.WORD, NOTHING_READ);
         Assert.assertEquals(cleared.operands().get(0), cleared.operands().get(1));
     }
 

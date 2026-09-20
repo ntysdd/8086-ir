@@ -30,6 +30,7 @@ import i8086.target.Target;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -163,14 +164,21 @@ public final class InstructionSelector {
     private Map<String, Value.Memory> halfAccess = new LinkedHashMap<String, Value.Memory>();
 
     /**
-     * Whether the flags can still be read in front of the item being selected.
+     * Which flags the statement being selected may leave as it likes, and which it may not.
      *
-     * <p>What decides whether an instruction that writes them may be used where the surface asked
-     * for one that leaves them alone — building a zero with {@code xor r, r} rather than
-     * {@code mov r, 0}, which is a byte shorter on a word ({@code docs/ir.md} §4.2). Live is the
-     * safe answer, and it is the answer wherever the question has not been worked out.
+     * <p>Two questions and two answers, and they are asked at different ends of the item.
+     * {@code flagsLiveHere} is what is read coming in: an auxiliary instruction the item emits —
+     * building a zero for a clause, a literal for a comparison — runs at the start, so the flags
+     * that matter to it are the ones read before the item's own operation defines them again.
+     * {@code flagsReadAfterHere} is what is read going out, and that is what a <em>form</em> is
+     * judged against: the form stands for the operation, so the flags it leaves differently may
+     * only be the ones nothing reads afterwards.
+     *
+     * <p>Live is the safe answer wherever the question has not been worked out.
      */
-    private boolean flagsLiveHere = true;
+    private Set<String> flagsLiveHere = new LinkedHashSet<String>(Names.flagNames());
+
+    private Set<String> flagsReadAfterHere = new LinkedHashSet<String>(Names.flagNames());
 
     public InstructionSelector(SsaForm form, Target target) {
         this.target = target;
@@ -222,6 +230,7 @@ public final class InstructionSelector {
                 Item item = statement.item();
                 out = new ArrayList<Instruction>();
                 flagsLiveHere = flags.before(item);
+                flagsReadAfterHere = flags.after(item);
                 select(item);
                 pieces.add(new Selection.Piece(item, out));
             }
@@ -394,50 +403,67 @@ public final class InstructionSelector {
      * because that is what the name is.
      *
      * <p>Live is the answer that costs a byte and never costs correctness, so nothing here has to
-     * be precise: a block nothing reaches, an item that reads the flags without defining them, and
-     * an item missing from the answer all end up saying the flags are live.
+     * be precise: a block nothing reaches, an item that reads a flag without defining it, and an
+     * item missing from the answer all end up saying the flag is live.
      *
      * <p>The items are the form's rather than the module's, which is what the statement a selector
      * is given holds: a renamed item is a different object from the one the block was built with,
      * and the question "is this the item in front of me" has to have an answer that survives that.
      *
      * <p>Both directions come out of the one walk because both are read at the same moment, and
-     * because they are two halves of what one substitution has to know: which instruction may be
-     * replaced here, and which of the flags an instruction <em>defines</em> may be taken away.
+     * because they are two halves of what one substitution has to know: which flag an instruction
+     * here may leave different, and which of the flags an instruction <em>defines</em> may be taken
+     * away. Per flag and not per set of them, which is the whole point of the carry being a name of
+     * its own: a flag nobody reads is a flag an instruction may leave as it likes.
      */
     private FlagLiveness flagLiveness(Liveness liveness) {
         FlagLiveness flags = new FlagLiveness();
         for (Block block : form.cfg().blocks()) {
-            boolean alive = false;
+            Set<String> alive = new LinkedHashSet<String>();
             for (Block successor : block.successors()) {
-                alive = alive || liveness.isLiveIn(successor, Names.FLAGS);
+                for (String flag : Names.flagNames()) {
+                    if (liveness.isLiveIn(successor, flag)) {
+                        alive.add(flag);
+                    }
+                }
             }
             List<SsaStatement> statements = form.statements(block);
             for (int at = statements.size() - 1; at >= 0; at--) {
                 Item item = statements.get(at).item();
-                flags.after.put(item, Boolean.valueOf(alive));
-                alive = Effects.flagsRead(item).contains(Names.FLAGS)
-                        || (alive && !Effects.definedBy(item).contains(Names.FLAGS));
-                flags.before.put(item, Boolean.valueOf(alive));
+                flags.after.put(item, alive);
+                Set<String> live = new LinkedHashSet<String>(Effects.flagsRead(item));
+                Set<String> defined = Effects.definedBy(item);
+                for (String flag : alive) {
+                    if (!defined.contains(flag)) {
+                        live.add(flag);
+                    }
+                }
+                alive = live;
+                flags.before.put(item, alive);
             }
         }
         return flags;
     }
 
-    /** Whether the flags can still be read in front of an item, and behind it. */
+    /** Which flags can still be read in front of an item, and behind it. */
     private static final class FlagLiveness {
 
-        private final Map<Item, Boolean> before = new LinkedHashMap<Item, Boolean>();
-        private final Map<Item, Boolean> after = new LinkedHashMap<Item, Boolean>();
+        private final Map<Item, Set<String>> before = new LinkedHashMap<Item, Set<String>>();
+        private final Map<Item, Set<String>> after = new LinkedHashMap<Item, Set<String>>();
 
-        /** In front of it: whether an instruction here has to leave the flags alone. */
-        boolean before(Item item) {
-            return isLive(before.get(item));
+        /** In front of it: which flags an instruction here has to leave alone. */
+        Set<String> before(Item item) {
+            return live(before.get(item));
         }
 
-        /** Behind it: whether the flags this item defines are still read. */
-        boolean after(Item item) {
-            return isLive(after.get(item));
+        /** Behind it: which flags this item leaves are still read. */
+        Set<String> after(Item item) {
+            return live(after.get(item));
+        }
+
+        /** Every flag when the question has not been worked out, which is the safe answer. */
+        private static Set<String> live(Set<String> answer) {
+            return answer == null ? new LinkedHashSet<String>(Names.flagNames()) : answer;
         }
     }
 
@@ -601,7 +627,7 @@ public final class InstructionSelector {
             // anybody's variable; the flags are why the statement was written, so
             // they are wanted here even though the value is not.
             Operation operation = ((Item.Eval) item).operation();
-            emitOperation(operation, temp(typeOfOperation(operation)), true);
+            emitOperation(operation, temp(typeOfOperation(operation)), flagsReadAfterHere);
             return;
         }
         throw notYet(item, "this statement");
@@ -621,7 +647,9 @@ public final class InstructionSelector {
             emitLabelAddress(destination, (Value.Name) assign.value());
             return;
         }
-        emitValue(assign.value(), destination, flagsMayBeRead(assign.value()));
+        // What a form may leave different is decided per flag against what is live here: an eval
+        // promises the flags are its operation's, and that promise binds where the program looks.
+        emitValue(assign.value(), destination, flagsMayBeRead(assign.value(), flagsReadAfterHere));
     }
 
     /**
@@ -966,7 +994,7 @@ public final class InstructionSelector {
             String first;
             if (compare.left() instanceof Value.Number) {
                 first = temp(typeOfComparison(compare));
-                emitValue(compare.left(), first, true);
+                emitValue(compare.left(), first, flagsLiveHere);
             } else {
                 first = registerNameOf(compare.left());
             }
@@ -1018,14 +1046,14 @@ public final class InstructionSelector {
     }
 
     /** Whether the flags this value leaves can be read by anything afterwards. */
-    private static boolean flagsMayBeRead(Value value) {
-        return value instanceof Value.Eval;
+    private static Set<String> flagsMayBeRead(Value value, Set<String> liveHere) {
+        return value instanceof Value.Eval ? liveHere : Collections.<String>emptySet();
     }
 
     // --- values ------------------------------------------------------------
 
     /** Computes a value into {@code destination}, which names a variable. */
-    private void emitValue(Value value, String destination, boolean flagsMayBeRead) {
+    private void emitValue(Value value, String destination, Set<String> flagsMayBeRead) {
         if (value instanceof Value.Name) {
             emitMove(destination, ((Value.Name) value).name(), value.position());
             return;
@@ -1045,7 +1073,7 @@ public final class InstructionSelector {
             return;
         }
         if (value instanceof Value.Eval) {
-            emitOperation(((Value.Eval) value).operation(), destination, true);
+            emitOperation(((Value.Eval) value).operation(), destination, flagsReadAfterHere);
             return;
         }
         if (value instanceof Value.Expr) {
@@ -1068,14 +1096,14 @@ public final class InstructionSelector {
         if (expression instanceof Expression.Leaf) {
             // Inside expr the flags are already given up, so nothing below this
             // point may re-introduce a claim about them.
-            emitValue(((Expression.Leaf) expression).value(), destination, false);
+            emitValue(((Expression.Leaf) expression).value(), destination, NOTHING_READ);
             return;
         }
         if (expression instanceof Expression.Unary) {
             Expression.Unary unary = (Expression.Unary) expression;
             emitExpression(unary.operand(), destination);
             emitInPlace(unary.operator(), destination, null, null, expression.position(),
-                    false);
+                    NOTHING_READ);
             return;
         }
 
@@ -1084,7 +1112,7 @@ public final class InstructionSelector {
         Expansion expansion = expansionFor(operator, literalOf(apply.right()),
                 sourceRegister(apply.left()), destination, apply.position());
         if (expansion != null) {
-            requireFlagsMayBeLost(expansion.keepsFlags(), apply.position(), operator, false);
+            requireFlagsMayBeLost(expansion.differs(), apply.position(), operator, NOTHING_READ);
             out.addAll(expansion.instructions());
             return;
         }
@@ -1101,7 +1129,7 @@ public final class InstructionSelector {
         // arithmetic is made of (docs/ir.md §6.1).
         Expansion chained = chainedSequences(apply, destination);
         if (chained != null) {
-            requireFlagsMayBeLost(chained.keepsFlags(), apply.position(), operator, false);
+            requireFlagsMayBeLost(chained.differs(), apply.position(), operator, NOTHING_READ);
             out.addAll(chained.instructions());
             return;
         }
@@ -1115,7 +1143,7 @@ public final class InstructionSelector {
             Expansion sequence = implicitSequence(operator, Arrays.asList(leftLeaf, rightLeaf),
                     destination);
             if (sequence != null) {
-                requireFlagsMayBeLost(sequence.keepsFlags(), apply.position(), operator, false);
+                requireFlagsMayBeLost(sequence.differs(), apply.position(), operator, NOTHING_READ);
                 out.addAll(sequence.instructions());
                 return;
             }
@@ -1124,7 +1152,7 @@ public final class InstructionSelector {
         if (isLiteral(apply.right())) {
             emitExpression(apply.left(), destination);
             emitInPlace(operator, destination, ((Expression.Leaf) apply.right()).value(),
-                    Signedness.of(apply, form::typeOf), apply.position(), false);
+                    Signedness.of(apply, form::typeOf), apply.position(), NOTHING_READ);
             return;
         }
 
@@ -1137,7 +1165,7 @@ public final class InstructionSelector {
         if (right instanceof Value.Name) {
             emitExpression(apply.left(), destination);
             emitInPlace(operator, destination, right, Signedness.of(apply, form::typeOf),
-                    apply.position(), false);
+                    apply.position(), NOTHING_READ);
             return;
         }
 
@@ -1149,7 +1177,7 @@ public final class InstructionSelector {
         emitExpression(apply.right(), scratch);
         emitExpression(apply.left(), destination);
         emitInPlace(operator, destination, new Value.Name(apply.right().position(), scratch),
-                Signedness.of(apply, form::typeOf), apply.position(), false);
+                Signedness.of(apply, form::typeOf), apply.position(), NOTHING_READ);
     }
 
     /**
@@ -1300,7 +1328,7 @@ public final class InstructionSelector {
                 continue;
             }
             Item shift = definedBy.get(half.shift);
-            if (shift == null || flags.after(shift)
+            if (shift == null || !flags.after(shift).isEmpty()
                     || !onlyReader(readers, carried, half.shift, combine)) {
                 return false;
             }
@@ -1539,7 +1567,7 @@ public final class InstructionSelector {
         Expansion sequence = target.combineBytes(where, virtual(destination, where),
                 halfOperand(halves[0], where), halfOperand(halves[1], where));
         if (sequence != null) {
-            requireFlagsMayBeLost(sequence.keepsFlags(), where, operator, false);
+            requireFlagsMayBeLost(sequence.differs(), where, operator, NOTHING_READ);
         }
         return sequence;
     }
@@ -1608,7 +1636,7 @@ public final class InstructionSelector {
      * and the operation then happens in place, with the second operand as it
      * stands.
      */
-    private void emitOperation(Operation operation, String destination, boolean flagsMayBeRead) {
+    private void emitOperation(Operation operation, String destination, Set<String> flagsMayBeRead) {
         List<Value> operands = operation.operands();
         Operator operator = operation.operator();
         Value second = operands.size() == 1 ? null : operands.get(1);
@@ -1619,7 +1647,7 @@ public final class InstructionSelector {
             expansion = implicitSequence(operator, operands, destination);
         }
         if (expansion != null) {
-            requireFlagsMayBeLost(expansion.keepsFlags(), operation.position(), operator,
+            requireFlagsMayBeLost(expansion.differs(), operation.position(), operator,
                     flagsMayBeRead);
             out.addAll(expansion.instructions());
             return;
@@ -1673,7 +1701,7 @@ public final class InstructionSelector {
         }
         List<Instruction> instructions = new ArrayList<Instruction>(one.instructions());
         instructions.addAll(two.instructions());
-        return new Expansion(instructions, one.keepsFlags() && two.keepsFlags());
+        return new Expansion(instructions, union(one.differs(), two.differs()));
     }
 
     /**
@@ -1777,7 +1805,7 @@ public final class InstructionSelector {
                 return null;
             }
             instructions.addAll(rest.instructions());
-            return new Expansion(instructions, rest.keepsFlags());
+            return new Expansion(instructions, rest.differs());
         }
         return target.divide(where, target0, left, right, signed,
                 operator == Operator.REMAINDER);
@@ -1951,7 +1979,7 @@ public final class InstructionSelector {
                 return null;
             }
             withLiteral.addAll(rest.instructions());
-            return new Expansion(withLiteral, rest.keepsFlags());
+            return new Expansion(withLiteral, rest.differs());
         }
         if (multiplies) {
             return target.multiply(where, inPlace, inPlace, right, isSigned);
@@ -1978,7 +2006,7 @@ public final class InstructionSelector {
      * anything lives.
      */
     private void emitInPlace(Operator operator, String destination, Value second, Boolean signed,
-                             SourcePos where, boolean flagsMayBeRead) {
+                             SourcePos where, Set<String> flagsMayBeRead) {
         List<Form> forms = target.forms(operator);
         // The same sequence for a count that is a value, where the first operand is already in the
         // destination: the target elides the copy into itself, so the two callers are one shape.
@@ -1988,7 +2016,7 @@ public final class InstructionSelector {
                     : target.shiftByValue(where, shift, virtual(destination, where),
                             virtual(destination, where), ((Value.Name) second).name());
             if (counted != null) {
-                requireFlagsMayBeLost(counted.keepsFlags(), where, operator, flagsMayBeRead);
+                requireFlagsMayBeLost(counted.differs(), where, operator, flagsMayBeRead);
                 out.addAll(counted.instructions());
                 return;
             }
@@ -2001,7 +2029,7 @@ public final class InstructionSelector {
                                 + "instruction this machine has for it keeps an operand in a "
                                 + "fixed register, and this back end cannot express that");
             }
-            requireFlagsMayBeLost(sequence.keepsFlags(), where, operator, flagsMayBeRead);
+            requireFlagsMayBeLost(sequence.differs(), where, operator, flagsMayBeRead);
             out.addAll(sequence.instructions());
             return;
         }
@@ -2020,7 +2048,7 @@ public final class InstructionSelector {
             if (candidate == null) {
                 continue;
             }
-            if (!form.keepsFlags() && flagsMayBeRead) {
+            if (differsFromTheProgram(form, flagsMayBeRead)) {
                 // Smaller because it does less, and here the less it does is
                 // something the program can still look at.
                 if (refused == null || form.bytes() < refused.bytes()) {
@@ -2119,15 +2147,60 @@ public final class InstructionSelector {
      */
     private static final String LITERAL_SCRATCH = "bx";
 
-    /** Refuses a form that changes the flags where they are still wanted. */
-    private static void requireFlagsMayBeLost(boolean keepsFlags, SourcePos where,
-                                              Operator operator, boolean flagsMayBeRead) {
-        if (!keepsFlags && flagsMayBeRead) {
-            throw new CompileError(where,
-                    "the way this machine does '" + operator.spelling() + "' leaves different "
-                            + "flags from the operation, and here they can still be read; write the "
-                            + "value with expr(...), which gives them up (docs/ir.md §5.2), or say "
-                            + "which instruction you mean (docs/ir.md §5.5)");
+    /**
+     * A set that is empty, for the places where the surface has given the flags up.
+     *
+     * <p>Inside {@code expr} nothing may read a flag, and the surface says so by having written
+     * {@code expr} ({@code docs/ir.md} §5.2) — so a form there may leave any flag as it likes, and
+     * this is what says so at the call.
+     */
+    private static final Set<String> NOTHING_READ = Collections.emptySet();
+
+    /**
+     * Whether a form that differs from the operation is usable where this is selected.
+     *
+     * <p>Per flag: the form may leave a flag as it likes exactly when nothing reads that flag
+     * before defining it again, which is what {@code flagsMayBeRead} holds. The carry being a name
+     * of its own is what makes the answer useful — an increment differs from an addition in the
+     * carry and in nothing else, so it stands for the addition wherever the carry is not read
+     * ({@code docs/ir.md} §4.2).
+     */
+    private static boolean differsFromTheProgram(Form form, Set<String> flagsMayBeRead) {
+        for (String flag : form.differs()) {
+            if (flagsMayBeRead.contains(flag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The flags either set names, for a sequence that is two of them one after the other. */
+    private static Set<String> union(Set<String> left, Set<String> right) {
+        Set<String> both = new LinkedHashSet<String>(left);
+        both.addAll(right);
+        return both;
+    }
+
+    /**
+     * Refuses a form that changes a flag where that flag is still wanted.
+     *
+     * <p>{@code differs} is what the form leaves differently from the operation it stands for, and
+     * {@code mayBeRead} is which flags something reads before it defines them again. One flag each
+     * is the whole of the question, which is what the carry being a name of its own is for: an
+     * increment is {@code add 1} with the carry left alone, so it stands for the addition wherever
+     * the carry is not read — even where a branch reads the zero flag the addition sets
+     * ({@code docs/ir.md} §4.2).
+     */
+    private static void requireFlagsMayBeLost(Set<String> differs, SourcePos where,
+                                              Operator operator, Set<String> mayBeRead) {
+        for (String flag : differs) {
+            if (mayBeRead.contains(flag)) {
+                throw new CompileError(where,
+                        "the way this machine does '" + operator.spelling() + "' leaves a different "
+                                + "'" + flag + "', and here it can still be read; write the value "
+                                + "with expr(...), which gives the flags up (docs/ir.md §5.2), or "
+                                + "say which instruction you mean (docs/ir.md §5.5)");
+            }
         }
     }
 

@@ -71,7 +71,7 @@ public final class MachineTest {
                         + "    sti\n"
                         + "    hlt\n"
                         + "    nop\n"
-                        + "    iret clobbers(flags)\n",
+                        + "    iret\n",
                 became("    cli\n"
                         + "    int 0x10\n"
                         + "    sti\n"
@@ -280,14 +280,14 @@ public final class MachineTest {
         Assert.assertEquals(Integer.valueOf(0), target.machineStatements().get("hlt"));
         Assert.assertEquals("[ax, cx, dx, bx, si, di, flags]",
                 target.machineClobbers("int").toString());
-        Assert.assertEquals("[flags]", target.machineClobbers("iret").toString());
+        Assert.assertEquals("[]", target.machineClobbers("iret").toString());
         Assert.assertEquals("[]", target.machineClobbers("cli").toString());
         // The flags are the ones the statement leaves for these two, and the ones from
         // before it for the rest: clearing an interrupt flag and doing nothing are not
         // ways of computing a flag. `cld` and `std` are the direction flag's own, which is
         // the whole reason the two are asked apart.
-        Assert.assertEquals("defines [flags], reads []", target.machineFlags("int").toString());
-        Assert.assertEquals("defines [flags, direction], reads []",
+        Assert.assertEquals("defines [flags, carry], reads []", target.machineFlags("int").toString());
+        Assert.assertEquals("defines [flags, carry, direction], reads []",
                 target.machineFlags("iret").toString());
         Assert.assertEquals("defines [direction], reads []", target.machineFlags("cld").toString());
         Assert.assertEquals("defines [direction], reads []", target.machineFlags("std").toString());

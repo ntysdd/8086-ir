@@ -323,6 +323,10 @@ public final class I8086 implements Target {
         statement(words, Operator.XOR, "xor");
         statement(words, Operator.COMPLEMENT, "not");
         statement(words, Operator.NEGATE, "neg");
+        // A statement of its own, and not a spelling of the addition: what it means is that the
+        // carry afterwards is the carry from before (docs/ir.md §7.3, §4.2).
+        statement(words, Operator.INCREMENT, "inc");
+        statement(words, Operator.DECREMENT, "dec");
         statement(words, Operator.ADD_WITH_CARRY, "adc");
         statement(words, Operator.SUBTRACT_WITH_BORROW, "sbb");
         statement(words, Operator.SHIFT_LEFT, "shl");
@@ -366,13 +370,6 @@ public final class I8086 implements Target {
 
     private static Map<String, String> statementProblems() {
         Map<String, String> problems = new LinkedHashMap<String, String>();
-        for (String word : Arrays.asList("inc", "dec")) {
-            problems.put(word, "'" + word + "' leaves CF alone where 'd = eval(d + 1)' defines "
-                    + "it, so the two are different programs and the difference is one a reader "
-                    + "would not see: write the 'eval' form, and where the flags turn out to "
-                    + "matter to nobody, the compiler reaches the one-byte " + word + " by itself "
-                    + "(docs/ir.md §7.3)");
-        }
         for (String word : Arrays.asList("cwd", "cbw")) {
             problems.put(word, "'" + word + "' works on ax (and dx) with no operand saying so, and "
                     + "the surface has no operation for it (docs/ir.md §7.3)");
@@ -483,9 +480,6 @@ public final class I8086 implements Target {
             everything.add("flags");
             return Collections.unmodifiableList(everything);
         }
-        if (mnemonic.equals("iret")) {
-            return Collections.singletonList("flags");
-        }
         // A string operation is about the registers that point at what it walks, and about 'cx'
         // when it is repeated — which is the usual way to write one, and which a reader can check
         // against the machine. The ones that store or load what is in 'ax' name it too: what this
@@ -506,6 +500,27 @@ public final class I8086 implements Target {
         return Collections.emptyList();
     }
 
+    /**
+     * The flags each condition reads, by name ({@code docs/ir.md} §4.4).
+     *
+     * <p>Four are about the carry on its own, two are worded as the carry and the zero flag
+     * together, and the rest read the conditions: the sign, the overflow and the zero, or one of
+     * them. That has to be said one condition at a time, because it is what decides whether a
+     * one-byte {@code inc} may stand where an addition was written: an increment leaves the carry
+     * exactly as it was, so a branch that does not read the carry cannot tell the difference
+     * ({@code docs/ir.md} §4.2).
+     */
+    @Override
+    public Set<String> conditionFlags(String condition) {
+        if (condition.equals("jc") || condition.equals("jnc")) {
+            return Collections.singleton(Names.CARRY);
+        }
+        if (condition.equals("ja") || condition.equals("jbe")) {
+            return new LinkedHashSet<String>(Arrays.asList(Names.CARRY, Names.FLAGS));
+        }
+        return Collections.singleton(Names.FLAGS);
+    }
+
     @Override
     public boolean hasAByteCount(String mnemonic) {
         return COUNTED_BY_A_BYTE.contains(mnemonic);
@@ -514,13 +529,14 @@ public final class I8086 implements Target {
     /**
      * The flags each of these leaves a value of its own in, and the ones it reads.
      *
-     * <p>{@code int} makes the arithmetic flags its own, because the handler decides them and an
-     * author who wrote {@code jc} behind it means the handler's carry; the direction flag is not
-     * the handler's, because a handler returns through {@code iret}, which restores the flags the
-     * interrupted program had. {@code iret} restores both. {@code cld} and {@code std} are the
-     * other way round: what a copy does next is the one thing they decide, and the arithmetic flags
-     * come through them untouched, so a comparison in front of one is still the comparison a branch
-     * behind it reads.
+     * <p>{@code int} makes the conditions and the carry its own, because the handler decides them
+     * and an author who wrote {@code jc} behind it means the handler's carry; the direction flag is
+     * not the handler's, because a handler returns through {@code iret}, which restores the flags
+     * the interrupted program had. {@code iret} restores all three, which is why its clobber list is
+     * empty: naming a flag there would say it is destroyed ({@link FlagUse}). {@code cld} and
+     * {@code std} are the other way round: what a copy does next is the one thing they decide, and
+     * the arithmetic flags come through them untouched, so a comparison in front of one is still the
+     * comparison a branch behind it reads.
      *
      * <p>The rest — {@code nop}, {@code cli}, {@code sti}, {@code hlt} — are commands about machine
      * state, and nothing about them is a value a later statement reads.
@@ -533,10 +549,10 @@ public final class I8086 implements Target {
     @Override
     public FlagUse machineFlags(String mnemonic) {
         if (mnemonic.equals("int")) {
-            return FlagUse.defined(Names.FLAGS);
+            return FlagUse.defined(Names.FLAGS, Names.CARRY);
         }
         if (mnemonic.equals("iret")) {
-            return FlagUse.defined(Names.FLAGS, Names.DIRECTION);
+            return FlagUse.defined(Names.FLAGS, Names.CARRY, Names.DIRECTION);
         }
         if (mnemonic.equals("cld") || mnemonic.equals("std")) {
             return FlagUse.defined(Names.DIRECTION);
@@ -669,14 +685,21 @@ public final class I8086 implements Target {
         Map<Operator, List<Form>> table = new LinkedHashMap<Operator, List<Form>>();
         binary(table, Operator.ADD, "add");
         binary(table, Operator.SUBTRACT, "sub");
+        // A statement of its own, one instruction long, and the one form of it.
+        table.put(Operator.INCREMENT, one(new Form("inc", registers(1), 1)));
+        table.put(Operator.DECREMENT, one(new Form("dec", registers(1), 1)));
         binary(table, Operator.AND, "and");
         binary(table, Operator.OR, "or");
         binary(table, Operator.XOR, "xor");
 
-        // add 1 and subtract 1 have shorter forms, and shorter because they do
-        // not touch the carry.
-        table.get(Operator.ADD).add(new Form("inc", registers(1), Long.valueOf(1), false, 1));
-        table.get(Operator.SUBTRACT).add(new Form("dec", registers(1), Long.valueOf(1), false, 1));
+        // add 1 and subtract 1 have shorter forms, and shorter because they do not touch the carry:
+        // the flag they leave differently is the carry and nothing else, so they stand for the
+        // arithmetic wherever the carry is not read — a branch on the zero flag the increment does
+        // set cannot tell the difference ({@code docs/ir.md} §4.2).
+        table.get(Operator.ADD).add(new Form("inc", registers(1), Long.valueOf(1),
+                Collections.singleton(Names.CARRY), 1));
+        table.get(Operator.SUBTRACT).add(new Form("dec", registers(1), Long.valueOf(1),
+                Collections.singleton(Names.CARRY), 1));
 
         table.put(Operator.COMPLEMENT, one(new Form("not", registers(1), 2)));
 
@@ -1138,7 +1161,8 @@ public final class I8086 implements Target {
      * still be read the sequence does what it did before.
      */
     @Override
-    public Expansion writeState(SourcePos where, String name, Operand value, boolean flagsMayBeRead) {
+    public Expansion writeState(SourcePos where, String name, Operand value,
+                                Set<String> flagsMayBeRead) {
         List<Instruction> instructions = new ArrayList<Instruction>();
         if (SEGMENT_REGISTERS.contains(name)) {
             if (isAGeneralRegister(value)) {
@@ -1179,7 +1203,7 @@ public final class I8086 implements Target {
      * known to be one, and a register is moved like any other value.
      */
     private Instruction built(SourcePos where, Operand register, Operand value,
-                              boolean flagsMayBeRead) {
+                              Set<String> flagsMayBeRead) {
         if (value instanceof Operand.Number && ((Operand.Number) value).value() == 0) {
             return zero(where, register, Size.WORD, flagsMayBeRead);
         }
@@ -1195,8 +1219,9 @@ public final class I8086 implements Target {
      * nothing to win and one more thing for a reader to work out.
      */
     @Override
-    public Instruction zero(SourcePos where, Operand register, Size size, boolean flagsMayBeRead) {
-        if (flagsMayBeRead || size.bytes() < Size.WORD.bytes()) {
+    public Instruction zero(SourcePos where, Operand register, Size size,
+                            Set<String> flagsMayBeRead) {
+        if (!flagsMayBeRead.isEmpty() || size.bytes() < Size.WORD.bytes()) {
             return instruction(where, "mov", register,
                     new Operand.Number(where, 0, Numbers.spelling(0)));
         }

@@ -134,14 +134,13 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    operation. From that point on it *is* an ordinary value, and every generic
    pass handles it without needing to know what a flag is.
    **Mostly built.** Dominators, φ's and renaming are done, the flags included;
-   promoting memory and materialising a flag value are not. Both wait on the same
-   missing thing — the target's per-flag effects — and neither is needed yet. What the
-   flags do have is the three states (§4.2), asked of a statement as well as of an
-   operation and per flag: a statement says whether it makes a flag, gives it up, or leaves it
-   exactly as it was, and only the last of those keeps the definition in front of it alive
-   (`i8086.target.Target#machineFlags`). The flags are two names and not one — the arithmetic
-   ones and `direction`, which `cld` and `std` are the only writers of — because a comparison is
-   indifferent to where the next copy goes.
+   promoting memory and materialising a flag value are not, and the first of those waits on a
+   question this compiler has not answered (§3.1.2). What the flags do have is the three states
+   (§4.2), asked of a statement as well as of an operation and per flag: a statement says whether it
+   makes a flag, gives it up, or leaves it exactly as it was, and only the last of those keeps the
+   definition in front of it alive (`i8086.target.Target#machineFlags`). The flags are three names
+   and not one — the conditions, the carry, and `direction` — because `inc` changes the first and
+   not the second, and `cld` and `std` are the only writers of the third.
 4. **Optimize**, as a sequence of verified passes. The bulk of the pipeline is
    generic: constant folding and propagation, dead code elimination, copy
    propagation, global value numbering / CSE, redundant load elimination,

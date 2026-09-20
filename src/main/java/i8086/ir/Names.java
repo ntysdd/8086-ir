@@ -30,14 +30,30 @@ import java.util.Set;
  */
 public final class Names {
 
-    /** The flag set: the one name a module uses without declaring it (§4.1). */
+    /**
+     * The conditions: what a comparison leaves and what everything except a branch on the carry
+     * reads — {@code ZF}, {@code SF}, {@code PF}, {@code AF} and {@code OF} (§4.1).
+     *
+     * <p>The carry is not here, and the reason is {@code inc}: this machine has instructions that
+     * leave the conditions exactly as they were and change the carry, so a program that says
+     * "add one" and means the machine's {@code inc} is not saying what {@code + 1} says. One name
+     * cannot hold both, so the carry is the one flag a condition reads that is counted apart.
+     */
     public static final String FLAGS = "flags";
 
     /**
-     * The direction flag: the one flag that is not part of {@link #FLAGS} (§4.1).
+     * The carry flag, which an instruction may leave alone where it changes the conditions
+     * ({@code docs/ir.md} §4.2).
      *
-     * <p>It is kept apart because the arithmetic flags are not the only thing a statement can do
-     * something with, and because what sets it is a different sort of statement: {@code cld} and
+     * <p>Its own name because {@code INC} and {@code DEC} preserve it, and because
+     * {@code ADC}, {@code SBB}, {@code RCL} and {@code RCR} read it and nothing else.
+     */
+    public static final String CARRY = "carry";
+
+    /**
+     * The direction flag: which way a copy goes (§4.1).
+     *
+     * <p>It is kept apart because what sets it is a different sort of statement: {@code cld} and
      * {@code std} are about where a copy goes, not about what a computation produced, and every
      * comparison and branch in the program is indifferent to them. Anything that walks the flags
      * asks for the one it means by name.
@@ -46,7 +62,7 @@ public final class Names {
 
     /** The flags, in the order everything that walks them walks them. */
     private static final List<String> FLAG_NAMES = Collections.unmodifiableList(
-            Arrays.asList(FLAGS, DIRECTION));
+            Arrays.asList(FLAGS, CARRY, DIRECTION));
 
     /** The names of the flags, the arithmetic ones first. */
     public static List<String> flagNames() {

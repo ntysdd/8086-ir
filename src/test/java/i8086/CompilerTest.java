@@ -286,6 +286,8 @@ public final class CompilerTest {
         suite.add("Compiler refuses five byte values at one point",
                 CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
+        suite.add("Compiler counts up and down the way the machine does",
+                CompilerTest::incrementsAndDecrements);
         suite.add("Compiler shifts by a count that is a value", CompilerTest::shiftsByAValue);
         suite.add("Compiler shifts a computed value by a value", CompilerTest::shiftsATreeByAValue);
         suite.add("Compiler refuses a value shift whose flags are read",
@@ -724,15 +726,71 @@ public final class CompilerTest {
     }
 
     /**
-     * The whole path on the arithmetic a person would actually write, including
-     * the temporary the multiply needs.
+     * {@code inc} and {@code dec}, which are statements of their own because of the carry.
      *
-     * <p>Nothing observes a value yet — there are no loads, no stores and no return
-     * value — so a program whose result nobody reads is one the optimiser correctly
-     * deletes. Every test here therefore anchors its arithmetic with a conditional
-     * branch, which reads the flags: the last operation has to keep them, and what
-     * feeds it stays alive.
+     * <p>An addition says the carry afterwards is the one it made; an increment says it is the one
+     * from before, so a comparison in front of it keeps its carry and the branch behind it still
+     * reads that — where the equal spelling as an {@code eval} would have defined the carry and left
+     * the branch reading the increment's ({@code docs/ir.md} §4.2, §7.3).
      */
+    private static void incrementsAndDecrements() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    cmp ax, 1\n"
+                        + "    inc ax\n"
+                        + "    jc $skip\n"
+                        + "    mov word [0x42], ax\n"
+                        + "\n"
+                        + "$skip:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    x = word [0x40]\n"
+                        + "    cmp x, 1\n"
+                        + "    inc x\n"
+                        + "    jc $skip\n"
+                        + "    volatile word [0x42] = x\n"
+                        + "$skip:\n"
+                        + "    ret\n"));
+
+        // The other half of the same fact, and the bytes it is worth: an addition whose carry nobody
+        // reads is the increment, and a branch on the zero flag does not read the carry. Two bytes,
+        // measured: `add ax, 1` is 83 C0 01 and `inc ax` is 40.
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    inc ax\n"
+                        + "    jnz $skip\n"
+                        + "    mov word [0x42], ax\n"
+                        + "\n"
+                        + "$skip:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    x = word [0x40]\n"
+                        + "    x = eval(x + 1)\n"
+                        + "    jnz $skip\n"
+                        + "    volatile word [0x42] = x\n"
+                        + "$skip:\n"
+                        + "    ret\n"));
+
+        // And the branch that does read the carry: the addition stays, because the increment would
+        // leave the carry of whatever came before it.
+        String read = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var x: u16\n"
+                + "    x = word [0x40]\n"
+                + "    x = eval(x + 1)\n"
+                + "    jc $skip\n"
+                + "    volatile word [0x42] = x\n"
+                + "$skip:\n"
+                + "    ret\n");
+        Assert.assertTrue(read.contains("    add ax, 1\n"),
+                "an addition whose carry is read is not an increment: " + read);
+    }
+
     private static void compilesArithmetic() {
         Assert.assertEquals("org 0x100\n"
                 + "\n"
@@ -1269,7 +1327,7 @@ public final class CompilerTest {
                         + "    jc $l0\n"
                         + "$l0:\n"
                         + "    ret\n"));
-        Assert.assertTrue(refused.getMessage().contains("different flags"),
+        Assert.assertTrue(refused.getMessage().contains("a different 'carry'"),
                 refused.getMessage());
         Assert.assertTrue(refused.getMessage().contains("expr(...)"),
                 "and says what to write instead: " + refused.getMessage());
@@ -1343,9 +1401,9 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    add cx, 1\n"
+                        + "    inc cx\n"
                         + "    int 0x21\n"
-                        + "    add cx, 1\n"
+                        + "    inc cx\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var x: u16\n    var y: u16\n    var u: u16\n"
@@ -1365,8 +1423,8 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    add cx, 1\n"
-                        + "    add cx, 1\n"
+                        + "    inc cx\n"
+                        + "    inc cx\n"
                         + "    int 0x21\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -1870,7 +1928,7 @@ public final class CompilerTest {
                 + "\n"
                 + "$top:\n"
                 + "    nop\n"
-                + "    sub cx, 1\n"
+                + "    dec cx\n"
                 + "    jnz $top\n"
                 + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -2563,7 +2621,7 @@ public final class CompilerTest {
                         + "    ret\n"
                         + "\n$skip:\n"
                         + "    ret\n"));
-        Assert.assertTrue(refused.getMessage().contains("leaves different flags"),
+        Assert.assertTrue(refused.getMessage().contains("leaves a different"),
                 refused.getMessage());
     }
 
@@ -3206,7 +3264,7 @@ public final class CompilerTest {
                         + "    volatile word [0x44] = x\n"
                         + "$skip:\n"
                         + "    ret\n"));
-        Assert.assertTrue(refused.getMessage().contains("leaves different flags"),
+        Assert.assertTrue(refused.getMessage().contains("leaves a different"),
                 refused.getMessage());
     }
 

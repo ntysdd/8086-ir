@@ -131,6 +131,21 @@ public interface Target {
     }
 
     /**
+     * The flags a condition reads, by name ({@code docs/ir.md} §4.1, §4.4).
+     *
+     * <p>A condition says by name which flag it tests, and on this machine most of them test the
+     * conditions: {@code jz} is the zero flag, {@code jl} is the sign and the overflow together, and
+     * neither has anything to say about the carry. Only four are about the carry on its own —
+     * {@code jc} and {@code jnc} and the unsigned {@code jb}/{@code jae} family — and two, “above”
+     * and “below or equal”, are worded as a combination of the carry and the zero flag.
+     *
+     * <p>Both is the safe answer, and the answer for a mnemonic the target does not know.
+     */
+    default Set<String> conditionFlags(String condition) {
+        return null;
+    }
+
+    /**
      * Whether control reaches the instruction after this one.
      *
      * <p>What a walk over the instructions has to know, and the same kind of question
@@ -535,13 +550,13 @@ public interface Target {
      * value it chose, a literal, or a register it wrote by hand — the last being how
      * {@code movreg ds, cs} reaches here.
      *
-     * <p>{@code flagsMayBeRead} is whether anything can still look at the flags afterwards
+     * <p>{@code flagsMayBeRead} is which flags something reads before defining them again
      * ({@code docs/ir.md} §4.2). A state register takes no immediate, so a value without a register
      * of its own has to be built first, and the shortest way to build a zero writes the flags
      * rather than leaving them alone. When they can still be read the sequence has to keep them,
      * which is the {@code mov} this target would otherwise have used.
      */
-    Expansion writeState(SourcePos where, String name, Operand value, boolean flagsMayBeRead);
+    Expansion writeState(SourcePos where, String name, Operand value, Set<String> flagsMayBeRead);
 
     /**
      * A sequence that reads one of this target's own registers into a value, or null when this
@@ -577,13 +592,14 @@ public interface Target {
      *
      * <p>{@code flagsMayBeRead} is the half of the question that is about the flags: a zero can be
      * moved in, which leaves them alone, or cleared, which writes them — and a target that clears
-     * has to say so by answering with an instruction the caller may only use where they are dead.
+     * has to say so by answering with an instruction the caller may only use where the flags it
+     * writes are dead.
      *
      * <p>The width is the other half, and it is why the caller passes it: clearing a word with
      * {@code xor r, r} is shorter than moving the literal there, and on a byte the two cost the
      * same, so a target that has both answers with the shorter one for the width it is given.
      */
-    Instruction zero(SourcePos where, Operand register, Size size, boolean flagsMayBeRead);
+    Instruction zero(SourcePos where, Operand register, Size size, Set<String> flagsMayBeRead);
 
     /**
      * The cleanup this machine's own code needs, once every value has a register.
