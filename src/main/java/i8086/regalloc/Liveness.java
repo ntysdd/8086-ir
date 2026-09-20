@@ -21,7 +21,10 @@ import java.util.Set;
  * <p>A **point** is one item and the instructions it became, because that is as fine as
  * this can honestly go: what happens *inside* an expansion is the target's business, and
  * the registers it insists on are already known through {@link Target#clobbers}. So a
- * point reads what its instructions mention and writes what its item defines.
+ * point reads what its instructions mention and writes what its item defines — and a merge
+ * is the one thing that is neither, so it comes in with the selection: a φ's name is
+ * defined where its block is entered, and its operands are read at the end of the
+ * predecessor each arrives from ({@code docs/ssa.md} §8).
  *
  * <p>The edges between points are the ones the module makes: a point carries on to the
  * next one unless its last instruction goes somewhere else, and a branch also reaches the
@@ -81,6 +84,32 @@ public final class Liveness {
             }
             uses.add(read);
             defs.add(written);
+        }
+
+        // A merge is a definition and a set of reads, and neither is an item or an instruction: the
+        // φ's name is defined where its block is entered, and each operand is read at the end of the
+        // predecessor it arrives from, because the register is what carries it along that path
+        // (docs/ssa.md §8). Without this a value whose only definition is a φ looks like a value with
+        // no definition at all — alive from the start of the program — and a value that arrives along
+        // one edge looks live along all of them.
+        List<Selection.Merge> merges = selection.merges();
+        List<List<String>> groups = selection.registerGroups();
+        for (int merge = 0; merge < merges.size() && merge < groups.size(); merge++) {
+            List<String> names = groups.get(merge);
+            Selection.Merge where = merges.get(merge);
+            int point = where.point();
+            if (names.isEmpty() || point < 0 || point >= pieces.size()) {
+                continue;
+            }
+            uses.get(point).remove(names.get(0));
+            defs.get(point).add(names.get(0));
+            List<Integer> points = where.operandPoints();
+            for (int operand = 0; operand + 1 < names.size() && operand < points.size(); operand++) {
+                int read = points.get(operand).intValue();
+                if (read >= 0 && read < pieces.size()) {
+                    uses.get(read).add(names.get(operand + 1));
+                }
+            }
         }
 
         List<List<Integer>> successors = successors(pieces, target);

@@ -133,14 +133,23 @@ public final class InstructionSelector {
     private Selection run() {
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
         List<List<String>> groups = new ArrayList<List<String>>();
+        List<Integer> merges = new ArrayList<Integer>();
+        List<List<Integer>> mergedOperands = new ArrayList<List<Integer>>();
+        Map<Block, Integer> firstPiece = new LinkedHashMap<Block, Integer>();
+        Map<Block, Integer> lastPiece = new LinkedHashMap<Block, Integer>();
         Map<Item, Boolean> flagsLive = flagsLiveBefore(Liveness.of(form.cfg(), names));
         for (Block block : form.cfg().blocks()) {
             // A φ is not an item and not an instruction. What it says is that the values
             // reaching it are one value as far as a register is concerned, because there
             // is no copy at a merge (docs/ssa.md §8) — so it is a fact about the stream
-            // that travels with it, and the allocator is the one that acts on it.
+            // that travels with it, and the allocator is the one that acts on it. Where it
+            // happens is the entry of this block, and where it reads is the end of each
+            // predecessor; both are points, and both are worked out once the walk is over.
+            firstPiece.put(block, Integer.valueOf(pieces.size()));
             for (Phi phi : form.phis(block)) {
                 groups.add(joined(phi));
+                merges.add(Integer.valueOf(-1));
+                mergedOperands.add(new ArrayList<Integer>());
             }
             for (SsaStatement statement : form.statements(block)) {
                 Item item = statement.item();
@@ -149,9 +158,46 @@ public final class InstructionSelector {
                 select(item);
                 pieces.add(new Selection.Piece(item, out));
             }
+            lastPiece.put(block, Integer.valueOf(pieces.size() - 1));
         }
+        List<Selection.Merge> where = merges(groups, firstPiece, lastPiece);
         Map<String, String> variables = variables();
-        return new Selection(pieces, groups, variables, homes(variables), types());
+        return new Selection(pieces, groups, where, variables, homes(variables), types());
+    }
+
+    /**
+     * Where each merge is, and where each of its operands is read.
+     *
+     * <p>The name is defined where the block is entered, which is the piece the block starts at; an
+     * operand is read at the end of the predecessor it arrives from, which is that block's last piece.
+     * A φ's operands are in the order of the block's predecessors, and the ones that are not values
+     * are skipped in both lists alike — an undefined value is the name for "this variable, with no
+     * value", and there is nothing for it to agree with ({@code docs/ssa.md} §5).
+     */
+    private List<Selection.Merge> merges(List<List<String>> groups,
+                                         Map<Block, Integer> firstPiece,
+                                         Map<Block, Integer> lastPiece) {
+        List<Selection.Merge> where = new ArrayList<Selection.Merge>();
+        int group = 0;
+        for (Block block : form.cfg().blocks()) {
+            List<Block> predecessors = block.predecessors();
+            for (Phi phi : form.phis(block)) {
+                List<Integer> points = new ArrayList<Integer>();
+                int operand = 0;
+                for (String name : phi.operands()) {
+                    if (!form.isVersion(name)) {
+                        continue;
+                    }
+                    Block from = operand < predecessors.size() ? predecessors.get(operand) : null;
+                    Integer point = from == null ? null : lastPiece.get(from);
+                    points.add(point == null ? Integer.valueOf(0) : point);
+                    operand++;
+                }
+                where.add(new Selection.Merge(firstPiece.get(block).intValue(), points));
+                group++;
+            }
+        }
+        return where;
     }
 
     /**

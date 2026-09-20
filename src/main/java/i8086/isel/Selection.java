@@ -57,9 +57,45 @@ public final class Selection {
 
     private final List<Piece> pieces;
     private final List<List<String>> registerGroups;
+    private final List<Merge> merges;
     private final Map<String, String> variables;
     private final Map<String, String> homes;
     private final Map<String, Type> types;
+
+    /**
+     * One φ: where its name is defined, and where each of its operands is read.
+     *
+     * <p>A merge is a definition and a set of reads, and neither is an item or an instruction. The
+     * name is defined at the entry of its block, before that block's first instruction; the operands
+     * are read at the <em>end of the predecessor each comes from</em>, which is what keeps a value
+     * that arrives along one edge from looking like a value that is live along all of them
+     * ({@code docs/ssa.md} §8).
+     *
+     * <p>Every point is an index into {@link #pieces()}, and {@code operandPoints} is aligned with
+     * {@code names} in the group the merge belongs to, without the φ's own name: those two lists are
+     * one fact told to two readers — the coalescer wants the names, the liveness wants the points.
+     */
+    public static final class Merge {
+
+        private final int point;
+        private final List<Integer> operandPoints;
+
+        public Merge(int point, List<Integer> operandPoints) {
+            this.point = point;
+            this.operandPoints = Collections.unmodifiableList(
+                    new ArrayList<Integer>(operandPoints));
+        }
+
+        /** Where the φ's name is defined: the entry of the block it merges into. */
+        public int point() {
+            return point;
+        }
+
+        /** Where each operand is read, one per name in the group after the first. */
+        public List<Integer> operandPoints() {
+            return operandPoints;
+        }
+    }
 
     public Selection(List<Piece> pieces) {
         this(pieces, Collections.<List<String>>emptyList(),
@@ -68,11 +104,17 @@ public final class Selection {
 
     public Selection(List<Piece> pieces, List<List<String>> registerGroups,
                      Map<String, String> variables) {
-        this(pieces, registerGroups, variables, Collections.<String, String>emptyMap(),
-                Collections.<String, Type>emptyMap());
+        this(pieces, registerGroups, Collections.<Merge>emptyList(), variables,
+                Collections.<String, String>emptyMap(), Collections.<String, Type>emptyMap());
     }
 
     public Selection(List<Piece> pieces, List<List<String>> registerGroups,
+                     Map<String, String> variables, Map<String, String> homes,
+                     Map<String, Type> types) {
+        this(pieces, registerGroups, Collections.<Merge>emptyList(), variables, homes, types);
+    }
+
+    public Selection(List<Piece> pieces, List<List<String>> registerGroups, List<Merge> merges,
                      Map<String, String> variables, Map<String, String> homes,
                      Map<String, Type> types) {
         this.pieces = Collections.unmodifiableList(new ArrayList<Piece>(pieces));
@@ -81,6 +123,7 @@ public final class Selection {
             groups.add(Collections.unmodifiableList(new ArrayList<String>(group)));
         }
         this.registerGroups = Collections.unmodifiableList(groups);
+        this.merges = Collections.unmodifiableList(new ArrayList<Merge>(merges));
         this.variables = Collections.unmodifiableMap(new LinkedHashMap<String, String>(variables));
         this.homes = Collections.unmodifiableMap(new LinkedHashMap<String, String>(homes));
         this.types = Collections.unmodifiableMap(new LinkedHashMap<String, Type>(types));
@@ -103,6 +146,28 @@ public final class Selection {
      */
     public List<List<String>> registerGroups() {
         return registerGroups;
+    }
+
+    /**
+     * Where each of those groups is merged, by index into {@link #registerGroups()}.
+     *
+     * <p>A group exists because a φ joins its names, and a φ is a definition: it happens at the
+     * entry of its block, before the block's first instruction. That is a fact about the stream the
+     * allocator has to be told for the same reason it is told the group at all — a value whose only
+     * definition is a φ would otherwise look like a value with no definition, and be live from the
+     * start of the program ({@code docs/ssa.md} §8).
+     */
+    public List<Integer> mergePoints() {
+        List<Integer> points = new ArrayList<Integer>();
+        for (Merge merge : merges) {
+            points.add(Integer.valueOf(merge.point()));
+        }
+        return Collections.unmodifiableList(points);
+    }
+
+    /** Where the φ's are, and where their operands are read. */
+    public List<Merge> merges() {
+        return merges;
     }
 
     /**

@@ -248,6 +248,14 @@ So the versions are told apart, or brought together, and what does it is the all
   so the values a φ joins have to be in it. Selection read the φ's and passes them on
   with the instructions, because that is a fact about the stream and not something the
   allocator can see for itself.
+* **A φ is a definition and a set of reads, and neither is an instruction.** The name it
+  defines is defined where its block is entered, and each operand is read at the end of
+  the predecessor it arrives from — which is what "the version reaching the end of the
+  predecessor" means. Where the two happen is a third thing Selection passes on, and it is
+  not a detail: a value whose only definition is a φ would otherwise look like a value with
+  no definition at all and be live from the start of the program, and a value arriving along
+  the back edge of a loop would look live along every other edge into it too. Both make the
+  pressure a loop costs larger than the loop is.
 * **A copy's two ends are one life when the source dies there** — {@code mov d, s} with
   nothing left to read of {@code s} afterwards. Then {@code d} may as well *be*
   {@code s}: the copy becomes a register moved into itself, and the rule that drops those
