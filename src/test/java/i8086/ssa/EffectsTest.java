@@ -116,9 +116,9 @@ public final class EffectsTest {
                         + "    int 0x10 clobbers(flags)\n"
                         + "    int 0x10\n"));
 
-        // A block is the author's promise instead, and the same rule reads it: what the
-        // list names is destroyed, and what it does not name is left standing.
-        Assert.assertEquals(Arrays.asList("leaves what was there", "leaves nothing"),
+        // A block is not asked, because there is nobody to ask: it destroys the flags whatever
+        // its list says, and what it left behind is not something a program may read.
+        Assert.assertEquals(Arrays.asList("leaves nothing", "leaves nothing"),
                 leaves("    asm clobbers(ax) {\n        nop\n    }\n"
                         + "    asm clobbers(ax, flags) {\n        nop\n    }\n"));
     }

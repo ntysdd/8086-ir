@@ -62,8 +62,8 @@ public final class IrVerifierTest {
                 IrVerifierTest::refusesBadClobber);
         suite.add("Ir verifier accepts a branch after a comparison",
                 IrVerifierTest::acceptsBranchAfterCompare);
-        suite.add("Ir verifier keeps flags across an inline block that spares them",
-                IrVerifierTest::acceptsFlagsAcrossSparedBlock);
+        suite.add("Ir verifier refuses a branch across an inline block",
+                IrVerifierTest::refusesFlagsAcrossABlock);
         suite.add("Ir verifier refuses a branch with no flags behind it",                IrVerifierTest::refusesBranchWithoutFlags);
         suite.add("Ir verifier clears the flags at a label", IrVerifierTest::refusesBranchAfterLabel);
         suite.add("Ir verifier refuses a branch after a block that clobbers flags",
@@ -481,9 +481,11 @@ public final class IrVerifierTest {
                 + "done:\n    ret\n");
     }
 
-    private static void acceptsFlagsAcrossSparedBlock() {
-        verify("    var x: u16\n    cmp x, 0\n    asm clobbers(ax, dx) {\n        mov ah, 9\n    }\n"
-                + "    jz done\ndone:\n    ret\n");
+    private static void refusesFlagsAcrossABlock() {
+        // A block destroys the flags whatever its list says: the list is about registers,
+        // and the only honest answer about code this pass cannot read is the worst one.
+        refuses("test.ir:11:5", "    var x: u16\n    cmp x, 0\n    asm clobbers(ax, dx) {\n"
+                + "        mov ah, 9\n    }\n    jz done\ndone:\n    ret\n");
     }
 
     private static void refusesBranchWithoutFlags() {

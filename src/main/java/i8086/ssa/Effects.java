@@ -223,9 +223,9 @@ public final class Effects {
      * <p>A machine statement is where the surface cannot say which of the last two it means, and the
      * target is asked instead ({@link i8086.target.Target#machineWritesFlags}): a clobber list that
      * does not name the flags says they are not destroyed, and whether the statement <em>made</em>
-     * them is a fact about the instruction. An inline block is the author's promise in the other
-     * direction — the compiler cannot see inside it, so what it does not name is taken to survive,
-     * and {@code i8086.pass.Uses} stops removing anything at all in a module that has one.
+     * them is a fact about the instruction. An inline block is not asked, because there is nobody to
+     * ask: it destroys the flags, and a program that needs what it left behind says so with a
+     * statement the compiler understands ({@link #killsFlags}).
      */
     public static boolean writesFlags(Item item) {
         if (item instanceof Item.Compare || item instanceof Item.Eval) {
@@ -244,14 +244,25 @@ public final class Effects {
         return false;
     }
 
-    /** Whether this item destroys the flags, leaving them undefined ({@code docs/ir.md} §4.2). */
+    /**
+     * Whether this item destroys the flags, leaving them undefined ({@code docs/ir.md} §4.2).
+     *
+     * <p>A block destroys them whatever its list says. The list is about registers, and about the
+     * code the compiler cannot see the only honest answer for the flags is the worst one: most of
+     * what this machine does writes them, and an author who has to remember to write down every
+     * flag-setting instruction will sometimes not. GCC's x86 back end takes the same line — a
+     * {@code cc} clobber is implicit in every {@code asm} statement there, for the reason that "most
+     * x86 instructions write FLAGS" — and the cost is the same one: a program that needs the flags
+     * a block left behind has to say so in a form the compiler understands, which a machine
+     * statement is ({@code docs/ir.md} §11).
+     */
     public static boolean killsFlags(Item item) {
         if (item instanceof Item.Assign) {
             Value value = ((Item.Assign) item).value();
             return value instanceof Value.Expr || value instanceof Value.Convert;
         }
         if (item instanceof Item.InlineAsm) {
-            return clobbersFlags(((Item.InlineAsm) item).clobbers());
+            return true;
         }
         if (item instanceof Item.Machine) {
             return clobbersFlags(((Item.Machine) item).clobbers());
@@ -275,9 +286,10 @@ public final class Effects {
      *
      * <p>An inline block is a promise rather than an answer: it may read the flags
      * and the surface has no way to say so yet ({@code docs/ir.md} §9), so it is
-     * taken to read none and to leave them standing unless it says it clobbers
-     * them. That is the verifier's model too, and it is the honest one: this
-     * compiler cannot see inside the block.
+     * taken to read none — which costs nothing, because it destroys them anyway
+     * ({@link #killsFlags}) and a read of them is refused. That is the verifier's
+     * model too, and it is the honest one: this compiler cannot see inside the
+     * block.
      */
     public static boolean readsFlags(Item item) {
         if (item instanceof Item.Branch) {

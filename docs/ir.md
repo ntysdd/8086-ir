@@ -1358,6 +1358,15 @@ what this declaration buys today: not the registers the block *reads*, which it
 still cannot say, but a value it is allowed to destroy being known to be dead
 anyway.
 
+**The flags are the exception, and a block does not get to promise about them.** It
+destroys them whatever the list says, because most of what this machine does writes
+them and an author who has to remember every one of those will sometimes not; GCC's
+x86 back end takes the same line, where `cc` is implicit in every `asm` statement.
+What it costs is that a program needing the flags a block left behind says so with a
+statement the compiler understands (§11), and what it buys is that no flag value has
+to cross code the compiler cannot read — which is also what makes the declaration of
+what a block *reads* a question about registers and nothing else.
+
 ```
 asm clobbers(ax, dx, flags) {
     mov ah, 9
@@ -1605,7 +1614,11 @@ Five things about the form are deliberate:
   instead (§4.2), the list overrules it when the author names the flags, and those two answers are
   what say whether the comparison in front of the statement is still the comparison a branch
   behind it reads — which is the difference between branching on it and branching on whatever the
-  machine happened to have.
+  machine happened to have. **A block is not asked, because there is nobody to ask:** it destroys
+  the flags whatever its list says, since most of what this machine does writes them and an author
+  who has to remember every one of those will sometimes not. GCC's x86 back end takes the same
+  line — `cc` is implicit in every `asm` statement there — and the cost is the same: a program that
+  needs the flags a block left behind says so with a statement the compiler understands.
 
 **A statement that is an interface may be given its registers.** A BIOS call wants its
 arguments where the machine wants them, and the surface says so on the statement that

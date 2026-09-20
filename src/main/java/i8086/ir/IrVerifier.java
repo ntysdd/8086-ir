@@ -173,7 +173,11 @@ public final class IrVerifier {
             Item.InlineAsm block = (Item.InlineAsm) item;
             checkInlineAsm(block);
             checkArguments(block.arguments());
-            return block.clobbers().contains(Names.FLAGS) ? false : flagsDefined;
+            // A block is code this pass cannot read, and most of what this machine does
+            // writes the flags, so what is in force after it is not something the surface
+            // can claim to know (i8086.ssa.Effects). A program that wants the flags a
+            // block left behind says so with a statement the compiler understands.
+            return false;
         }
         if (item instanceof Item.Pad) {
             checkPad(item);
