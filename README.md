@@ -253,7 +253,8 @@ src/main/java/.../sim/        reference interpreter for the 8086
 src/main/java/.../cli/        command-line entry points
 src/test/java/...             unit tests, golden tests, round-trip tests
 src/test/resources/           golden files: IR samples, expected assembly/bytes
-examples/                     hand-written IR samples and expected output
+examples/                     hand-written IR samples, and one hand-written assembly
+                              reference to measure one of them against
 docs/ir.md                    the IR surface: syntax and semantics
 docs/asm.md                   the assembly text: syntax and encoding rules
 ```
@@ -274,10 +275,76 @@ nasm -f bin hello.asm -o hello.com                     # the assembler, until we
 ```
 
 `optimize` runs the pipeline and stops where `--emit` says — `ir`, `ssa` or `nasm`
-— and without `-o` it prints what it has instead of writing it. The two dumps are
-the only way to see the middle of the pipeline, and a stage is only reached by way
-of the verifications before it, so what comes out is something the compiler
-accepted.
+— and without `-o` it prints what it has instead of writing it. `build.bat run`
+compiles the product before it runs, so it is the one-word way in; once the compiler
+is built, `java -cp build/classes i8086.cli.Main optimize ...` is the same thing
+without the recompile. The two dumps are the only way to see the middle of the
+pipeline, and a stage is only reached by way of the verifications before it, so
+what comes out is something the compiler accepted.
+
+A refusal is not a warning. The message names the file and the line, it goes to
+standard error, the exit status is non-zero, and no assembly is written — which is
+what `AGENTS.md` means by unsupported input being a hard error.
+
+#### A worked example, end to end
+
+`examples/mbr7.ir` is a whole boot sector written in the IR: it scans the four
+partition entries of the MBR it is running from for the one marked bootable, reads
+that partition's first sector to `0x7E00` with `int 0x13` and a disk address packet,
+checks the `0xAA55` at the end of it, and jumps to it. If any of that fails it
+resets the disk and halts. Two commands take it from IR to an image:
+
+```
+build.bat run optimize examples/mbr7.ir -o mbr7.asm   # IR -> assembly (NASM dialect)
+nasm -f bin mbr7.asm -o mbr7.bin                      # assembly -> a 512-byte image
+```
+
+`mbr7.bin` is **512 bytes**, and the module is what says so: `parts: pad to 0x1BE`,
+`pad to 0x1FE` and `boot: dw 0xAA55` are what make the image a boot sector rather
+than a program. The code before that data is **76 bytes**. A hand-written version of
+the same sector, [`examples/mbr7.hand.asm`](examples/mbr7.hand.asm), is kept beside
+it so that the number can be checked, and it is **75**:
+
+| | code bytes |
+|---|---|
+| `examples/mbr7.ir` through the pipeline | 76 |
+| the same IR with each store written next to the load it stores | 75 |
+| `examples/mbr7.hand.asm`, written by hand | 75 |
+
+The byte has a name. `mbr7.ir` reads both halves of the partition entry and only
+then stores both, so both words are live at the stores and the allocator has to use
+two registers — and only one of the two register-direct stores is the three-byte
+form. Reading each half and storing it before reading the next, which is what the
+hand-written version does, lets one register do for both. The compiler does not make
+that change itself, and not because nobody thought of it: the store writes the packet
+and the load reads the partition entry, and nothing yet says those are different
+memory ([`docs/ir.md`](docs/ir.md) §3.4), so the order the author wrote is the order
+they get. The whole of the gap is one line of the program rather than a missing
+optimisation.
+
+What this example is not:
+
+* **It has never been run.** There is no 8086 emulator here and no interpreter in
+  the tree, so what is known about `mbr7` is that it assembles, that the image is the
+  512 bytes a boot sector has to be, that the same job written by hand comes out
+  within a byte of it, and that a golden test pins the assembly the compiler writes
+  for it. Whether it boots is not a question this repo can answer today.
+* **It is a chainloader, not a kernel.** It assumes it was loaded at `0x7C00`, that
+  the disk it came from is the one the BIOS calls `0x80`, and that `int 0x13 ah=0x42`
+  (the extended read) exists — there is no CHS fallback. It reads exactly one sector,
+  so the system it jumps to has to fit in one, and on failure it says nothing and
+  halts.
+* **It is one path through the compiler, not a conformance suite.** It exercises
+  `int` with a clobber list and a `with` clause, the machine's own registers, byte and
+  word loads and stores, `cmp` and the branches, the countdown that becomes `loop`,
+  a far jump, and a layout that has to reach `0x1BE` and `0x1FE` to the byte. It does
+  not exercise `call`, `setcc`, the string operations with `rep`, multiplication or
+  division, a byte value widened into a word, or a value that has to live in memory
+  because no register is left — so the list under *Status* and this file answer two
+different questions, and passing one says nothing about the other.
+
+For scale, the other examples in the tree are smaller: `examples/hello.ir` is 22
+bytes and `examples/sum.ir` is 38.
 
 ### Testing strategy
 
@@ -426,7 +493,8 @@ have a home used for it, because moving a value in and out of one is a whole reg
 worth of access ([`docs/ir.md`](docs/ir.md) §3.1.2). Three things the
 pipeline names are also absent:
 materialising a flag value that has to survive an instruction defining those flags,
-promoting memory to values, and any target-specific pass. And two deliberate
+promoting memory to values. (The 8086's target-specific tail is not among them: those three
+are built, step 5 above.) And two deliberate
 retreats, each with the missing piece named: nothing may be removed from a module
 containing an inline assembly block, because a block cannot say what it reads yet
 (§9), and no load is reusable, because nothing yet says when two accesses are the
