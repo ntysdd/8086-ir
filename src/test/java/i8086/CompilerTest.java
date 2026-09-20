@@ -34,12 +34,66 @@ public final class CompilerTest {
                     + "\n"
                     + "$msg: db \"Hello, world!$\"\n";
 
+    private static final String EXPECTED_MBR_ASM =
+            "org 0x7c00\n"
+                    + "\n"
+                    + "$main:\n"
+                    + "    cli\n"
+                    + "    xor ax, ax\n"
+                    + "    mov ds, ax\n"
+                    + "    mov es, ax\n"
+                    + "    mov ss, ax\n"
+                    + "    mov sp, 0x7c00\n"
+                    + "    sti\n"
+                    + "    mov bx, $parts\n"
+                    + "    mov cx, 4\n"
+                    + "\n"
+                    + "$find:\n"
+                    + "    cmp byte [bx], 0x80\n"
+                    + "    jz $found\n"
+                    + "    add bx, 0x10\n"
+                    + "    loop $find\n"
+                    + "    hlt\n"
+                    + "\n"
+                    + "$found:\n"
+                    + "    mov cx, word [bx+8]\n"
+                    + "    mov ax, word [bx+0xa]\n"
+                    + "    mov word [$dap+8], cx\n"
+                    + "    mov word [$dap+0xa], ax\n"
+                    + "    mov ah, 0x42\n"
+                    + "    mov dl, 0x80\n"
+                    + "    mov si, $dap\n"
+                    + "    int 0x13\n"
+                    + "    jc $failed\n"
+                    + "    cmp word [0x7dfe], 0xaa55\n"
+                    + "    jnz $failed\n"
+                    + "    mov dl, 0x80\n"
+                    + "    jmp 0:0x7e00\n"
+                    + "\n"
+                    + "$failed:\n"
+                    + "    mov ah, 0\n"
+                    + "    mov dl, 0x80\n"
+                    + "    int 0x13\n"
+                    + "    hlt\n"
+                    + "\n"
+                    + "$dap: db 0x10, 0, 1, 0, 0, 0x7e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n"
+                    + "\n"
+                    + "$parts: times 0x1be-($-$$) db 0\n"
+                    + "\n"
+                    + "$entry0: db 0x80, 0, 1, 0, 0x83, 0, 0, 0\n"
+                    + "dw 1, 0, 1, 0\n"
+                    + "times 0x1fe-($-$$) db 0\n"
+                    + "\n"
+                    + "$boot: dw 0xaa55\n";
+
     private CompilerTest() {
     }
 
     public static void register(Suite suite) {
         suite.add("Compiler turns the shipped example into assembly",
                 CompilerTest::compilesShippedExample);
+        suite.add("Compiler turns the boot sector example into a 512-byte image's assembly",
+                CompilerTest::compilesTheBootSectorExample);
         suite.add("Compiler folds a program with nothing unknown in it away",
                 CompilerTest::foldsWhatNothingReads);
         suite.add("Compiler keeps the example loop in registers",
@@ -573,6 +627,31 @@ public final class CompilerTest {
 
     private static void compilesShippedExample() {
         Assert.assertEquals(EXPECTED_ASM, Compiler.compile("examples/hello.ir", readExample()));
+    }
+
+    /**
+     * And the second example is a whole boot sector, which is the thing this compiler is for: an MBR
+     * that finds the one bootable partition, reads its first sector with EBIOS, and hands control to
+     * it. It is the only program in the repository that is a real one — a page of declarations and
+     * machine statements rather than a paragraph of arithmetic — and it is here because a compiler
+     * that has never compiled one has not been told what its domain looks like.
+     *
+     * <p>Its code is 76 bytes and the hand-written version of the same program is 75
+     * ({@code mbr7.asm}, written out by hand for the comparison). The byte is named: the two halves
+     * of the LBA are loaded through {@code cx} and {@code ax} and stored with {@code 89 0E} where
+     * one store through {@code ax} would be {@code A3}, and getting there means proving that a store
+     * to a fixed address cannot be the load the second half is still waiting for — aliasing, which
+     * needs a value analysis or a declaration and is not something this compiler has
+     * ({@code docs/ir.md} §3.4).
+     *
+     * <p>The image is 512 bytes with the partition table at 0x1BE and the signature at 0x1FE, both
+     * of which are the program's own {@code pad to} — layout in the language, which is the one thing
+     * an assembler makes a person count by hand.
+     */
+    private static void compilesTheBootSectorExample() {
+        Assert.assertEquals(EXPECTED_MBR_ASM, Compiler.compile("examples/mbr7.ir", readExample("examples/mbr7.ir")));
+        Assert.assertTrue(readExample("examples/mbr7.ir").contains("entry main"),
+                "the example says where it starts");
     }
 
     private static String readExample() {

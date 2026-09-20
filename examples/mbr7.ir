@@ -1,0 +1,55 @@
+target 8086
+org 0x7C00
+entry main
+
+main:
+    cli
+    movreg ds, 0
+    movreg es, 0
+    movreg ss, 0
+    movreg sp, 0x7C00
+    sti
+
+    var tries: u16
+    var base: u16
+    var flag: u8
+    var lo: u16
+    var hi: u16
+    var sig: u16
+
+    base = parts
+    tries = 4
+find:
+    flag = byte [base]
+    cmp flag, 0x80
+    jz found
+    base = eval(base + 16)
+    tries = eval(tries - 1)
+    cmp tries, 0
+    jnz find
+    hlt
+
+found:
+    lo = word [base + 8]
+    hi = word [base + 10]
+    word [dap + 8] = lo
+    word [dap + 10] = hi
+
+    int 0x13 clobbers(ax, bx, cx, dx) with ah = 0x42, dl = 0x80, si = dap
+    jc failed
+    sig = word [0x7DFE]
+    cmp sig, 0xAA55
+    jnz failed
+
+    jmp 0x0000:0x7E00 with dl = 0x80
+
+failed:
+    int 0x13 clobbers(ax, bx, cx, dx) with ah = 0, dl = 0x80
+    hlt
+
+dap:    db 0x10, 0, 1, 0, 0x00, 0x7E, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+parts:  pad to 0x1BE
+entry0: db 0x80, 0, 1, 0, 0x83, 0, 0, 0
+        dw 1, 0, 1, 0
+        pad to 0x1FE
+boot:   dw 0xAA55
