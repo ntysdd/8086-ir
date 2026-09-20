@@ -221,6 +221,21 @@ public interface Target {
     }
 
     /**
+     * Whether this mnemonic's last operand is a count rather than data of the instruction's own
+     * width, and a byte because of it ({@code docs/ir.md} §5.6).
+     *
+     * <p>An instruction's operands have one width between them — that is what one register class per
+     * width means, and the property test that says so over every program in the suite is what
+     * catches a mixed one before an assembler ever sees it. A shift is the exception on this
+     * machine, and it is the reason the question is here rather than in the test: the count is a
+     * register, it is always a byte, and the value being shifted may be a word — {@code SHL r/m, imm8}
+     * arrived with the 80186, so the count comes from {@code cl} whatever the width of the value.
+     */
+    default boolean hasAByteCount(String mnemonic) {
+        return false;
+    }
+
+    /**
      * What a machine statement does with the flags, by name ({@code docs/ir.md} §11): the ones it
      * leaves a value of its own in, and the ones whose value decides what it does.
      *

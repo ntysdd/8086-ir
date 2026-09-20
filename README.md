@@ -286,6 +286,13 @@ accepted.
   module twice yields identical text.
 * Pass tests: verify SSA before and after every transformation; assert specific
   optimization behaviours, including the "must not optimize" cases.
+* Two properties over the whole compiler, asked of the shapes and of every module in
+  `examples/`, because a golden only covers the path it happens to walk: **one width per
+  instruction** in the assembly that comes out, with the exception the target names for a shift's
+  count (`InstructionWidthsTest`), and **renaming a name to itself changes nothing**, which is what
+  says no pass lost a field when it rebuilt the item it kept (`RenamerTest`). Both are quiet about
+  programs that do not have the disease, and each has a test of its own that hands it a case that
+  does, so that "it never fires" cannot be told from "it has no teeth".
 * Assembler tests: encode each instruction form and check the exact bytes
   against known-good encodings; decode them back and compare. The decoder
   exists for this check only — it is not a general 8086 disassembler.

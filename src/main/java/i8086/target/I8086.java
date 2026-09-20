@@ -431,6 +431,13 @@ public final class I8086 implements Target {
             "movsb", "movsw", "stosb", "stosw", "lodsb", "lodsw");
 
     /**
+     * The operations whose last operand is a byte count, whatever the width of what they shift
+     * ({@code docs/ir.md} §5.6).
+     */
+    private static final Set<String> COUNTED_BY_A_BYTE = names(
+            "shl", "shr", "sar", "rol", "ror", "rcl", "rcr");
+
+    /**
      * The machine's operations that are statements of their own, and what each
      * destroys when the author does not say ({@code docs/ir.md} §11).
      *
@@ -497,6 +504,11 @@ public final class I8086 implements Target {
             return Collections.unmodifiableList(destroyed);
         }
         return Collections.emptyList();
+    }
+
+    @Override
+    public boolean hasAByteCount(String mnemonic) {
+        return COUNTED_BY_A_BYTE.contains(mnemonic);
     }
 
     /**
