@@ -653,6 +653,13 @@ matters:
   propagated as though it had a value.
 * `MOV` and loads do not touch flags at all.
 
+**What is asked of them today is coarser than that.** A *form* answers with one boolean for the
+whole set — "the flags afterwards are the operation's" or not — so `ADD r, 1` may only become
+`INC r` where *no* flag is read afterwards, when the machine fact is that only `CF` differs.
+`d = eval(d + 1)` followed by a branch on `ZF` therefore spends the three bytes of the addition
+where the increment is one, and those two bytes are what asking per flag would buy back.
+**[open]** — none of the three states is a value yet; the whole set is one name (§4.1).
+
 **Two instructions may stand for one another when they leave the same flags**, and which
 ones do is the target's to say rather than the back end's to assume. On this machine:
 
@@ -672,6 +679,20 @@ ones do is the target's to say rather than the back end's to assume. On this mac
 Both are choices of instruction rather than changes to the program: the writer said which
 value and which question, and which instruction carries it is the back end's — bounded by
 what the target promises about the flags, and by nothing else.
+
+**A statement has the same three states, and the target is what says which** — because a
+statement's clobber list cannot. A list says what a statement destroys, so a list that does
+not name the flags says they are not destroyed, and that covers two opposite things:
+`cli` clears the interrupt flag and leaves the arithmetic flags exactly as they were, while
+`int 0x10` goes into code this module has never seen and what comes back in the flags is
+what the handler left. The first is a value that has to **survive** the statement and the
+second is a value the statement **made**, and the difference is exactly the difference
+between deleting the comparison in front of it and keeping it: with `cli` the `cmp` is still
+what the branch behind it reads, and with `int` it is nobody's. So the target answers per
+mnemonic (`Target.machineWritesFlags`), the clobber list overrules it when the author names
+the flags, and a statement kind the target says nothing about is taken to leave the flags
+alone — the direction whose mistake is a comparison that stays rather than a branch that
+reads whatever was in the register.
 
 ### 4.3 Undefined flags — [decided]
 
@@ -1557,7 +1578,7 @@ directions — it makes a whole module unoptimisable (§9) — while one of thes
 exactly what it does: it is an effect, and it carries a list of what it destroys,
 which is what an allocator and SSA need and all they need.
 
-Three things about the form are deliberate:
+Five things about the form are deliberate:
 
 * **No register operands outside a clause.** Why these six and not `in`/`out`: an operation that
   reads or writes a register the machine names has nowhere to put it unless the statement
@@ -1578,6 +1599,13 @@ Three things about the form are deliberate:
   handler was trusted to keep. That is true of every inline-assembly facility there
   has ever been, and the reason the default is the worst case rather than the
   friendliest: silence is the only answer the target can give honestly.
+* **The flags are not the list's to describe.** A list says what a statement destroys, so not
+  naming the flags covers two opposite statements: `cli` leaves the arithmetic flags exactly as
+  they were, and `int 0x10` leaves whatever the handler left. The target answers for the mnemonic
+  instead (§4.2), the list overrules it when the author names the flags, and those two answers are
+  what say whether the comparison in front of the statement is still the comparison a branch
+  behind it reads — which is the difference between branching on it and branching on whatever the
+  machine happened to have.
 
 **A statement that is an interface may be given its registers.** A BIOS call wants its
 arguments where the machine wants them, and the surface says so on the statement that

@@ -220,6 +220,28 @@ public interface Target {
     }
 
     /**
+     * Whether a machine statement's flags are the ones it leaves, rather than the ones from before
+     * it ({@code docs/ir.md} §11).
+     *
+     * <p>A clobber list says what a statement destroys, and the flags are one of the things it can
+     * name. What no list can say is the difference between the two ways a statement fails to name
+     * them, and on this machine those are opposite things. Clearing the interrupt flag leaves the
+     * arithmetic flags exactly as they were, so the comparison in front of it is still the
+     * comparison a branch behind it reads. An interrupt goes into code this module has never seen,
+     * and what the handler leaves in the flags is a value the statement <em>made</em> — which is
+     * what an author writing {@code jc} after it means.
+     *
+     * <p>One of those is a value that has to survive the statement and the other is a value the
+     * statement produced, and reading both the same way is the difference between branching on the
+     * comparison and branching on nothing at all ({@code Effects}). Answering {@code false} is the
+     * safe direction: a definition the compiler still believes in is code that stays, and code that
+     * stays is not a wrong program. A target whose statements produce flags of their own says so.
+     */
+    default boolean machineWritesFlags(String mnemonic) {
+        return false;
+    }
+
+    /**
      * The registers a value may live in, in the order they should be used up.
      *
      * <p>This is the register class the allocator colours against: what is in the

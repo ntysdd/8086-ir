@@ -70,7 +70,8 @@ final class Renamer {
             // ({@code docs/ir.md} §11).
             Item.Machine machine = (Item.Machine) item;
             return new Item.Machine(item.position(), machine.mnemonic(), machine.operands(),
-                    machine.clobbers(), rename(machine.arguments(), versions));
+                    machine.clobbers(), rename(machine.arguments(), versions),
+                    machine.writesFlags());
         }
         if (item instanceof Item.FarJump) {
             Item.FarJump far = (Item.FarJump) item;

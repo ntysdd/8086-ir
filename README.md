@@ -135,7 +135,11 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    pass handles it without needing to know what a flag is.
    **Mostly built.** Dominators, φ's and renaming are done, the flags included;
    promoting memory and materialising a flag value are not. Both wait on the same
-   missing thing — the target's per-flag effects — and neither is needed yet.
+   missing thing — the target's per-flag effects — and neither is needed yet. What the
+   flags do have is the three states (§4.2), asked of a statement as well as of an
+   operation: a statement says whether it makes them, gives them up, or leaves them
+   exactly as they were, and only the last of those keeps the definition in front of it
+   alive (`i8086.target.Target#machineWritesFlags`).
 4. **Optimize**, as a sequence of verified passes. The bulk of the pipeline is
    generic: constant folding and propagation, dead code elimination, copy
    propagation, global value numbering / CSE, redundant load elimination,

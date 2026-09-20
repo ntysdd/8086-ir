@@ -30,6 +30,8 @@ public final class MachineTest {
                 MachineTest::saysWhatItDestroys);
         suite.add("Saying nothing means everything", MachineTest::sayingNothingMeansEverything);
         suite.add("The flags survive what does not touch them", MachineTest::flagsSurvive);
+        suite.add("The flags are the handler's after an interrupt",
+                MachineTest::flagsAreTheHandlersAfterAnInterrupt);
         suite.add("The flags do not survive an interrupt", MachineTest::flagsDieAtAnInterrupt);
         suite.add("The target says which statements it has", MachineTest::theTargetSays);
         suite.add("A machine statement refuses an immediate that does not fit",
@@ -105,7 +107,10 @@ public final class MachineTest {
 
     private static void flagsSurvive() {
         // 'cli' touches the interrupt flag, not the arithmetic ones, so a comparison
-        // read after it still has its flags (docs/ir.md §4.3).
+        // read after it still has its flags (docs/ir.md §4.3) — and that means the
+        // comparison itself is what the branch reads, so it is still there. Believing
+        // the flags were the statement's own is what let this comparison be deleted,
+        // which leaves the branch reading whatever the machine happened to have.
         String body = "    var x: u16\n"
                 + "    x = 1\n"
                 + "    cmp x, 2\n"
@@ -113,7 +118,42 @@ public final class MachineTest {
                 + "    jc there\n"
                 + "there:\n"
                 + "    ret\n";
-        Assert.assertTrue(assembly(body).contains("    jc $there\n"), assembly(body));
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, 1\n"
+                        + "    cmp ax, 2\n"
+                        + "    cli\n"
+                        + "    jc $there\n"
+                        + "\n"
+                        + "$there:\n"
+                        + "    ret\n",
+                assembly(body));
+    }
+
+    /**
+     * And the other way round, which is why the target is asked at all: an interrupt goes into
+     * code this module has never seen, so the flags after it are the handler's and the comparison
+     * in front of it is nobody's. The branch is still a branch the surface may write, because what
+     * it reads is a value that exists ({@code docs/ir.md} §4.3).
+     */
+    private static void flagsAreTheHandlersAfterAnInterrupt() {
+        String body = "    var x: u16\n"
+                + "    x = 1\n"
+                + "    cmp x, 2\n"
+                + "    int 0x10 clobbers(ax, bx, cx, dx)\n"
+                + "    jc there\n"
+                + "there:\n"
+                + "    ret\n";
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    int 0x10\n"
+                        + "    jc $there\n"
+                        + "\n"
+                        + "$there:\n"
+                        + "    ret\n",
+                assembly(body));
     }
 
     private static void flagsDieAtAnInterrupt() {
@@ -141,6 +181,15 @@ public final class MachineTest {
                 target.machineClobbers("int").toString());
         Assert.assertEquals("[flags]", target.machineClobbers("iret").toString());
         Assert.assertEquals("[]", target.machineClobbers("cli").toString());
+        // The flags are the ones the statement leaves for these two, and the ones from
+        // before it for the rest: clearing an interrupt flag and doing nothing are not
+        // ways of computing a flag.
+        Assert.assertTrue(target.machineWritesFlags("int"), "int");
+        Assert.assertTrue(target.machineWritesFlags("iret"), "iret");
+        Assert.assertFalse(target.machineWritesFlags("cli"), "cli");
+        Assert.assertFalse(target.machineWritesFlags("sti"), "sti");
+        Assert.assertFalse(target.machineWritesFlags("hlt"), "hlt");
+        Assert.assertFalse(target.machineWritesFlags("nop"), "nop");
     }
 
     private static void refusesWideImmediate() {

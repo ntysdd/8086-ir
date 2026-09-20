@@ -208,7 +208,25 @@ public final class Effects {
         return null;
     }
 
-    /** Whether this item leaves the flags defined. */
+    /**
+     * Whether this item leaves the flags defined: a value of its own, rather than the one from
+     * before it ({@code docs/ir.md} §4.2).
+     *
+     * <p>The three states are asked together and they are not the same question. An arithmetic
+     * statement computes flags, so what is in force afterwards is what it computed. A conversion
+     * or an {@code expr} gives them up, so nothing is. Everything else — a move, a comparison of two
+     * loads, a statement about machine state — leaves them exactly as they were, which is a third
+     * answer and not the second one: the value in force is still the older definition, and a
+     * compiler that thought otherwise would be free to delete it, leaving the next branch to read
+     * whatever the machine happened to have.
+     *
+     * <p>A machine statement is where the surface cannot say which of the last two it means, and the
+     * target is asked instead ({@link i8086.target.Target#machineWritesFlags}): a clobber list that
+     * does not name the flags says they are not destroyed, and whether the statement <em>made</em>
+     * them is a fact about the instruction. An inline block is the author's promise in the other
+     * direction — the compiler cannot see inside it, so what it does not name is taken to survive,
+     * and {@code i8086.pass.Uses} stops removing anything at all in a module that has one.
+     */
     public static boolean writesFlags(Item item) {
         if (item instanceof Item.Compare || item instanceof Item.Eval) {
             return true;
@@ -217,15 +235,16 @@ public final class Effects {
             return ((Item.Assign) item).value() instanceof Value.Eval;
         }
         if (item instanceof Item.InlineAsm) {
-            return !clobbersFlags(((Item.InlineAsm) item).clobbers());
+            return false;
         }
         if (item instanceof Item.Machine) {
-            return !clobbersFlags(((Item.Machine) item).clobbers());
+            Item.Machine machine = (Item.Machine) item;
+            return machine.writesFlags() && !clobbersFlags(machine.clobbers());
         }
         return false;
     }
 
-    /** Whether this item destroys the flags, leaving them undefined. */
+    /** Whether this item destroys the flags, leaving them undefined ({@code docs/ir.md} §4.2). */
     public static boolean killsFlags(Item item) {
         if (item instanceof Item.Assign) {
             Value value = ((Item.Assign) item).value();
@@ -256,7 +275,7 @@ public final class Effects {
      *
      * <p>An inline block is a promise rather than an answer: it may read the flags
      * and the surface has no way to say so yet ({@code docs/ir.md} §9), so it is
-     * taken to read none and to leave them defined unless it says it clobbers
+     * taken to read none and to leave them standing unless it says it clobbers
      * them. That is the verifier's model too, and it is the honest one: this
      * compiler cannot see inside the block.
      */

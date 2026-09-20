@@ -139,16 +139,21 @@ public final class DeadValueEliminationTest {
     private static void keepsBlocksAndTheirScope() {
         // A block cannot say what it reads (docs/ir.md §9), so nothing in its
         // scope may be removed — not even a value that looks as dead as this one.
+        //
+        // And the block leaves the flags standing rather than making them its own:
+        // a list that does not name them says they are not destroyed, and what the
+        // block does inside is not something this compiler can see, so the value in
+        // force is still whatever was there before it.
         Assert.assertEquals("; SSA form of target 8086, entry main\n"
                         + "\n"
                         + "block0 (main):\n"
                         + "    var x: u16\n"
                         + "    var y: u16\n"
                         + "    x#1 = 1\n"
-                        + "    flags#2 = asm clobbers(ax) {\n"
+                        + "    asm clobbers(ax) {\n"
                         + "        int 0x21\n"
                         + "    }\n"
-                        + "    y#3 = eval(x#1 + 1)\n"
+                        + "    y#2 = eval(x#1 + 1)\n"
                         + "    ret\n",
                 after("    var x: u16\n    var y: u16\n"
                         + "    x = 1\n"

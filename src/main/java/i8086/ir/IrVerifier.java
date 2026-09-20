@@ -211,7 +211,14 @@ public final class IrVerifier {
             checkArguments(machine.arguments());
             // The flags are the one thing a machine statement may leave standing: 'cli'
             // does not touch the arithmetic flags, and a comparison may be read after it.
-            return !machine.clobbers().contains(Names.FLAGS);
+            // Whether the statement made flags of its own instead is the target's to say
+            // ({@code i8086.target.Target#machineWritesFlags}), and it is the question SSA
+            // asks of the same statement ({@code i8086.ssa.Effects}) — asked here of the
+            // module, because this pass runs before there is a form to ask.
+            if (machine.clobbers().contains(Names.FLAGS)) {
+                return false;
+            }
+            return machine.writesFlags() || flagsDefined;
         }
         if (item instanceof Item.Data) {
             checkData((Item.Data) item);

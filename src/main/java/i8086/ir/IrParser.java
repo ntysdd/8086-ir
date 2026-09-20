@@ -734,7 +734,7 @@ public final class IrParser {
         List<Item.Argument> arguments = parseWithClause();
         endOfLine();
         return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers,
-                arguments);
+                arguments, target.machineWritesFlags(keyword.name()));
     }
 
     /**

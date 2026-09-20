@@ -459,6 +459,21 @@ public final class I8086 implements Target {
     }
 
     /**
+     * {@code int} and {@code iret} leave flags of their own: the handler's, and the ones the
+     * interrupted program had.
+     *
+     * <p>The rest of what this machine can be told to do is a command about machine state — an
+     * interrupt flag, a halt, a no-op — and the arithmetic flags come through all of them
+     * unchanged. That is what makes a {@code cmp} in front of a {@code cli} still the comparison a
+     * branch behind it reads, and reading it the other way round deletes the comparison
+     * ({@code Effects}).
+     */
+    @Override
+    public boolean machineWritesFlags(String mnemonic) {
+        return mnemonic.equals("int") || mnemonic.equals("iret");
+    }
+
+    /**
      * The registers a value may live in, in the order the allocator should use
      * them up.
      *
