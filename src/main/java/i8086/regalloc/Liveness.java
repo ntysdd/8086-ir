@@ -24,7 +24,11 @@ import java.util.Set;
  * point reads what its instructions mention and writes what its item defines — and a merge
  * is the one thing that is neither, so it comes in with the selection: a φ's name is
  * defined where its block is entered, and its operands are read at the end of the
- * predecessor each arrives from ({@code docs/ssa.md} §8).
+ * predecessor each arrives from ({@code docs/ssa.md} §8). A read at the end of a point is
+ * not a read before it, and the difference is a register: what the predecessor's last
+ * statement defines is read out of the register it was just written to, so it is not a
+ * value that has to be in one on the way in — and saying it is, is a value live from the
+ * start of the program and edges in the graph that are not there.
  *
  * <p>The edges between points are the ones the module makes: a point carries on to the
  * next one unless its last instruction goes somewhere else, and a branch also reaches the
@@ -67,6 +71,7 @@ public final class Liveness {
         List<Selection.Piece> pieces = selection.pieces();
         List<Set<String>> uses = new ArrayList<Set<String>>();
         List<Set<String>> defs = new ArrayList<Set<String>>();
+        List<Set<String>> endReads = new ArrayList<Set<String>>();
         for (Selection.Piece piece : pieces) {
             // What the point writes is not something it reads, even though the instruction
             // mentions it — every name here has one definition, so a point that both writes
@@ -84,6 +89,7 @@ public final class Liveness {
             }
             uses.add(read);
             defs.add(written);
+            endReads.add(new LinkedHashSet<String>());
         }
 
         // A merge is a definition and a set of reads, and neither is an item or an instruction: the
@@ -91,7 +97,9 @@ public final class Liveness {
         // predecessor it arrives from, because the register is what carries it along that path
         // (docs/ssa.md §8). Without this a value whose only definition is a φ looks like a value with
         // no definition at all — alive from the start of the program — and a value that arrives along
-        // one edge looks live along all of them.
+        // one edge looks live along all of them. Those reads go in a set of their own, for the reason
+        // the class comment gives: they happen after the point's instructions, so they are not what
+        // makes it live before them.
         List<Selection.Merge> merges = selection.merges();
         List<List<String>> groups = selection.registerGroups();
         for (int merge = 0; merge < merges.size() && merge < groups.size(); merge++) {
@@ -107,7 +115,7 @@ public final class Liveness {
             for (int operand = 0; operand + 1 < names.size() && operand < points.size(); operand++) {
                 int read = points.get(operand).intValue();
                 if (read >= 0 && read < pieces.size()) {
-                    uses.get(read).add(names.get(operand + 1));
+                    endReads.get(read).add(names.get(operand + 1));
                 }
             }
         }
@@ -124,7 +132,7 @@ public final class Liveness {
         while (changed) {
             changed = false;
             for (int i = points - 1; i >= 0; i--) {
-                Set<String> after = new LinkedHashSet<String>();
+                Set<String> after = new LinkedHashSet<String>(endReads.get(i));
                 for (Integer successor : successors.get(i)) {
                     after.addAll(liveBefore.get(successor.intValue()));
                 }

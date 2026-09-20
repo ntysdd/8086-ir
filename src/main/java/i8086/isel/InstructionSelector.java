@@ -172,7 +172,11 @@ public final class InstructionSelector {
      * operand is read at the end of the predecessor it arrives from, which is that block's last piece.
      * A φ's operands are in the order of the block's predecessors, and the ones that are not values
      * are skipped in both lists alike — an undefined value is the name for "this variable, with no
-     * value", and there is nothing for it to agree with ({@code docs/ssa.md} §5).
+     * value", and there is nothing for it to agree with ({@code docs/ssa.md} §5). Skipping an
+     * operand is what makes the two lists the same length, and it must not move the predecessor the
+     * next operand is paired with: the operands are the predecessors', one for one, and an undefined
+     * one still belongs to its own. Pairing them one off is not a lost read but a read attributed to
+     * the wrong predecessor, which is liveness along an edge that does not exist.
      */
     private List<Selection.Merge> merges(List<List<String>> groups,
                                          Map<Block, Integer> firstPiece,
@@ -185,13 +189,13 @@ public final class InstructionSelector {
                 List<Integer> points = new ArrayList<Integer>();
                 int operand = 0;
                 for (String name : phi.operands()) {
+                    Block from = operand < predecessors.size() ? predecessors.get(operand) : null;
+                    operand++;
                     if (!form.isVersion(name)) {
                         continue;
                     }
-                    Block from = operand < predecessors.size() ? predecessors.get(operand) : null;
                     Integer point = from == null ? null : lastPiece.get(from);
                     points.add(point == null ? Integer.valueOf(0) : point);
-                    operand++;
                 }
                 where.add(new Selection.Merge(firstPiece.get(block).intValue(), points));
                 group++;
