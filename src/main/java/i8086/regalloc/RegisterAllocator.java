@@ -144,6 +144,7 @@ public final class RegisterAllocator {
     private Selection run(Selection selection) {
         this.selection = selection;
         groupNames(selection);
+        requireValuesFitInARegister(selection);
         this.liveness = Liveness.of(selection, target);
         for (int point = 0; point < selection.pieces().size(); point++) {
             scratches.add(new LinkedHashMap<String, String>());
@@ -775,6 +776,33 @@ public final class RegisterAllocator {
     private boolean fitsInARegister(String value) {
         Type type = selection.typeOf(value);
         return type != null && type.bytes() <= Size.WORD.bytes();
+    }
+
+    /**
+     * Refuses a value wider than a register, before anything tries to place one.
+     *
+     * <p>A register holds one register's worth of value, and the only answer for more is two of
+     * them — which nothing here can name, so a value of four bytes is refused where it is first
+     * mentioned rather than given half a register. What that would otherwise be is a silent
+     * truncation: {@code x = 0} for a {@code u32} would clear sixteen bits of a value the program
+     * thinks it has thirty-two of, and a store of it would write half of it out
+     * ({@code docs/ir.md} §3.4).
+     *
+     * <p>The work the value is doing can be done, and the message says how: as two halves the
+     * program moves itself, or as bytes in memory ({@code docs/ir.md} §10).
+     */
+    private void requireValuesFitInARegister(Selection selection) {
+        for (String value : values) {
+            if (fitsInARegister(value)) {
+                continue;
+            }
+            Type type = selection.typeOf(value);
+            throw new CompileError(positions.get(value),
+                    "a " + (type == null ? "value" : type.spelling()) + " is wider than a register, "
+                            + "and nothing here can name a pair: write it as two halves the program "
+                            + "moves itself, or keep it in memory and work on its parts "
+                            + "(docs/ir.md §3.4)");
+        }
     }
 
     /** The registers the values alive at a point are in. A value in a home is in none. */

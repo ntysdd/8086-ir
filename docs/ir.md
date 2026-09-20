@@ -475,6 +475,13 @@ wrong answer the program is not told about, and a hard error is what this compil
 instead. A value wider than a register cannot use a home either: the access a home is moved
 with is one register's worth at most, and this back end cannot name a pair (§3.4).
 
+**Nor can it live in a register**, and that is refused where the value is first mentioned
+rather than done halfway: two registers are what four bytes need, nothing here can name a
+pair, and everything the value is used for would otherwise be a word operation on the low
+half of it — a store that writes half of it out, an addition that carries sixteen bits too
+few. Two halves the program moves itself, or bytes in memory worked on a part at a time, is
+what the refusal points at.
+
 ### 3.2 Widths and signedness — [decided]
 
 `u8`, `u16`, `u32`, `i8`, `i16`, `i32`. No `u64`.

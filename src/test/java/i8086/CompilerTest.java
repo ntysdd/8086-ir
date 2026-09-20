@@ -61,6 +61,16 @@ public final class CompilerTest {
         suite.add("Compiler tests a byte against zero", CompilerTest::testsAByteAgainstZero);
         suite.add("Compiler leaves a test the writer wrote alone",
                 CompilerTest::leavesATestThatWasWritten);
+        suite.add("Compiler compares a literal with a byte",
+                CompilerTest::comparesALiteralOnTheLeftOfAByte);
+        suite.add("Compiler compares a literal with a word",
+                CompilerTest::comparesALiteralOnTheLeftOfAWord);
+        suite.add("Compiler computes a byte expression in byte registers",
+                CompilerTest::computesAByteExpressionInByteRegisters);
+        suite.add("Compiler keeps a statement eval at the width of its operands",
+                CompilerTest::keepsAStatementEvalAtTheWidthOfItsOperands);
+        suite.add("Compiler refuses a value wider than a register",
+                CompilerTest::refusesAValueWiderThanARegister);
         suite.add("Compiler expands a constant multiply into shifts",
                 CompilerTest::expandsMultiply);
         suite.add("Compiler refuses a form whose flags are still wanted",
@@ -559,6 +569,149 @@ public final class CompilerTest {
                 "the operand is not the literal, so the test stays as it was written: " + assembly);
         Assert.assertTrue(assembly.contains("    cmp ax, 1\n"),
                 "and a comparison with something that is not zero is a comparison: " + assembly);
+    }
+
+    // --- a temporary has the width of what it holds (docs/ir.md §3.2) ------
+
+    /**
+     * A literal on the left of a comparison takes the width of the other side, and the register the
+     * selector puts it in has to be that wide: the machine takes the first operand in a register and
+     * will not take a byte value through a word one, so {@code cmp al, cl} is an instruction and
+     * {@code cmp ax, cl} is not ({@code docs/ir.md} §3.2).
+     */
+    private static void comparesALiteralOnTheLeftOfAByte() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cl, byte [0x40]\n"
+                        + "    mov al, 0\n"
+                        + "    cmp al, cl\n"
+                        + "    jz $done\n"
+                        + "    mov [0x42], cl\n"
+                        + "\n"
+                        + "$done:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $c: u8\n"
+                        + "    c = byte [0x40]\n"
+                        + "    cmp 0, c\n"
+                        + "    jz $done\n"
+                        + "    [0x42] = c\n"
+                        + "$done:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The same comparison against a word, where the temporary is a word and the zero is built
+     * without being moved, because nothing can read the flags in front of a comparison that defines
+     * them ({@code docs/ir.md} §4.2). One question, two widths, and the width travels with the name.
+     */
+    private static void comparesALiteralOnTheLeftOfAWord() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    xor ax, ax\n"
+                        + "    cmp ax, cx\n"
+                        + "    jz $done\n"
+                        + "    mov [0x42], cx\n"
+                        + "\n"
+                        + "$done:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $w: u16\n"
+                        + "    w = word [0x40]\n"
+                        + "    cmp 0, w\n"
+                        + "    jz $done\n"
+                        + "    [0x42] = w\n"
+                        + "$done:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * An expression whose right-hand side outlives it gets a register of its own, and that register
+     * is as wide as the expression: a byte sum computed through a word register is two instructions
+     * no assembler takes ({@code docs/ir.md} §3.2). Every operand of one expression has one width,
+     * which is what makes the answer knowable here.
+     */
+    private static void computesAByteExpressionInByteRegisters() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov cl, byte [0x41]\n"
+                        + "    mov al, cl\n"
+                        + "    add dl, al\n"
+                        + "    mov [0x42], dl\n"
+                        + "    mov [0x43], cl\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u8\n    var $b: u8\n    var $x: u8\n"
+                        + "    a = byte [0x40]\n"
+                        + "    b = byte [0x41]\n"
+                        + "    x = expr(a + b)\n"
+                        + "    [0x42] = x\n"
+                        + "    [0x43] = b\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * An operation written for its flags alone has nowhere to put its value, so the selector makes
+     * somewhere — and it is as wide as the operands, or the flags of a byte addition would be the
+     * flags of a word one ({@code docs/ir.md} §3.2, §5.1).
+     */
+    private static void keepsAStatementEvalAtTheWidthOfItsOperands() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov cl, byte [0x41]\n"
+                        + "    mov al, dl\n"
+                        + "    add al, cl\n"
+                        + "    jc $done\n"
+                        + "    mov [0x42], dl\n"
+                        + "\n"
+                        + "$done:\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $a: u8\n    var $b: u8\n"
+                        + "    a = byte [0x40]\n"
+                        + "    b = byte [0x41]\n"
+                        + "    eval(a + b)\n"
+                        + "    jc $done\n"
+                        + "    [0x42] = a\n"
+                        + "$done:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A value wider than a register has nowhere to live, and it is refused where it is first
+     * mentioned rather than given half a register: everything a four-byte value is used for would
+     * otherwise be a word operation on the low half of it — a store that writes half the value out,
+     * an addition that carries sixteen bits too few.
+     *
+     * <p>The same work as two halves is what the message points at, and it compiles.
+     */
+    private static void refusesAValueWiderThanARegister() {
+        CompileError refused = Assert.assertRefused("wide.ir:7:5",
+                () -> Compiler.compile("wide.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: u32\n"
+                        + "    x = 0\n"
+                        + "    [0x40] = x\n"
+                        + "    ret\n"));
+        Assert.assertTrue(refused.getMessage().contains("is wider than a register"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("u32"), refused.getMessage());
+
+        String halves = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $lo: u16\n    var $hi: u16\n"
+                + "    lo = word [0x40]\n"
+                + "    hi = word [0x42]\n"
+                + "    [0x50] = lo\n"
+                + "    [0x52] = hi\n"
+                + "    ret\n");
+        Assert.assertTrue(halves.contains("mov [0x50], ") && halves.contains("mov [0x52], "),
+                "two halves are two word moves, whichever registers they went through: " + halves);
     }
 
     /** The 8086 has no multiply by a constant, so the target hands over a shift trick. */

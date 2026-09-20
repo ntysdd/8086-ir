@@ -376,7 +376,10 @@ Working today:
 
 Not built yet, and refused with a reason rather than guessed at: a widening into a value
 wider than a register (the answer is
-two of them, and nothing in the back end can name a pair), `setcc`,
+two of them, and nothing in the back end can name a pair), and a value wider than a register
+anywhere else — `var x: u32` followed by `x = 0` is refused rather than silently truncated to
+its low half, because a word operation on the low half of a four-byte value is not the value
+the program thinks it has ([`docs/ir.md`](docs/ir.md) §3.1.2). `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is
 refused until every definition writes those bytes — a wrong answer nobody is told about

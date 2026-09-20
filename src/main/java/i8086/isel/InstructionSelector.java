@@ -88,6 +88,18 @@ public final class InstructionSelector {
     private List<Instruction> out;
 
     /**
+     * The types of the temporaries this selector made, by name.
+     *
+     * <p>A temporary is the selector's own invention and the form has never heard of it, but the
+     * allocator has to know how wide it is: a byte value and a register's worth of value live in
+     * different registers and are named differently in an instruction, so a temporary without a
+     * width is a byte instruction written with a word register — which is not an instruction
+     * ({@code docs/ir.md} §3.2). The width travels with the name, so it reaches
+     * {@link Selection#typeOf} the way the form's own values do.
+     */
+    private final Map<String, Type> tempTypes = new LinkedHashMap<String, Type>();
+
+    /**
      * Whether the flags can still be read in front of the item being selected.
      *
      * <p>What decides whether an instruction that writes them may be used where the surface asked
@@ -219,6 +231,10 @@ public final class InstructionSelector {
     /**
      * The type of every value, so that the allocator can tell a byte from a register's worth
      * of value when it decides where one may live.
+     *
+     * <p>The selector's own temporaries are in here too, with the width their context gave them: a
+     * temporary is a name in an instruction like any other, and a name the allocator has no width
+     * for is one it would place as a whole register ({@code docs/ir.md} §3.2).
      */
     private Map<String, Type> types() {
         Map<String, Type> types = new LinkedHashMap<String, Type>();
@@ -228,6 +244,7 @@ public final class InstructionSelector {
         for (String name : form.undefinedValues()) {
             types.put(name, form.typeOf(name));
         }
+        types.putAll(tempTypes);
         return types;
     }
 
@@ -331,7 +348,8 @@ public final class InstructionSelector {
             // The value is thrown away, so it needs somewhere to go that is not
             // anybody's variable; the flags are why the statement was written, so
             // they are wanted here even though the value is not.
-            emitOperation(((Item.Eval) item).operation(), temp(), true);
+            Operation operation = ((Item.Eval) item).operation();
+            emitOperation(operation, temp(typeOfOperation(operation)), true);
             return;
         }
         throw notYet(item, "this statement");
@@ -598,7 +616,7 @@ public final class InstructionSelector {
     private void selectCompare(Item.Compare compare) {
         String first;
         if (compare.left() instanceof Value.Number) {
-            first = temp();
+            first = temp(typeOfComparison(compare));
             emitValue(compare.left(), first, true);
         } else {
             first = registerNameOf(compare.left());
@@ -742,8 +760,10 @@ public final class InstructionSelector {
         }
 
         // The right-hand side needs a register of its own, so it is computed
-        // first, into a temp, and the left goes straight into the destination.
-        String scratch = temp();
+        // first, into a temp, and the left goes straight into the destination. The temp is as wide
+        // as what the expression computes, which is as wide as where the answer is going: every
+        // operand of one expression has the same width (docs/ir.md §3.2).
+        String scratch = temp(typeOfName(destination));
         emitExpression(apply.right(), scratch);
         emitExpression(apply.left(), destination);
         emitInPlace(operator, destination, new Value.Name(apply.right().position(), scratch),
@@ -896,20 +916,68 @@ public final class InstructionSelector {
 
     /** The type of an operand that names one, or null when it is a literal. */
     private Type typeOf(Value value) {
-        return value instanceof Value.Name ? form.typeOf(((Value.Name) value).name()) : null;
+        return value instanceof Value.Name ? typeOfName(((Value.Name) value).name()) : null;
+    }
+
+    /**
+     * The type of a name the selector is working with: a value of the form's, or its own temporary.
+     *
+     * <p>Both are names in an instruction and both have to be placed, so the one question the
+     * allocator asks about a name — how wide is this — has one answer for the two of them.
+     */
+    private Type typeOfName(String name) {
+        Type found = form.typeOf(name);
+        return found == null ? tempTypes.get(name) : found;
     }
 
     /**
      * How wide a value is, for the target's one question about width.
      *
-     * <p>A word when nothing says otherwise: the selector has no type for a temporary of its own,
-     * and a value the form does not know the width of is one the allocator will put in a whole
-     * register, which is what the mode bits of an instruction are chosen from anyway
-     * ({@code docs/ir.md} §3.4).
+     * <p>A word when nothing says otherwise: a width nobody stated is not one to guess a half
+     * register from, and a whole register is what the mode bits of an instruction are chosen from
+     * anyway ({@code docs/ir.md} §3.4).
      */
     private Size sizeOf(String name) {
-        Type type = form.typeOf(name);
+        Type type = typeOfName(name);
         return type == null ? Size.WORD : Size.ofBytes(type.bytes());
+    }
+
+    /**
+     * The width an operation is, from the first operand that states one.
+     *
+     * <p>Every operand of one operation has the same width ({@code docs/ir.md} §3.2), so the first
+     * one that states a width states all of them, and a literal states none. An operation of
+     * nothing but literals states none either, and a register's worth is what such a computation is
+     * read as — there is no narrower reading of {@code eval(0xFFFF + 1)} that keeps its carry.
+     */
+    private Type typeOfOperation(Operation operation) {
+        for (Value operand : operation.operands()) {
+            Type type = typeOf(operand);
+            if (type != null) {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The width of a comparison whose left side is a literal.
+     *
+     * <p>A literal takes the width of where it goes ({@code docs/ir.md} §3.2), and where it goes here
+     * is a register the machine insists on for the first operand. The other side says how wide: a
+     * variable states its own type. Anything else is refused rather than given a width guessed at,
+     * because a byte value compared through a word register is an instruction no assembler will
+     * take — and a wrong answer here is worse than a refusal.
+     */
+    private Type typeOfComparison(Item.Compare compare) {
+        Value other = compare.right();
+        Type type = other instanceof Value.Name ? typeOfName(((Value.Name) other).name()) : null;
+        if (type == null) {
+            throw notYet(compare.position(), "a comparison against a literal with nothing on the "
+                    + "other side that says how wide it is: put that value in a variable first "
+                    + "(docs/ir.md §3.2)");
+        }
+        return type;
     }
 
     /**
@@ -1204,8 +1272,12 @@ public final class InstructionSelector {
         return all;
     }
 
-    private String temp() {
-        return TEMP_PREFIX + temps++;
+    private String temp(Type type) {
+        String name = TEMP_PREFIX + temps++;
+        if (type != null) {
+            tempTypes.put(name, type);
+        }
+        return name;
     }
 
     private static CompileError notYet(Item item, String description) {
