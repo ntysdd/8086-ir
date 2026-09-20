@@ -111,15 +111,25 @@ public final class I8086 implements Target {
      * The forms that set the flags from two values.
      *
      * <p>{@code cmp} subtracts without keeping the result and {@code test} ANDs
-     * without keeping it; both are two bytes when both operands are registers.
+     * without keeping it; both are two bytes when both operands are registers. Either side may be
+     * an access instead — {@code cmp byte [bx], 0x80} is one instruction here, and reading the byte
+     * into a register first costs more than the comparison does ({@code docs/ir.md} §5.4) — but not
+     * both at once: this machine has no instruction whose two operands are both in memory, which is
+     * a shape a program can write and the target simply does not answer.
      */
     private static final List<Form> COMPARE_FORMS = Collections.unmodifiableList(
             Arrays.asList(new Form("cmp", shapes(Shape.REGISTER, Shape.REGISTER), 2),
-                    new Form("cmp", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3)));
+                    new Form("cmp", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3),
+                    new Form("cmp", shapes(Shape.REGISTER, Shape.MEMORY), 2),
+                    new Form("cmp", shapes(Shape.MEMORY, Shape.REGISTER), 2),
+                    new Form("cmp", shapes(Shape.MEMORY, Shape.IMMEDIATE), 3)));
 
     private static final List<Form> TEST_FORMS = Collections.unmodifiableList(
             Arrays.asList(new Form("test", shapes(Shape.REGISTER, Shape.REGISTER), 2),
-                    new Form("test", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3)));
+                    new Form("test", shapes(Shape.REGISTER, Shape.IMMEDIATE), 3),
+                    new Form("test", shapes(Shape.REGISTER, Shape.MEMORY), 2),
+                    new Form("test", shapes(Shape.MEMORY, Shape.REGISTER), 2),
+                    new Form("test", shapes(Shape.MEMORY, Shape.IMMEDIATE), 3)));
 
     /**
      * Reading a value out of memory, and writing one back.

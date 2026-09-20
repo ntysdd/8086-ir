@@ -33,6 +33,7 @@ public final class SsaBuilderTest {
         suite.add("Ssa renames variables and not labels", SsaBuilderTest::labelsStay);
         suite.add("Ssa renames the flags like any other variable", SsaBuilderTest::renamesFlags);
         suite.add("Ssa leaves unreachable code to itself", SsaBuilderTest::unreachable);
+        suite.add("Ssa keeps a volatile access volatile", SsaBuilderTest::keepsTheVolatileMark);
         suite.add("Ssa does not touch the module", SsaBuilderTest::moduleUntouched);
         suite.add("Ssa is deterministic", SsaBuilderTest::deterministic);
     }
@@ -50,6 +51,30 @@ public final class SsaBuilderTest {
                         + "    x#2 = eval(x#1 + 1)\n"
                         + "    ret\n",
                 dump("    var x: u16\n    x = 1\n    x = eval(x + 1)\n    ret\n"));
+    }
+
+    /**
+     * A volatile access keeps the word through renaming.
+     *
+     * <p>It is what says the access has to happen however little anyone wants what it read
+     * ({@code AGENTS.md} invariant 3), and the passes that read this form ask the mark rather than
+     * the syntax: dead value elimination keeps a load that has one, and load folding leaves one
+     * where it was written. An operand with a base name is rebuilt when that name is versioned, and
+     * one with no base is not, which is how a load based on a variable came to be deletable while
+     * {@code volatile [0x1234]} was safe — the documented spelling of the surface is the one that
+     * does not go through here ({@code docs/ir.md} §3.4).
+     */
+    private static void keepsTheVolatileMark() {
+        Assert.assertEquals("; SSA form of target 8086, entry main\n"
+                        + "\n"
+                        + "block0 (main):\n"
+                        + "    var p: u16\n"
+                        + "    var c: u8\n"
+                        + "    p#1 = 0x300\n"
+                        + "    c#2 = volatile byte [p#1]\n"
+                        + "    ret\n",
+                dump("    var p: u16\n    var c: u8\n    p = 0x300\n"
+                        + "    c = volatile byte [p]\n    ret\n"));
     }
 
     private static void loop() {

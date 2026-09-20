@@ -738,30 +738,44 @@ public final class InstructionSelector {
      *
      * <p>It is an operation in the same sense {@code eval} is — one operation,
      * done as written — so the flags it leaves are the ones the writer asked for
-     * and the branch after it reads those. The machine's forms take a register
-     * first, so a literal on the left is put into one: {@code cmp 5, x} is not
-     * something this machine can say, and saying it another way is cheap.
+     * and the branch after it reads those.
+     *
+     * <p>An operand may be an access, and the access is written where it stands: {@code cmp byte
+     * [bx], 0x80} is what the surface says and one instruction is what it means
+     * ({@code docs/ir.md} §5.4). Reading it into a register first is what the machine would
+     * otherwise have to do — a load and the comparison — and the load is what a pass takes away when
+     * the value it produced had no other reader ({@code i8086.pass.LoadFolding}).
+     *
+     * <p>What the machine does not take on the first side is a literal: {@code cmp 5, x} is not
+     * something it can say, so a literal goes into a register first, and its width comes from the
+     * other side.
      */
     private void selectCompare(Item.Compare compare) {
-        String first;
-        if (compare.left() instanceof Value.Number) {
-            first = temp(typeOfComparison(compare));
-            emitValue(compare.left(), first, true);
+        List<List<Operand>> candidates = new ArrayList<List<Operand>>();
+        Operand right = operandFor(compare.right());
+        if (compare.left() instanceof Value.Memory) {
+            requireRegisterAccess(((Value.Memory) compare.left()).operand(), "comparison");
+            candidates.add(operands(operandFor(compare.left()), right));
         } else {
-            first = registerNameOf(compare.left());
+            String first;
+            if (compare.left() instanceof Value.Number) {
+                first = temp(typeOfComparison(compare));
+                emitValue(compare.left(), first, true);
+            } else {
+                first = registerNameOf(compare.left());
+            }
+            candidates.add(operands(virtual(first, compare.position()), right));
         }
-
-        List<Operand> operands = new ArrayList<Operand>();
-        operands.add(virtual(first, compare.position()));
-        operands.add(operandOf(compare.right()));
 
         Form best = null;
         List<Operand> written = null;
-        for (Form form : target.compareForms(compare.kind())) {
-            List<Operand> candidate = writtenOperands(form, operands);
-            if (candidate != null && (best == null || form.bytes() < best.bytes())) {
-                best = form;
-                written = candidate;
+        for (List<Operand> candidate : candidates) {
+            for (Form form : target.compareForms(compare.kind())) {
+                List<Operand> fits = writtenOperands(form, candidate);
+                if (fits != null && (best == null || form.bytes() < best.bytes())) {
+                    best = form;
+                    written = fits;
+                }
             }
         }
 
@@ -769,9 +783,13 @@ public final class InstructionSelector {
         // target promises the two leave the same flags (docs/ir.md §4.2) — and it says it without
         // the zero, so it is a byte shorter wherever a register form is shorter than an immediate
         // one. Which instruction it is, is the target's: the operand goes on both sides and the
-        // forms are the ones the target has for a test.
+        // forms are the ones the target has for a test. An access is not the operand for this: the
+        // machine has no `test [x], [x]`, and `test [x], 0` asks a question whose answer is always
+        // the same one (docs/ir.md §5.4).
         if (best != null && compare.kind() == Item.Compare.Kind.CMP
-                && target.zeroComparisonIsATest() && isZero(compare.right())) {
+                && target.zeroComparisonIsATest() && isZero(compare.right())
+                && !(compare.left() instanceof Value.Memory)) {
+            String first = registerNameOf(compare.left());
             List<Operand> asTest = operands(virtual(first, compare.position()),
                     virtual(first, compare.position()));
             Form candidate = smallest(target.compareForms(Item.Compare.Kind.TEST), asTest);
@@ -782,9 +800,8 @@ public final class InstructionSelector {
         }
 
         if (best == null) {
-            throw new CompileError(compare.position(),
-                    "no way to compare these operands is available yet: a memory operand is not "
-                            + "handled yet");
+            throw noFormFor("a comparison", compare.position(), written == null
+                    ? candidates.get(0) : written);
         }
         out.add(new Instruction(compare.position(), best.mnemonic(), written));
     }

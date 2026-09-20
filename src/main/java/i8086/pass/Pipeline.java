@@ -24,9 +24,11 @@ import java.util.List;
  *
  * <p>The order is the one the passes need rather than a total order they could be
  * run in. Constants first, because a value that is known is worth writing down
- * before anything counts readers. Then dead value elimination, which sees the uses
- * the first pass left behind. Then the flags, last, because "nobody reads this"
- * is a question about the program that the two before it have finished shaping.
+ * before anything counts readers. Then load folding, which takes a load away and
+ * leaves the address it was computing with nobody reading it. Then dead value
+ * elimination, which sees the uses both of them left behind. Then the flags, last,
+ * because "nobody reads this" is a question about the program that the passes
+ * before it have finished shaping.
  */
 public final class Pipeline {
 
@@ -43,6 +45,7 @@ public final class Pipeline {
     public static List<Pass> passes() {
         List<Pass> passes = new ArrayList<Pass>();
         passes.add(new ConstantPropagation());
+        passes.add(new LoadFolding());
         passes.add(new DeadValueElimination());
         passes.add(new UnreadFlags());
         return Collections.unmodifiableList(passes);

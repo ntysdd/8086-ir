@@ -140,6 +140,14 @@ public final class CompilerTest {
                 CompilerTest::leavesTheCountedFormAloneWhenTheBodyCannotBeSized);
         suite.add("Compiler leaves the counted form alone when the loop is too long",
                 CompilerTest::leavesTheCountedFormAloneWhenTheLoopIsTooLong);
+        suite.add("Compiler folds a load into the comparison that reads it",
+                CompilerTest::foldsALoadIntoTheComparison);
+        suite.add("Compiler leaves a load that has another reader",
+                CompilerTest::leavesALoadWithAnotherReader);
+        suite.add("Compiler leaves a volatile access where it was written",
+                CompilerTest::leavesAVolatileAccessWhereItIs);
+        suite.add("Compiler compares with an access on the other side",
+                CompilerTest::comparesWithAnAccessOnTheOtherSide);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -685,8 +693,7 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov ax, word [0x40]\n"
-                        + "    cmp ax, 1\n"
+                        + "    cmp word [0x40], 1\n"
                         + "    mov ax, 0\n"
                         + "    jnz $skip\n"
                         + "    ret\n"
@@ -767,8 +774,7 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
-                        + "    mov ax, word [0x40]\n"
-                        + "    cmp ax, 1\n"
+                        + "    cmp word [0x40], 1\n"
                         + "    jz $done\n"
                         + "    xor ax, ax\n"
                         + "    mov [0x42], ax\n"
@@ -1607,48 +1613,53 @@ public final class CompilerTest {
     // --- the countdown a loop pays for twice (the target's tail) -------------
 
     /**
-     * The scan loop of every boot loader, done the way the machine does it: {@code loop}
-     * decrements {@code cx}, branches if the result is not zero, and touches no flag, so the three
-     * instructions the surface's three statements became are one and the five bytes are two.
+     * The scan loop of a boot sector, done the way the machine does it: the comparison carries the
+     * access it is about, and {@code loop} counts the word down. Two rewrites in one line of source,
+     * and they are the two the byte ledger of an MBR names.
      *
-     * <p>The counter is in {@code cx} because that is the register the allocator gave it, and that
-     * is the whole reason this rewrite happens after allocation and not before selection:
-     * {@code loop} counts in one register and nowhere else, so what it is worth depends on where a
-     * value ended up.
+     * <p>The counter is in {@code cx} because the byte the loop counts in wants {@code al} — a byte
+     * value lives in the low half of one of the four registers that has a half ({@code docs/ir.md}
+     * §3.2) — and {@code loop} counts in {@code cx} and nowhere else. Which register a value ends up
+     * in is the allocator's answer, which is why both rewrites happen where they do: the fold reads
+     * the form, the counted form runs after allocation.
      */
     private static void countsDownWithTheMachineLoop() {
         Assert.assertEquals("org 0x100\n"
-                + "\n"
-                + "$main:\n"
-                + "    mov bx, $parts\n"
-                + "    mov cx, 4\n"
-                + "\n"
-                + "$top:\n"
-                + "    mov al, byte [bx]\n"
-                + "    cmp al, 0x80\n"
-                + "    jz $stop\n"
-                + "    add bx, 0x10\n"
-                + "    loop $top\n"
-                + "\n"
-                + "$stop:\n"
-                + "    ret\n"
-                + "\n"
-                + "$parts: times 4 db 0\n",
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $parts\n"
+                        + "    mov cx, 4\n"
+                        + "    mov al, 0\n"
+                        + "\n"
+                        + "$top:\n"
+                        + "    cmp byte [bx], 0x80\n"
+                        + "    jnz $next\n"
+                        + "    inc al\n"
+                        + "\n"
+                        + "$next:\n"
+                        + "    add bx, 0x10\n"
+                        + "    loop $top\n"
+                        + "    mov [0x40], al\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: times 4 db 0\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    var n: u16\n"
-                        + "    var flag: u8\n"
+                        + "    var count: u8\n"
                         + "    var base: u16\n"
                         + "    base = $parts\n"
                         + "    n = 4\n"
+                        + "    count = 0\n"
                         + "$top:\n"
-                        + "    flag = byte [base]\n"
-                        + "    cmp flag, 0x80\n"
-                        + "    jz $stop\n"
+                        + "    cmp byte [base], 0x80\n"
+                        + "    jnz $next\n"
+                        + "    count = eval(count + 1)\n"
+                        + "$next:\n"
                         + "    base = eval(base + 16)\n"
                         + "    n = eval(n - 1)\n"
                         + "    cmp n, 0\n"
                         + "    jnz $top\n"
-                        + "$stop:\n"
+                        + "    volatile [0x40] = count\n"
                         + "    ret\n"
                         + "\n"
                         + "$parts: pad 4\n"));
@@ -1767,6 +1778,141 @@ public final class CompilerTest {
         Assert.assertFalse(assembly.contains("loop "),
                 "a byte of displacement cannot reach this far: " + assembly);
         Assert.assertTrue(assembly.contains("    dec cx\n    jnz $top\n"), assembly);
+    }
+
+    // --- the access the comparison can carry (docs/ir.md §5.4) --------------
+
+    /**
+     * A load whose only reader is the comparison standing next to it: the value exists to give the
+     * comparison something to name, and the machine has one instruction for the two of them,
+     * {@code cmp byte [bx], 0x80} — three bytes where the load and the comparison are four.
+     */
+    private static void foldsALoadIntoTheComparison() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $parts\n"
+                        + "    cmp byte [bx], 0x80\n"
+                        + "    jz $stop\n"
+                        + "    hlt\n"
+                        + "\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: times 4 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var flag: u8\n"
+                        + "    p = $parts\n"
+                        + "    flag = byte [p]\n"
+                        + "    cmp flag, 0x80\n"
+                        + "    jz $stop\n"
+                        + "    hlt\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: pad 4\n"));
+    }
+
+    /**
+     * And the must-not that is about the value rather than the access: with another reader the load
+     * has to stay for it, so folding it into the comparison would buy nothing and could only make
+     * the reader read something else.
+     */
+    private static void leavesALoadWithAnotherReader() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $here\n"
+                        + "    mov al, byte [bx]\n"
+                        + "    test al, al\n"
+                        + "    jz $stop\n"
+                        + "    mov [0x40], al\n"
+                        + "\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$here: times 2 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var c: u8\n"
+                        + "    p = $here\n"
+                        + "    c = byte [p]\n"
+                        + "    cmp c, 0\n"
+                        + "    jz $stop\n"
+                        + "    volatile [0x40] = c\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$here: pad 2\n"));
+    }
+
+    /**
+     * The must-not that is about the access: {@code volatile} says the access happens where it was
+     * written, and the comparison is a different place. What makes this test say that and not
+     * something else is that the comparison is against {@code 0x80} — a comparison with zero would
+     * be left alone for its own reason ({@code LoadFolding}).
+     */
+    private static void leavesAVolatileAccessWhereItIs() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $parts\n"
+                        + "    mov al, byte [bx]\n"
+                        + "    cmp al, 0x80\n"
+                        + "    jz $stop\n"
+                        + "    hlt\n"
+                        + "\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: times 4 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var c: u8\n"
+                        + "    p = $parts\n"
+                        + "    c = volatile byte [p]\n"
+                        + "    cmp c, 0x80\n"
+                        + "    jz $stop\n"
+                        + "    hlt\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: pad 4\n"));
+    }
+
+    /**
+     * The access on the other side of a comparison, which the surface could always write and this
+     * compiler could not select: {@code cmp ax, word [bx]} is one instruction, and the byte goes the
+     * other way from the load the comparison could have carried (there is no instruction whose two
+     * operands are both in memory, so the value that was loaded stays in its register).
+     */
+    private static void comparesWithAnAccessOnTheOtherSide() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov bx, $here\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    cmp ax, word [bx]\n"
+                        + "    jz $stop\n"
+                        + "    mov word [0x42], ax\n"
+                        + "\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$here: times 2 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var p: u16\n"
+                        + "    var x: u16\n"
+                        + "    p = $here\n"
+                        + "    x = word [0x40]\n"
+                        + "    cmp x, word [p]\n"
+                        + "    jz $stop\n"
+                        + "    word [0x42] = x\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$here: pad 2\n"));
     }
 
     // --- reading the machine's own registers (docs/ir.md §8.1) --------------

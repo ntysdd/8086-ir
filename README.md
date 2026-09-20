@@ -143,12 +143,13 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    machine only through the target description's general vocabulary, so each
    stays expressible for any target.
 
-   What runs today, in order: **constant propagation**, **dead value
-   elimination**, and **unread flags** — an operation whose flags nobody reads
-   stops claiming them, which is what lets the target use a form that disturbs
-   them. The passes are listed in `i8086.pass.Pipeline`, and a test compares that
-   list against the names written out here, so a pass added in one place and not
-   the other fails the build. **Three built, the rest planned.**
+   What runs today, in order: **constant propagation**, **load folding** — a load whose only
+   reader is the comparison next to it is not a value at all, and the comparison carries the
+   access (`docs/ir.md` §5.4) — **dead value elimination**, and **unread flags**, which is last
+   because an operation whose flags nobody reads stops claiming them, which is what lets the
+   target use a form that disturbs them. The passes are listed in `i8086.pass.Pipeline`, and a
+   test compares that list against the names written out here, so a pass added in one place and
+   not the other fails the build. **Four built, the rest planned.**
 5. **Run the target-specific tail.** Real machines have quirks that are not
    worth abstracting, and encoding-level knowledge is stated directly in a
    target-specific pass: at most three, each belonging to exactly one target,

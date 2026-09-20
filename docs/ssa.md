@@ -190,12 +190,14 @@ verifier knows a target, a register or an instruction.
 ## 7. What the passes do with it — [decided]
 
 The passes that read this form are listed in `i8086.pass.Pipeline`, and
-`README.md` says the same list. Three of them, in this order: **constant
-propagation**, which writes a known value where it is read; **dead value
-elimination**, which removes what nothing can observe; and **unread flags**,
+`README.md` says the same list. Four of them, in this order: **constant
+propagation**, which writes a known value where it is read; **load folding**,
+which takes away a load whose only reader is the comparison beside it and lets
+that comparison carry the access ([`docs/ir.md`](ir.md) §5.4); **dead
+value elimination**, which removes what nothing can observe; and **unread flags**,
 which lets an operation whose flags nobody reads stop claiming them — and that one
 has to be last, because "nobody reads them" is a question about the program the
-other two have finished shaping.
+others have finished shaping.
 
 Three things about working on it are worth stating here, because they are
 properties of the form rather than of any one pass:
@@ -279,9 +281,12 @@ So the versions are told apart, or brought together, and what does it is the all
   clobbers them.
 * **Promoting memory.** Loads and stores are emitted and reasoned about — a store
   is an effect, a volatile access is one too, and a plain load nobody reads is
-  removed — but no pass lifts a load into a value. Doing that is the aliasing
-  question ([`docs/ir.md`](ir.md) §3.4, §12 item 15) and not a missing loop: until
-  something can say when two accesses are the same memory, a load is not reusable.
+  removed — but no pass lifts a load into a value, and the one piece of load
+  elimination that exists goes the other way: a load whose only reader is the
+  comparison beside it stops being a value at all ({@code LoadFolding}). Doing the
+  rest is the aliasing question ([`docs/ir.md`](ir.md) §3.4, §12 item 15) and not a
+  missing loop: until something can say when two accesses are the same memory, a
+  load is not reusable.
 * **An inline block that says what it reads.** Until it can, a module containing
   one is optimised conservatively (§4, §7). That is the missing half of
   `docs/ir.md` §9.

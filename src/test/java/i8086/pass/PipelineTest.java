@@ -37,8 +37,8 @@ public final class PipelineTest {
     }
 
     private static void listsItsPasses() {
-        Assert.assertEquals(Arrays.asList("constant propagation", "dead value elimination",
-                        "unread flags").toString(),
+        Assert.assertEquals(Arrays.asList("constant propagation", "load folding",
+                        "dead value elimination", "unread flags").toString(),
                 Pipeline.names().toString());
     }
 

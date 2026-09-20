@@ -172,14 +172,23 @@ final class Renamer {
                 rename(apply.left(), versions), rename(apply.right(), versions));
     }
 
+    /**
+     * The access with the version of its base in it.
+     *
+     * <p>Everything else the access was written with goes through, and the volatile mark is the one
+     * that matters: an operand rebuilt without it is an access the compiler is free to remove,
+     * duplicate and reorder, which is exactly what the word says it is not
+     * ({@code AGENTS.md} invariant 3). An access with no base needs no rebuilding and kept its mark
+     * by accident, which is why this was a while being wrong.
+     */
     private static MemoryOperand rename(MemoryOperand operand, Versions versions) {
         String base = operand.base();
         String version = base == null ? null : versions.of(base);
         if (version == null) {
             return operand;
         }
-        return new MemoryOperand(operand.position(), operand.size(), operand.segment(), version,
-                operand.displacement());
+        return new MemoryOperand(operand.position(), operand.size(), operand.isVolatile(),
+                operand.segment(), version, operand.displacement());
     }
 
     /**
