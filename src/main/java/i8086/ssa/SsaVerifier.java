@@ -65,6 +65,7 @@ public final class SsaVerifier {
         checkPhis();
         checkDefinitions();
         checkNames();
+        checkFlagReads();
         checkReaching();
     }
 
@@ -190,6 +191,83 @@ public final class SsaVerifier {
     }
 
     // --- the property ------------------------------------------------------
+
+    /**
+     * Every flag a statement reads has been defined on <b>every</b> path to it ({@code docs/ir.md}
+     * §4.3).
+     *
+     * <p>This is not the same question as the one {@link #checkReaching} asks. That one is about SSA:
+     * does exactly one version reach this use. This one is about the program: a flag is a value the
+     * machine has, and a statement that reads one — a branch reading the arithmetic flags, a copy
+     * reading the direction flag — needs it to have been set however the program got here. A join
+     * where one path set it and the other did not has exactly one version reaching the use as far as
+     * this form is concerned, and reading it there is a flag that is whatever the machine had.
+     *
+     * <p>The surface refuses the same thing in source order before there is a form to ask
+     * ({@code IrVerifier}), and it does it soundly but bluntly: it cannot see that a label is only
+     * reached one way, so it refuses programs that are right. This asks it of the graph, which is
+     * where {@code docs/ir.md} §4.3 says the question belongs — and it is what makes {@code cld}
+     * usable at all, since the copy it is for is usually a stretch of code away from it.
+     *
+     * <p>Nothing here knows a target: the flags are names, and which names a statement reads and
+     * defines is the statement's own business ({@code Effects}).
+     */
+    private void checkFlagReads() {
+        List<Set<String>> entering = new ArrayList<Set<String>>();
+        for (Block block : cfg.blocks()) {
+            // Optimistic to start with, because this is an intersection: a flag is defined on entering
+            // a block only when it is defined on leaving every predecessor. The entry block has no
+            // predecessors, so nothing is defined there, and a block nothing reaches reads nothing.
+            Set<String> defined = new LinkedHashSet<String>();
+            if (block != cfg.entry() && cfg.isReachable(block)) {
+                defined.addAll(Names.flagNames());
+            }
+            entering.add(defined);
+        }
+
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (Block block : cfg.blocks()) {
+                if (block == cfg.entry() || !cfg.isReachable(block)) {
+                    continue;
+                }
+                Set<String> from = new LinkedHashSet<String>(Names.flagNames());
+                for (Block predecessor : block.predecessors()) {
+                    if (cfg.isReachable(predecessor)) {
+                        from.retainAll(leavingFlags(predecessor, entering.get(predecessor.index())));
+                    }
+                }
+                if (!from.equals(entering.get(block.index()))) {
+                    entering.set(block.index(), from);
+                    changed = true;
+                }
+            }
+        }
+
+        for (Block block : cfg.blocks()) {
+            Set<String> defined = new LinkedHashSet<String>(entering.get(block.index()));
+            for (SsaStatement statement : form.statements(block)) {
+                for (String flag : Effects.flagsRead(statement.item())) {
+                    require(defined.contains(flag), statement.item().position(),
+                            "'" + flag + "' is read here, and nothing on every way here defines it: "
+                                    + "a statement that sets it has to come first (docs/ir.md §4.3)");
+                }
+                defined.addAll(statement.definedFlags().keySet());
+                defined.removeAll(Effects.flagsKilled(statement.item()));
+            }
+        }
+    }
+
+    /** Which flags are defined after a block, given which ones were defined before it. */
+    private Set<String> leavingFlags(Block block, Set<String> entering) {
+        Set<String> defined = new LinkedHashSet<String>(entering);
+        for (SsaStatement statement : form.statements(block)) {
+            defined.addAll(statement.definedFlags().keySet());
+            defined.removeAll(Effects.flagsKilled(statement.item()));
+        }
+        return defined;
+    }
 
     /**
      * Exactly one version of a variable reaches every use.

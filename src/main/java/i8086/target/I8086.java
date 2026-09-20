@@ -6,6 +6,7 @@ import i8086.asm.Numbers;
 import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.ir.Comparison;
+import i8086.ir.FlagUse;
 import i8086.ir.Item;
 import i8086.ir.Names;
 import i8086.ir.Operator;
@@ -381,9 +382,8 @@ public final class I8086 implements Target {
         problems.put("lea", "'lea' is an address and an addressing mode, not an operation: a "
                 + "label's address is written 'p = msg', and a computed one has no surface form "
                 + "yet (docs/ir.md §5.3, §12 item 12)");
-        for (String word : Arrays.asList("push", "pop", "in", "out", "int", "into", "iret",
-                "hlt", "cli", "sti", "lahf", "sahf", "pushf", "popf", "loop", "jcxz",
-                "movsb", "movsw", "stosb", "stosw", "lodsb", "lodsw")) {
+        for (String word : Arrays.asList("push", "pop", "in", "out", "into", "lahf", "sahf",
+                "pushf", "popf", "loop", "jcxz", "cmpsb", "cmpsw", "scasb", "scasw")) {
             problems.put(word, "'" + word + "' is a target operation the surface has no spelling "
                     + "for yet, so it is written in an inline block (docs/ir.md §11, §9)");
         }
@@ -420,6 +420,17 @@ public final class I8086 implements Target {
     }
 
     /**
+     * The operations that walk memory a byte or a word at a time ({@code docs/ir.md} §11).
+     *
+     * <p>Six of them, and the four that compare as they go — {@code cmps} and {@code scas} — are not
+     * here yet: those set the arithmetic flags and are written with {@code repe} or {@code repne},
+     * which means they belong with the conditions rather than with the copies
+     * ({@code docs/ir.md} §12).
+     */
+    private static final Set<String> STRING_OPERATIONS = names(
+            "movsb", "movsw", "stosb", "stosw", "lodsb", "lodsw");
+
+    /**
      * The machine's operations that are statements of their own, and what each
      * destroys when the author does not say ({@code docs/ir.md} §11).
      *
@@ -427,6 +438,10 @@ public final class I8086 implements Target {
      * a handler is code this module has never seen. {@code iret} restores the flags
      * from the stack, so the surface cannot say what they are afterwards. The other
      * four touch neither the general registers nor the arithmetic flags.
+     *
+     * <p>The string operations are here as well, and they are the ones that walk
+     * memory: which way they walk is the direction flag's business, which is what
+     * {@link #machineFlags} answers for.
      */
     private static final Map<String, Integer> MACHINE_STATEMENTS = machineStatementTable();
 
@@ -440,6 +455,12 @@ public final class I8086 implements Target {
         statements.put("iret", Integer.valueOf(0));
         statements.put("cld", Integer.valueOf(0));
         statements.put("std", Integer.valueOf(0));
+        // The string operations: the machine's own way of moving a stretch of bytes, and the reason
+        // 'rep' is in the syntax at all (docs/ir.md §11). A prefix is part of the statement rather
+        // than part of the mnemonic, so each of these is one entry and 'rep' goes in front of it.
+        for (String operation : STRING_OPERATIONS) {
+            statements.put(operation, Integer.valueOf(0));
+        }
         return Collections.unmodifiableMap(statements);
     }
 
@@ -458,11 +479,28 @@ public final class I8086 implements Target {
         if (mnemonic.equals("iret")) {
             return Collections.singletonList("flags");
         }
+        // A string operation is about the registers that point at what it walks, and about 'cx'
+        // when it is repeated — which is the usual way to write one, and which a reader can check
+        // against the machine. The ones that store or load what is in 'ax' name it too: what this
+        // list says is what a value may not live in across the statement, and the honest answer for
+        // those is that 'ax' is theirs (docs/ir.md §11).
+        if (STRING_OPERATIONS.contains(mnemonic)) {
+            List<String> destroyed = new ArrayList<String>();
+            destroyed.add("cx");
+            if (!mnemonic.startsWith("stos")) {
+                destroyed.add("si");
+            }
+            destroyed.add("di");
+            if (mnemonic.startsWith("lods")) {
+                destroyed.add("ax");
+            }
+            return Collections.unmodifiableList(destroyed);
+        }
         return Collections.emptyList();
     }
 
     /**
-     * The flags each of these leaves a value of its own in, and the ones it leaves standing.
+     * The flags each of these leaves a value of its own in, and the ones it reads.
      *
      * <p>{@code int} makes the arithmetic flags its own, because the handler decides them and an
      * author who wrote {@code jc} behind it means the handler's carry; the direction flag is not
@@ -474,19 +512,27 @@ public final class I8086 implements Target {
      *
      * <p>The rest — {@code nop}, {@code cli}, {@code sti}, {@code hlt} — are commands about machine
      * state, and nothing about them is a value a later statement reads.
+     *
+     * <p>The string operations are the ones that <em>read</em> a flag and produce none. Where they
+     * walk is decided by the direction flag, which is why a program that uses one has to have set
+     * it: that is the fact this table is the only place for, since no clobber list can say "I read
+     * this" ({@link FlagUse#reads}).
      */
     @Override
-    public Set<String> machineFlags(String mnemonic) {
+    public FlagUse machineFlags(String mnemonic) {
         if (mnemonic.equals("int")) {
-            return Collections.singleton(Names.FLAGS);
+            return FlagUse.defined(Names.FLAGS);
         }
         if (mnemonic.equals("iret")) {
-            return new LinkedHashSet<String>(Names.flagNames());
+            return FlagUse.defined(Names.FLAGS, Names.DIRECTION);
         }
         if (mnemonic.equals("cld") || mnemonic.equals("std")) {
-            return Collections.singleton(Names.DIRECTION);
+            return FlagUse.defined(Names.DIRECTION);
         }
-        return Collections.emptySet();
+        if (STRING_OPERATIONS.contains(mnemonic)) {
+            return FlagUse.reads(Names.DIRECTION);
+        }
+        return FlagUse.none();
     }
 
     /**

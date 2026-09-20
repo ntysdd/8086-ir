@@ -5,6 +5,7 @@ import i8086.asm.Instruction;
 import i8086.asm.Operand;
 import i8086.asm.Size;
 import i8086.ir.Comparison;
+import i8086.ir.FlagUse;
 import i8086.ir.Item;
 import i8086.ir.Operator;
 import i8086.isel.Selection;
@@ -220,7 +221,8 @@ public interface Target {
     }
 
     /**
-     * The flags a machine statement leaves a value of its own in, by name ({@code docs/ir.md} §11).
+     * What a machine statement does with the flags, by name ({@code docs/ir.md} §11): the ones it
+     * leaves a value of its own in, and the ones whose value decides what it does.
      *
      * <p>A clobber list says what a statement destroys, and a flag is one of the things it can
      * name. What no list can say is the difference between the two ways a statement fails to name
@@ -231,14 +233,16 @@ public interface Target {
      * module has never seen, and what the handler leaves in the arithmetic flags is a value the
      * statement <em>made</em> — which is what an author writing {@code jc} after it means.
      *
-     * <p>One of those is a value that has to survive the statement and the other is a value the
-     * statement produced, and reading both the same way is the difference between branching on the
-     * comparison and branching on nothing at all ({@code Effects}). Answering with no names is the
-     * safe direction: a definition the compiler still believes in is code that stays, and code that
-     * stays is not a wrong program. A target whose statements produce flags of their own says so.
+     * <p>The other half is what a statement <em>reads</em>, which is the half a copy needs: a
+     * repeated move decides which way to walk from the direction flag, so a program that uses one
+     * has to have set it, and saying so is what lets that be checked ({@code docs/ir.md} §4.3).
+     *
+     * <p>Answering with nothing is the safe direction: a definition the compiler still believes in
+     * is code that stays, and code that stays is not a wrong program. A target whose statements
+     * produce or read flags of their own says so.
      */
-    default Set<String> machineFlags(String mnemonic) {
-        return Collections.emptySet();
+    default FlagUse machineFlags(String mnemonic) {
+        return FlagUse.none();
     }
 
     /**

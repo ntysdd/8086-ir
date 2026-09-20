@@ -226,7 +226,7 @@ public final class IrVerifier {
             for (String flag : Names.flagNames()) {
                 if (machine.clobbers().contains(flag)) {
                     flagsDefined.remove(flag);
-                } else if (machine.definedFlags().contains(flag)) {
+                } else if (machine.flags().defined().contains(flag)) {
                     flagsDefined.add(flag);
                 }
             }

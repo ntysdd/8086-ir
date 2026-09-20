@@ -2,13 +2,12 @@ package i8086.ir;
 
 import i8086.SourcePos;
 import i8086.asm.Instruction;
+import i8086.asm.Prefix;
 import i8086.asm.Size;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * One thing a module is made of, in source order.
@@ -549,29 +548,34 @@ public abstract class Item {
      * from what the author wrote, and they are what the allocator and SSA read: a
      * machine statement says what it destroys the same way a block does.
      *
-     * <p>Whether it <em>leaves</em> flags of its own is stamped beside them, from the
-     * target, because the clobber list cannot say it: a list that does not name a flag
-     * means "it is not destroyed", and that covers both a statement the arithmetic
-     * flags pass through and a statement that went into a handler
-     * ({@link i8086.target.Target#machineFlags}).
+     * <p>Whether it <em>leaves</em> flags of its own, and which ones it reads, are stamped beside
+     * them, from the target, because the clobber list cannot say either: a list that does not name a
+     * flag means "it is not destroyed", and that covers both a statement the arithmetic flags pass
+     * through and a statement that went into a handler ({@link i8086.target.Target#machineFlags}).
      */
     public static final class Machine extends Item {
 
+        private final Prefix prefix;
         private final String mnemonic;
         private final List<Long> operands;
         private final List<String> clobbers;
         private final List<Argument> arguments;
-        private final Set<String> definedFlags;
+        private final FlagUse flags;
 
-        public Machine(SourcePos position, String mnemonic, List<Long> operands,
-                       List<String> clobbers, List<Argument> arguments,
-                       Set<String> definedFlags) {
+        public Machine(SourcePos position, Prefix prefix, String mnemonic, List<Long> operands,
+                       List<String> clobbers, List<Argument> arguments, FlagUse flags) {
             super(position);
+            this.prefix = prefix;
             this.mnemonic = mnemonic;
             this.operands = Collections.unmodifiableList(new ArrayList<Long>(operands));
             this.clobbers = Collections.unmodifiableList(new ArrayList<String>(clobbers));
             this.arguments = Collections.unmodifiableList(new ArrayList<Argument>(arguments));
-            this.definedFlags = Collections.unmodifiableSet(new LinkedHashSet<String>(definedFlags));
+            this.flags = flags;
+        }
+
+        /** The prefix the machine applies to it, or null when there is none. */
+        public Prefix prefix() {
+            return prefix;
         }
 
         public String mnemonic() {
@@ -589,15 +593,16 @@ public abstract class Item {
         }
 
         /**
-         * The flags whose value after it is its own, rather than the one from before it.
+         * What it does with the flags: the ones whose value after it is its own, and the ones whose
+         * value decides what it does.
          *
-         * <p>The target's answer for the mnemonic, and it is only consulted for flags the
-         * clobber list does not name: what the list names is destroyed, and what it does not
-         * name is left standing, which is two different things only one of which leaves a
-         * value behind ({@code Effects.flagsDefined}).
+         * <p>The target's answer for the mnemonic, and the defined half of it is only consulted for
+         * flags the clobber list does not name: what the list names is destroyed, and what it does
+         * not name is left standing, which is two different things only one of which leaves a value
+         * behind ({@code Effects.flagsDefined}).
          */
-        public Set<String> definedFlags() {
-            return definedFlags;
+        public FlagUse flags() {
+            return flags;
         }
 
         /** The registers it is given, from its {@code with} clause ({@code docs/ir.md} §11). */

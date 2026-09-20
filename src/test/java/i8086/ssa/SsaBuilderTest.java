@@ -34,6 +34,8 @@ public final class SsaBuilderTest {
         suite.add("Ssa renames the flags like any other variable", SsaBuilderTest::renamesFlags);
         suite.add("Ssa renames the direction flag apart from them",
                 SsaBuilderTest::theDirectionFlagIsSeparate);
+        suite.add("Ssa places a φ for a flag a copy goes by",
+                SsaBuilderTest::theDirectionFlagIsMerged);
         suite.add("Ssa leaves unreachable code to itself", SsaBuilderTest::unreachable);
         suite.add("Ssa keeps a volatile access volatile", SsaBuilderTest::keepsTheVolatileMark);
         suite.add("Ssa does not touch the module", SsaBuilderTest::moduleUntouched);
@@ -233,6 +235,43 @@ public final class SsaBuilderTest {
                         + "    ret\n",
                 dump("    var x: u16\n    x = word [0x40]\n    cmp x, 0x80\n    cld\n    std\n"
                         + "    jc l0\nl0:\n    ret\n"));
+    }
+
+    /**
+     * And a join can need a *flag* merged, which is what a copy that goes one way or the other needs:
+     * each arm sets the direction flag and the copy below the join reads whichever arrived. The φ
+     * costs no instruction — a flag is machine state, and what the form believes in is not something
+     * the machine has to be told.
+     */
+    private static void theDirectionFlagIsMerged() {
+        Assert.assertEquals("; SSA form of target 8086, entry main\n"
+                        + "\n"
+                        + "block0 (main):\n"
+                        + "    var x: u16\n"
+                        + "    var src: u16\n"
+                        + "    var dst: u16\n"
+                        + "    x#1 = word [0x40]\n"
+                        + "    src#2 = 0x7e00\n"
+                        + "    dst#3 = 0x8000\n"
+                        + "    flags#4 = cmp x#1, 0\n"
+                        + "    jz other\n"
+                        + "\n"
+                        + "block1 <- block0:\n"
+                        + "    direction#5 = cld\n"
+                        + "    jmp copy\n"
+                        + "\n"
+                        + "block2 (other) <- block0:\n"
+                        + "    direction#6 = std\n"
+                        + "\n"
+                        + "block3 (copy) <- block1 block2:\n"
+                        + "    direction#7 = phi(block1: direction#5, block2: direction#6)\n"
+                        + "    rep movsb clobbers(cx, si, di) with cx = 0x200, si = src#2, di = dst#3\n"
+                        + "    ret\n",
+                dump("    var x: u16\n    var src: u16\n    var dst: u16\n"
+                        + "    x = word [0x40]\n    src = 0x7e00\n    dst = 0x8000\n"
+                        + "    cmp x, 0\n    jz other\n    cld\n    jmp copy\n"
+                        + "other:\n    std\ncopy:\n"
+                        + "    rep movsb with cx = 0x200, si = src, di = dst\n    ret\n"));
     }
 
     private static void unreachable() {

@@ -34,6 +34,8 @@ public final class MachineTest {
                 MachineTest::flagsAreTheHandlersAfterAnInterrupt);
         suite.add("The direction flag is a flag of its own",
                 MachineTest::theDirectionFlagIsItsOwn);
+        suite.add("A repeated copy says where its count and pointers come from",
+                MachineTest::copiesAStretch);
         suite.add("A statement about where a copy goes writes itself",
                 MachineTest::writesItselfToo);
         suite.add("The flags do not survive an interrupt", MachineTest::flagsDieAtAnInterrupt);
@@ -88,6 +90,62 @@ public final class MachineTest {
                         + "    std\n",
                 became("    cld\n"
                         + "    std\n"));
+    }
+
+    /**
+     * A repeated copy, which is what the string operations and their prefix are for: the machine
+     * moves a stretch of memory itself, and the surface says where the count and the two pointers
+     * come from with the same clause an interrupt uses for its arguments.
+     *
+     * <p>And the direction flag is read by it, which is why the {@code cld} has to be there: the
+     * check is on the form, so the {@code cld} may be a stretch of code above the copy — including
+     * across a label, which is where a source-order check would give up.
+     */
+    private static void copiesAStretch() {
+        String body = "    var src: u16\n"
+                + "    var dst: u16\n"
+                + "    var count: u16\n"
+                + "    src = 0x7E00\n"
+                + "    dst = 0x8000\n"
+                + "    count = 0x200\n"
+                + "    cld\n"
+                + "    jmp $chunk\n"
+                + "$chunk:\n"
+                + "    rep movsb with cx = count, si = src, di = dst\n"
+                + "    ret\n";
+        String assembly = assembly(body);
+        Assert.assertTrue(assembly.contains("    rep movsb\n"), assembly);
+        Assert.assertTrue(assembly.contains("    cld\n"), assembly);
+
+        // The must-not: nothing set the direction flag, so which way the copy walks is whatever the
+        // machine happened to be pointing, and that is a refusal rather than a guess.
+        String wrong = "    var src: u16\n"
+                + "    var dst: u16\n"
+                + "    src = 0x7E00\n"
+                + "    dst = 0x8000\n"
+                + "    rep movsb with cx = 0x200, si = src, di = dst\n"
+                + "    ret\n";
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> i8086.Compiler.compile("t.ir", HEAD + wrong));
+        Assert.assertTrue(refused.getMessage().contains("direction"), refused.getMessage());
+
+        // And the second must-not, which is the one a source-order check cannot see: one path sets
+        // the flag and the other does not, so on that path the copy has nothing to go by.
+        String halfAPath = "    var x: u16\n"
+                + "    var src: u16\n"
+                + "    var dst: u16\n"
+                + "    x = word [0x40]\n"
+                + "    src = 0x7E00\n"
+                + "    dst = 0x8000\n"
+                + "    cmp x, 0\n"
+                + "    jz there\n"
+                + "    cld\n"
+                + "there:\n"
+                + "    rep movsb with cx = 0x200, si = src, di = dst\n"
+                + "    ret\n";
+        CompileError half = Assert.assertThrows(CompileError.class,
+                () -> i8086.Compiler.compile("t.ir", HEAD + halfAPath));
+        Assert.assertTrue(half.getMessage().contains("every way"), half.getMessage());
     }
 
     private static void saysWhatItDestroys() {
@@ -215,7 +273,8 @@ public final class MachineTest {
 
     private static void theTargetSays() {
         I8086 target = (I8086) Targets.byName("8086");
-        Assert.assertEquals("[int, hlt, cli, sti, nop, iret, cld, std]",
+        Assert.assertEquals("[int, hlt, cli, sti, nop, iret, cld, std, movsb, movsw, stosb, stosw, "
+                        + "lodsb, lodsw]",
                 target.machineStatements().keySet().toString());
         Assert.assertEquals(Integer.valueOf(1), target.machineStatements().get("int"));
         Assert.assertEquals(Integer.valueOf(0), target.machineStatements().get("hlt"));
@@ -227,14 +286,24 @@ public final class MachineTest {
         // before it for the rest: clearing an interrupt flag and doing nothing are not
         // ways of computing a flag. `cld` and `std` are the direction flag's own, which is
         // the whole reason the two are asked apart.
-        Assert.assertEquals("[flags]", target.machineFlags("int").toString());
-        Assert.assertEquals("[flags, direction]", target.machineFlags("iret").toString());
-        Assert.assertEquals("[direction]", target.machineFlags("cld").toString());
-        Assert.assertEquals("[direction]", target.machineFlags("std").toString());
-        Assert.assertEquals("[]", target.machineFlags("cli").toString());
-        Assert.assertEquals("[]", target.machineFlags("sti").toString());
-        Assert.assertEquals("[]", target.machineFlags("hlt").toString());
-        Assert.assertEquals("[]", target.machineFlags("nop").toString());
+        Assert.assertEquals("defines [flags], reads []", target.machineFlags("int").toString());
+        Assert.assertEquals("defines [flags, direction], reads []",
+                target.machineFlags("iret").toString());
+        Assert.assertEquals("defines [direction], reads []", target.machineFlags("cld").toString());
+        Assert.assertEquals("defines [direction], reads []", target.machineFlags("std").toString());
+        Assert.assertEquals("defines [], reads []", target.machineFlags("cli").toString());
+        Assert.assertEquals("defines [], reads []", target.machineFlags("sti").toString());
+        Assert.assertEquals("defines [], reads []", target.machineFlags("hlt").toString());
+        Assert.assertEquals("defines [], reads []", target.machineFlags("nop").toString());
+        // And the string operations are the first thing that *reads* a flag: where they walk
+        // is decided by the direction flag, and nothing else here depends on one.
+        Assert.assertEquals("defines [], reads [direction]",
+                target.machineFlags("movsb").toString());
+        Assert.assertEquals("defines [], reads [direction]",
+                target.machineFlags("stosw").toString());
+        Assert.assertEquals("[cx, si, di]", target.machineClobbers("movsb").toString());
+        Assert.assertEquals("[cx, di]", target.machineClobbers("stosw").toString());
+        Assert.assertEquals("[cx, si, di, ax]", target.machineClobbers("lodsb").toString());
     }
 
     private static void refusesWideImmediate() {
@@ -248,7 +317,17 @@ public final class MachineTest {
         Assert.assertTrue(refused.getMessage().contains("immediate"), refused.getMessage());
     }
 
-    private static void roundTrips() {        String body = "    int 0x13 clobbers(ax, bx, flags)\n    hlt\n";
+    private static void roundTrips() {        // A statement is written back with its prefix, which is part of it and not part of the
+        // mnemonic: the machine applies it, and the printer is what a re-read statement gets.
+        Assert.assertEquals("    rep movsb clobbers(cx, si, di)\n",
+                became("    rep movsb clobbers(cx, si, di)\n"));
+        Assert.assertEquals("    rep stosw clobbers(cx, di)\n", became("    rep stosw\n"));
+        // The list is the target's answer when the author does not give one, and it is written
+        // back: a copy is about the registers that point at what it walks.
+        Assert.assertEquals("    movsb clobbers(cx, si, di)\n", became("    movsb\n"));
+        Assert.assertEquals("    lodsb clobbers(cx, si, di, ax)\n", became("    lodsb\n"));
+
+        String body = "    int 0x13 clobbers(ax, bx, flags)\n    hlt\n";
         String once = printed(body);
         Assert.assertEquals(once, IrPrinter.print(IrParser.parse("test.ir", once)));
         // A list may name nothing at all, which is what a statement that touches no

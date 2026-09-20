@@ -1565,7 +1565,8 @@ public final class RegisterAllocator {
         for (Operand operand : instruction.operands()) {
             operands.add(withScratches(operand, scratches));
         }
-        return new Instruction(instruction.position(), instruction.mnemonic(), operands);
+        return new Instruction(instruction.position(), instruction.prefix(), instruction.mnemonic(),
+                operands);
     }
 
     private Operand withScratches(Operand operand, Map<String, String> scratches) {
@@ -1803,7 +1804,8 @@ public final class RegisterAllocator {
                 operands.add(operand);
             }
         }
-        return new Instruction(instruction.position(), instruction.mnemonic(), operands);
+        return new Instruction(instruction.position(), instruction.prefix(), instruction.mnemonic(),
+                operands);
     }
 
     /**

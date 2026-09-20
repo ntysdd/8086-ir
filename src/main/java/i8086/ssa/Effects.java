@@ -248,7 +248,7 @@ public final class Effects {
         }
         if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
-            return machine.definedFlags().contains(flag)
+            return machine.flags().defined().contains(flag)
                     && !clobbersFlag(machine.clobbers(), flag);
         }
         return false;
@@ -306,16 +306,21 @@ public final class Effects {
     /**
      * The flags this item reads.
      *
-     * <p>A branch reads the arithmetic ones and so does an operation that asks for the carry. An
-     * inline block is a promise rather than an answer: it may read the flags and the surface has no
-     * way to say so yet ({@code docs/ir.md} §9), so it is taken to read none — which costs nothing,
-     * because it destroys them anyway ({@link #flagsKilled}) and a read of them is refused. That is
-     * the verifier's model too, and it is the honest one: this compiler cannot see inside the block.
+     * <p>A branch reads the arithmetic ones and so does an operation that asks for the carry. A
+     * machine statement reads whatever the target says it reads, which on this machine is the
+     * direction flag and the string operations ({@link i8086.ir.FlagUse}). An inline block is a
+     * promise rather than an answer: it may read the flags and the surface has no way to say so yet
+     * ({@code docs/ir.md} §9), so it is taken to read none — which costs nothing, because it
+     * destroys them anyway ({@link #flagsKilled}) and a read of them is refused. That is the
+     * verifier's model too, and it is the honest one: this compiler cannot see inside the block.
      */
     public static Set<String> flagsRead(Item item) {
         Set<String> read = new LinkedHashSet<String>();
         if (readsTheArithmeticFlags(item)) {
             read.add(Names.FLAGS);
+        }
+        if (item instanceof Item.Machine) {
+            read.addAll(((Item.Machine) item).flags().read());
         }
         return read;
     }

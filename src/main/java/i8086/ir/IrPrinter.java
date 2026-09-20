@@ -112,7 +112,11 @@ public final class IrPrinter {
             text.append('\n');
         } else if (item instanceof Item.Machine) {
             Item.Machine machine = (Item.Machine) item;
-            text.append(INDENT).append(machine.mnemonic());
+            text.append(INDENT);
+            if (machine.prefix() != null) {
+                text.append(machine.prefix().spelling()).append(' ');
+            }
+            text.append(machine.mnemonic());
             for (long operand : machine.operands()) {
                 text.append(' ').append(Numbers.spelling(operand));
             }

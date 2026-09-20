@@ -21,6 +21,9 @@ import java.util.List;
  * module, and the assembly emitter, which writes them as the program. Those two
  * want different spellings of two things, which is what {@link Dialect} is for: the
  * IR printer writes our own dialect, and the emitter writes the one NASM reads.
+ *
+ * <p>A prefix is written in front of the mnemonic and is the same in both dialects,
+ * because the machine spells it one way and both dialects read it ({@link Prefix}).
  */
 public final class InstructionPrinter {
 
@@ -40,6 +43,9 @@ public final class InstructionPrinter {
             return name(instruction.mnemonic()) + ":";
         }
         StringBuilder text = new StringBuilder();
+        if (instruction.prefix() != null) {
+            text.append(instruction.prefix().spelling()).append(' ');
+        }
         text.append(instruction.mnemonic());
         // A branch's operand is somewhere to go rather than a register, and asking the
         // target which mnemonics go somewhere is what says so — the same question it is

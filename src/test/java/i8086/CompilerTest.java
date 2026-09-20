@@ -233,6 +233,8 @@ public final class CompilerTest {
                 CompilerTest::refusesFiveLiveBytes);
         suite.add("Compiler shifts by a large count through cl", CompilerTest::countsLargeShifts);
         suite.add("Compiler keeps a small shift to single steps", CompilerTest::repeatsSmallShifts);
+        suite.add("Compiler writes an instruction's prefix in front of it",
+                CompilerTest::writesAPrefixedInstruction);
         suite.add("Compiler keeps a value out of the register a shift destroys",
                 CompilerTest::keepsValuesOffShiftCounts);
         suite.add("Compiler multiplies two values the way the machine does",
@@ -1790,6 +1792,32 @@ public final class CompilerTest {
                         + "    x = eval(x - 1)\n"
                         + "    cmp x, 0\n"
                         + "    jnz $top\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And a prefix inside a block is written where it belongs, in front of the mnemonic. It used to
+     * come out as an operand — {@code rep $movsb}, which is not an instruction — because the reader
+     * took the second word for one ({@code docs/asm.md} §1, {@link i8086.asm.Prefix}).
+     */
+    private static void writesAPrefixedInstruction() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    rep movsb\n"
+                        + "    mov ax, 0x7e00\n"
+                        + "    mov ax, 0x8000\n"
+                        + "    cld\n"
+                        + "    mov di, ax\n"
+                        + "    mov cx, 0x200\n"
+                        + "    rep stosw\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    asm clobbers(cx, si, di) {\n        rep movsb\n    }\n"
+                        + "    var src: u16\n    var dst: u16\n"
+                        + "    src = 0x7E00\n    dst = 0x8000\n"
+                        + "    cld\n"
+                        + "    rep stosw with cx = 0x200, di = dst\n"
                         + "    ret\n"));
     }
 

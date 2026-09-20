@@ -187,8 +187,9 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    only. What comes out is a form the target can encode, which is what makes it
    verifiable. The read-flags operation is selected the same way: the target says
    what it has — `LAHF` or `PUSHF` on the 8086, which has no `SETcc`.
-   **Built for arithmetic, comparisons, control flow, loads, stores, the machine's multiply and
-   divide, and two bytes put together into one word** — the last one being the shape a program writes
+   **Built for arithmetic, comparisons, control flow, loads, stores, the machine's own statements —
+   `int` and its friends, and the string operations with `rep` in front of them — and two bytes put
+   together into one word** — the last one being the shape a program writes
    as `(high shl 8) + low` over two bytes it has widened, which on this machine is two moves
    into the halves of `ax` (`i8086.target.combineBytes` and the recognizer beside it in
    selection). The high half may be shifted by a statement of its own — `h = eval(w shl 8)`

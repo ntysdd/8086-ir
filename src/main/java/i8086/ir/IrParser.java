@@ -4,6 +4,7 @@ import i8086.CompileError;
 import i8086.SourcePos;
 import i8086.asm.Instruction;
 import i8086.asm.Operand;
+import i8086.asm.Prefix;
 import i8086.asm.Size;
 import i8086.asm.Token;
 import i8086.asm.TokenKind;
@@ -527,7 +528,23 @@ public final class IrParser {
         Integer immediate = target.machineStatements().get(first.name());
         if (immediate != null && !first.forced() && !isNameFollowing(TokenKind.PUNCT, "=")
                 && !isNameFollowing(TokenKind.PUNCT, ":")) {
-            return parseMachineStatement(next(), immediate.intValue());
+            return parseMachineStatement(null, next(), immediate.intValue());
+        }
+        // 'rep movsb' is one statement: the machine's own way of moving a stretch of bytes, and the
+        // prefix is what makes it a loop (docs/ir.md §11). A prefix in front of anything else is
+        // not something this surface has.
+        Prefix prefix = first.is(TokenKind.IDENT) && !first.forced() ? Prefix.named(first.name()) : null;
+        if (prefix != null) {
+            Token keyword = next();
+            Token operation = expect(TokenKind.IDENT, "a statement after '" + prefix.spelling() + "'");
+            Integer bytes = target.machineStatements().get(operation.name());
+            if (bytes == null) {
+                throw new CompileError(operation.position(),
+                        "'" + prefix.spelling() + "' goes in front of a machine statement, and '"
+                                + operation.text() + "' is not one this target provides "
+                                + "(docs/ir.md §11)");
+            }
+            return parseMachineStatement(prefix, operation, bytes.intValue());
         }
         if (first.is(TokenKind.IDENT)) {
             return parseInstructionStatement(first);
@@ -715,7 +732,7 @@ public final class IrParser {
      * means "everything", and a value that has to live across the statement is refused
      * until the author says what is really destroyed.
      */
-    private Item parseMachineStatement(Token keyword, int immediateBytes) {
+    private Item parseMachineStatement(Prefix prefix, Token keyword, int immediateBytes) {
         List<Long> operands = new ArrayList<Long>();
         if (immediateBytes > 0) {
             Token value = expect(TokenKind.NUMBER, "an immediate");
@@ -733,7 +750,7 @@ public final class IrParser {
         }
         List<Item.Argument> arguments = parseWithClause();
         endOfLine();
-        return new Item.Machine(keyword.position(), keyword.name(), operands, clobbers,
+        return new Item.Machine(keyword.position(), prefix, keyword.name(), operands, clobbers,
                 arguments, target.machineFlags(keyword.name()));
     }
 
@@ -1452,6 +1469,15 @@ public final class IrParser {
             return Instruction.label(first.position(), first.name());
         }
         Token mnemonic = expect(TokenKind.IDENT, "a mnemonic");
+        // A prefix in front of the mnemonic is part of the instruction, not a word glued on:
+        // 'rep movsb' is one thing the machine does (docs/asm.md §3, Prefix).
+        Prefix prefix = Prefix.named(mnemonic.name());
+        if (prefix != null) {
+            mnemonic = expect(TokenKind.IDENT, "a mnemonic after '" + prefix.spelling() + "'");
+            require(Prefix.named(mnemonic.name()) == null, mnemonic.position(),
+                    "an instruction takes one prefix, and '" + prefix.spelling()
+                            + "' already stands in front of this one");
+        }
         List<Operand> operands = new ArrayList<Operand>();
         if (!peek().is(TokenKind.NEWLINE) && !peek().isEof() && !peek().is("}")) {
             while (true) {
@@ -1464,7 +1490,7 @@ public final class IrParser {
             }
         }
         endOfLine();
-        return new Instruction(mnemonic.position(), mnemonic.name(), operands);
+        return new Instruction(mnemonic.position(), prefix, mnemonic.name(), operands);
     }
 
     private Operand parseOperand() {

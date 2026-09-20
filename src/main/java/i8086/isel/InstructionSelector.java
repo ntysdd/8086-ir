@@ -568,7 +568,7 @@ public final class InstructionSelector {
                 given.add(new Operand.Number(item.position(), operand,
                         Numbers.spelling(operand)));
             }
-            out.add(new Instruction(item.position(), machine.mnemonic(), given));
+            out.add(new Instruction(item.position(), machine.prefix(), machine.mnemonic(), given));
             return;
         }
         if (item instanceof Item.MovReg) {

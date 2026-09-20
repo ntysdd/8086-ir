@@ -1,6 +1,7 @@
 package i8086.pass;
 
 import i8086.ir.Item;
+import i8086.ir.Names;
 import i8086.ssa.Block;
 import i8086.ssa.Effects;
 import i8086.ssa.Phi;
@@ -67,6 +68,14 @@ public final class Uses {
             for (Phi phi : form.phis(block)) {
                 for (String operand : phi.operands()) {
                     count(counts, operand, form);
+                }
+                // A φ for a flag is a definition of it like any other, and it is the version in
+                // force from here on in this block. The arithmetic flags could not get one until a
+                // copy needed the direction flag (docs/ir.md §4.1), and this is the other half of
+                // saying so: without it the φ's name is read by nobody, and the pass that removes
+                // what nothing reads takes the definition of a flag that is read.
+                if (Names.isFlag(phi.variable())) {
+                    flags.put(phi.variable(), phi.name());
                 }
             }
             for (SsaStatement statement : form.statements(block)) {

@@ -69,9 +69,9 @@ final class Renamer {
             // A statement's clause reads values, so they are renamed like any other read
             // ({@code docs/ir.md} §11).
             Item.Machine machine = (Item.Machine) item;
-            return new Item.Machine(item.position(), machine.mnemonic(), machine.operands(),
-                    machine.clobbers(), rename(machine.arguments(), versions),
-                    machine.definedFlags());
+            return new Item.Machine(item.position(), machine.prefix(), machine.mnemonic(),
+                    machine.operands(), machine.clobbers(), rename(machine.arguments(), versions),
+                    machine.flags());
         }
         if (item instanceof Item.FarJump) {
             Item.FarJump far = (Item.FarJump) item;

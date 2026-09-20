@@ -100,11 +100,17 @@ public final class EffectsTest {
                         + "    ret\n"));
 
         // And a branch reads the arithmetic flags, which is a thing it does and not a state it
-        // leaves them in. The direction flag is not something a condition has an opinion about.
+        // leaves them in. The direction flag is not something a condition has an opinion about,
+        // but a copy is: where it walks is decided by it.
         Item branch = statements("    jc $main\n").get(0);
         Assert.assertEquals("[flags]", Effects.flagsRead(branch).toString());
         Assert.assertTrue(Effects.flagsDefined(branch).isEmpty(), "a branch writes nothing");
         Assert.assertTrue(Effects.flagsKilled(branch).isEmpty(), "a branch destroys nothing");
+
+        Item copy = statements("    rep movsb\n").get(0);
+        Assert.assertEquals("[direction]", Effects.flagsRead(copy).toString());
+        Assert.assertTrue(Effects.flagsDefined(copy).isEmpty(), "a copy computes no flag");
+        Assert.assertTrue(Effects.flagsKilled(copy).isEmpty(), "and destroys none of them");
     }
 
     private static void theTargetSays() {

@@ -731,6 +731,20 @@ falling through the sequence the check just walked. It is incomplete because the
 flags at a label are really a question about a graph, and this is a flat walk of
 a list.
 
+**And there is a second pass of it now, on the form**, which asks the question the graph can answer:
+for every statement that reads a flag, is that flag defined on *every* way into the statement
+(`SsaVerifier`). It is the same question and a strictly better answer, and what it is there for is
+the direction flag: a `cld` is usually a stretch of code above the copy it is for, and the flat walk
+would refuse the copy for the label in between. It also catches what the flat walk cannot see — a
+join where one path set the flag and the other did not — and it is where §4.1's promise about
+`direction` is kept: a copy with nothing to point it either way is refused, with a position.
+
+What is still the flat walk's is the *message*, for the arithmetic flags: it knows whether the
+writer gave the flags up or whether nothing defined them, and it says which (§4.3's two ways). The
+form cannot tell those apart, because both look like "no version here". So the split is deliberate:
+the answer comes from the graph, and the arithmetic flags get their wording from the walk in front
+of it.
+
 That is temporary, and the shape of the fix is fixed: once a control flow graph
 and SSA exist, `flags` is an ordinary value, the question becomes reaching
 definitions over it, and a join that needs the flags materialises them. Two
@@ -1161,9 +1175,11 @@ familiar spelling, and the meaning would then be a guess. So:
     none, with `ax` and `dx` read and written behind the writer's back. The
     two-operand `mul d, s` is fine, because that one *is* the surface's
     operation; the one-operand machine form is not.
-  * `xchg`, `lea`, `push`, `pop`, the `in`/`out` and interrupt group, and the
-    string operations — several effects at once, or an addressing form, or a
-    target operation of §11 with no surface spelling yet.
+  * `xchg`, `lea`, `push`, `pop`, the `in`/`out` and interrupt group, and the string
+    operations that compare — several effects at once, or an addressing form, or a
+    target operation of §11 with no surface spelling yet. (The string operations that
+    *copy* do have one: they are statements of their own, with `rep` in front of them,
+    §11.)
 
 `neg d` is in the first list on purpose, and it is worth saying why, because the
 obvious argument cuts the other way. `NEG` **is** subtraction from zero: the
@@ -1352,7 +1368,8 @@ about lifetimes.
 ## 9. Inline assembly — [decided]
 
 Inline assembly is the escape hatch: register-based BIOS/DOS calls, port
-sequences, string operations, and anything the surface cannot express. **The
+sequences, the string operations that compare as they go, and anything else the surface
+cannot express. **The
 text inside a block is the assembly text of [`docs/asm.md`](asm.md)** — the same
 syntax the emitter writes and the bundled assembler reads — so there is one
 assembly language in the project rather than two. A block declares the registers
@@ -1592,7 +1609,25 @@ sti
 hlt
 nop
 iret
+rep movsb                      ; a copy, and the prefix is part of the statement
+stosw
+lodsb
 ```
+
+**A statement may be given a prefix**, and `rep` is the reason: a repeated copy is one thing the
+machine does, and it is how a stretch of memory is moved without writing a loop. The prefix is part
+of the statement rather than part of the mnemonic — `rep movsb` is a copy loop and `movsb` is one
+step of one — and what it needs is where the statement's operands already go:
+
+```
+cld
+rep movsb with cx = 0x200, si = source, di = target
+```
+
+A string operation also **reads** the direction flag, which is the one thing no clobber list can
+say, so the target says it (§4.2). That is what makes the `cld` above necessary rather than
+optional, and what a program is refused for leaving out: a copy whose direction flag nobody set
+walks whichever way the machine happened to be pointing.
 
 What the target provides is a table, and the statement form exists for the thing a
 block cannot say: **the compiler understands it**. A block is opaque in both
@@ -1742,7 +1777,9 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 2. How much of `lahf`/`sahf`/`pushf` is exposed directly (§4.4).
 3. The no-spill marker's spelling (§8.2).
 4. Inline assembly operand binding for variables, and inputs/outputs (§9).
-5. Whether string operations and `jcxz` get a surface (§11).
+5. Whether the comparing string operations and `jcxz` get a surface (§11). The six that
+   copy have one, with `rep`; `cmps` and `scas` set the arithmetic flags and are written
+   with `repe` or `repne`, which is a shape of its own — a loop whose exit is a condition.
 6. Whether anything beyond the image is ever offered (§10) — which real boot code
    needs, at `0x0413`, `0x046C` and `0xB800:0000`, and which §3.1.2's `in`
    deliberately does not reach — the alignment form that reaches a multiple rather

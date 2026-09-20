@@ -96,17 +96,28 @@ what it defines is written beside it:
     flags#2 = cmp x#1, 0x80
     direction#3 = cld
 
-Everything that reads a flag names the one it means, which today is the arithmetic flags — a
-branch reads them, and so does an operation that asks for the carry — while nothing reads
-`direction` yet.
+Everything that reads a flag names the one it means: a branch reads the arithmetic flags, an
+operation that asks for the carry reads those, and a string operation reads `direction`
+([`docs/ir.md`](ir.md) §11).
 
-**No φ for the flags can appear today.** A φ for them would need a flags value
-that is live across a join, and the surface's flags rule refuses every program
-where one could be read: a label clears the flags, so a branch after a join needs
-a definition *after* that label ([`docs/ir.md`](ir.md) §4.3). The rule is a linear
-scan because there is no graph yet; when it becomes a question about reaching
-definitions, a join that needs the flags will materialise them, and that is where
-they stop being a special case.
+**A φ for a flag does appear, now that the direction flag is its own name.** A copy reads the
+flag that says which way it walks, and a program that decides the direction on one path and the
+other on another needs the two merged like any other value:
+
+    block3 (copy) <- block1 block2:
+        direction#7 = phi(block1: direction#5, block2: direction#6)
+        rep movsb with cx = 0x200, si = src#2, di = dst#3
+
+It costs no instruction, because a flag is machine state and not a register: the φ says which
+value the form believes in, and the machine's own flag is what the branch or the copy reads. What
+it took was the flag half of the bookkeeping — the φ has to be a *definition* of the flag for the
+passes that count readers, or the pass that removes what nothing reads removes the definition of a
+flag that is read.
+
+The arithmetic flags still get none: the surface's rule refuses every program where one could be
+read, because a label clears them ([`docs/ir.md`](ir.md) §4.3), and that rule is a linear scan
+because it is older than the graph. A join that needs *them* will get the same treatment when that
+rule is asked of the form, and that is where they stop being a special case.
 
 ## 5. The value with no definition — [decided]
 
