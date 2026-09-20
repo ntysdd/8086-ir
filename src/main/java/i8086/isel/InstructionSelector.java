@@ -31,8 +31,10 @@ import i8086.target.Target;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Turns the IR into instructions, choosing the form of each operation.
@@ -100,6 +102,46 @@ public final class InstructionSelector {
     private final Map<String, Type> tempTypes = new LinkedHashMap<String, Type>();
 
     /**
+     * The byte each word value is a zero-extended copy of, by the word value's name.
+     *
+     * <p>Two bytes put together into a word is two moves when the halves are known, and knowing is
+     * this: the statement that widened the byte said that everything above it is zero, so the word it
+     * made is the byte in the low half and nothing in the high half. A byte value on its own does not
+     * say that — a computation that happens to be small is not a computation that cannot carry — and
+     * a widening is a statement, so it is read off the statements rather than guessed at
+     * ({@link #combinedBytes}).
+     */
+    private Map<String, String> widenedBytes = new LinkedHashMap<String, String>();
+
+    /**
+     * The widenings whose only reader is a combine, so that emitting one would be work nobody wants.
+     *
+     * <p>A widening is a statement ({@code w = movzx x}), so it is a value, and a combine that reads
+     * it puts the byte itself in the half it belongs in. The widening then has nothing left to do:
+     * {@code mov al, x; xor ah, ah} is spent on a register the {@code mov ah, x} is about to write
+     * over. What makes leaving it out safe is that <b>nothing else</b> reads the word — a widening
+     * whose value goes anywhere else is a value the program asked for, and it stays.
+     */
+    private Set<String> consumedWidenings = new LinkedHashSet<String>();
+
+    /**
+     * The byte values whose own load a combine makes, and the access each of those is.
+     *
+     * <p>A widened byte that came from one plain load is the byte the combine wants in a half, so
+     * the load is the combine's to do — {@code mov ah, byte [$p1]} where loading it into a register
+     * first is a load and then a move. What that costs is the load happening later than it was
+     * written, which is why it is only taken where nothing between the two could have written what
+     * it reads ({@link #findConsumed}).
+     */
+    private Set<String> consumedLoads = new LinkedHashSet<String>();
+
+    /** The access each byte value is loaded from, when its one statement is a plain load. */
+    private Map<String, Value.Memory> loadedBytes = new LinkedHashMap<String, Value.Memory>();
+
+    /** The access a combine reads a half from, for the halves whose load it took over. */
+    private Map<String, Value.Memory> halfAccess = new LinkedHashMap<String, Value.Memory>();
+
+    /**
      * Whether the flags can still be read in front of the item being selected.
      *
      * <p>What decides whether an instruction that writes them may be used where the surface asked
@@ -138,6 +180,9 @@ public final class InstructionSelector {
         Map<Block, Integer> firstPiece = new LinkedHashMap<Block, Integer>();
         Map<Block, Integer> lastPiece = new LinkedHashMap<Block, Integer>();
         Map<Item, Boolean> flagsLive = flagsLiveBefore(Liveness.of(form.cfg(), names));
+        widenedBytes = widenedBytes();
+        loadedBytes = loadedBytes();
+        findConsumed();
         for (Block block : form.cfg().blocks()) {
             // A φ is not an item and not an instruction. What it says is that the values
             // reaching it are one value as far as a register is concerned, because there
@@ -163,6 +208,69 @@ public final class InstructionSelector {
         List<Selection.Merge> where = merges(groups, firstPiece, lastPiece);
         Map<String, String> variables = variables();
         return new Selection(pieces, groups, where, variables, homes(variables), types());
+    }
+
+    /**
+     * The byte each word value is a zero-extended copy of, for {@link #widenedBytes}.
+     *
+     * <p>Three things have to be true, and each of them is a fact about the form: the value is
+     * written once, by an assignment whose value is a conversion, the conversion is the zero-extending
+     * one, and the value it extends is a byte. A widening into something wider than a register is
+     * refused before selection, so a widening that arrives here is one register wide.
+     */
+    private Map<String, String> widenedBytes() {
+        Map<String, String> widened = new LinkedHashMap<String, String>();
+        for (Block block : form.cfg().blocks()) {
+            for (SsaStatement statement : form.statements(block)) {
+                if (!(statement.item() instanceof Item.Assign)) {
+                    continue;
+                }
+                Item.Assign assign = (Item.Assign) statement.item();
+                if (!(assign.place() instanceof Place.Name)
+                        || !(assign.value() instanceof Value.Convert)) {
+                    continue;
+                }
+                Value.Convert convert = (Value.Convert) assign.value();
+                if (convert.conversion() != Conversion.ZERO_EXTEND
+                        || !(convert.operand() instanceof Value.Name)) {
+                    continue;
+                }
+                String source = ((Value.Name) convert.operand()).name();
+                Type type = form.typeOf(source);
+                if (type != null && type.bytes() < Size.WORD.bytes()) {
+                    widened.put(((Place.Name) assign.place()).name(), source);
+                }
+            }
+        }
+        return widened;
+    }
+
+    /**
+     * The access each byte value is loaded from, for {@link #loadedBytes}.
+     *
+     * <p>One shape: an assignment to a name whose value is an access. A volatile one is left out,
+     * because an access the program needs to happen where it is written ({@code docs/ir.md} §3.4) is
+     * not one anything may carry to another statement.
+     */
+    private Map<String, Value.Memory> loadedBytes() {
+        Map<String, Value.Memory> loaded = new LinkedHashMap<String, Value.Memory>();
+        for (Block block : form.cfg().blocks()) {
+            for (SsaStatement statement : form.statements(block)) {
+                if (!(statement.item() instanceof Item.Assign)) {
+                    continue;
+                }
+                Item.Assign assign = (Item.Assign) statement.item();
+                if (!(assign.place() instanceof Place.Name)
+                        || !(assign.value() instanceof Value.Memory)) {
+                    continue;
+                }
+                Value.Memory load = (Value.Memory) assign.value();
+                if (!load.operand().isVolatile()) {
+                    loaded.put(((Place.Name) assign.place()).name(), load);
+                }
+            }
+        }
+        return loaded;
     }
 
     /**
@@ -411,6 +519,9 @@ public final class InstructionSelector {
             return;
         }
         String destination = ((Place.Name) assign.place()).name();
+        if (consumedWidenings.contains(destination) || consumedLoads.contains(destination)) {
+            return; // the byte goes into the word a combine builds, and nothing else reads it
+        }
         if (isLabel(assign.value())) {
             emitLabelAddress(destination, (Value.Name) assign.value());
             return;
@@ -882,6 +993,11 @@ public final class InstructionSelector {
             out.addAll(expansion.instructions());
             return;
         }
+        Expansion combined = combinedBytes(apply, destination);
+        if (combined != null) {
+            out.addAll(combined.instructions());
+            return;
+        }
 
         // Two operations in a row that the machine does in a register of its own — `d * a / b` — are
         // one chain in that register: the first is asked for its answer where the second one works,
@@ -968,6 +1084,271 @@ public final class InstructionSelector {
                     : target.shiftByConstant(where, shift, target0, source0, constant);
         }
         return null;
+    }
+
+    /**
+     * The widenings and loads whose only reader is a combine, so that emitting them is work nobody
+     * wants.
+     *
+     * <p>Both halves come from statements that widen a byte, and the combine puts those bytes where
+     * they belong — so the widening is not a value the program needs any more, and the sequence it
+     * would be selected to is a move and a clear that the combine writes over. And where the byte
+     * itself came from one plain load, that load can be the combine's own operand instead: the half
+     * wants a byte in it, and {@code mov ah, byte [$p1]} is that byte, where loading it into a
+     * register first is a load and a move.
+     *
+     * <p>What makes leaving either out safe is that <b>nothing else</b> reads the value: the count is
+     * of readers, the statement that defines a value does not count itself, and a value a φ carries
+     * is a reader that is an item of no kind and is therefore refused rather than missed.
+     *
+     * <p>A load is only taken when the combine is in <b>the same block</b> and later, with nothing
+     * between that could have written memory — a store, an interrupt or a block of assembly. That is
+     * the same rule {@code i8086.target.RepeatedLoads} applies to the code the allocator produced,
+     * asked here of the statements, because this one changes which statement the access belongs to.
+     */
+    private void findConsumed() {
+        Map<String, Set<Item>> readers = new LinkedHashMap<String, Set<Item>>();
+        Map<String, Item> definedBy = new LinkedHashMap<String, Item>();
+        Map<Item, Integer> position = new LinkedHashMap<Item, Integer>();
+        Map<Item, Block> block = new LinkedHashMap<Item, Block>();
+        Set<String> carried = new LinkedHashSet<String>();
+        for (Block each : form.cfg().blocks()) {
+            int at = 0;
+            for (SsaStatement statement : form.statements(each)) {
+                Item item = statement.item();
+                block.put(item, each);
+                position.put(item, Integer.valueOf(at++));
+                String defined = Effects.writtenVariable(item);
+                if (defined != null) {
+                    definedBy.put(defined, item);
+                }
+                for (Effects.Occurrence occurrence : Effects.occurrences(item)) {
+                    if (occurrence.written() || occurrence.name() == null) {
+                        continue; // a definition is not a reader of the value it defines
+                    }
+                    Set<Item> found = readers.get(occurrence.name());
+                    if (found == null) {
+                        found = new LinkedHashSet<Item>();
+                        readers.put(occurrence.name(), found);
+                    }
+                    found.add(item);
+                }
+            }
+            for (Phi phi : form.phis(each)) {
+                carried.addAll(phi.operands());
+            }
+        }
+
+        for (Block each : form.cfg().blocks()) {
+            for (SsaStatement statement : form.statements(each)) {
+                String[] halves = combinedHalves(statement.item());
+                if (halves == null) {
+                    continue;
+                }
+                for (String half : halves) {
+                    if (!onlyReader(readers, carried, half, statement.item())) {
+                        continue;
+                    }
+                    consumedWidenings.add(half);
+                    consumeByteLoad(half, definedBy, readers, carried, position, block, statement);
+                }
+            }
+        }
+    }
+
+    /**
+     * Takes the load a widened byte came from, when that load is the byte's only reader and the
+     * combine can carry the access itself.
+     */
+    private void consumeByteLoad(String half, Map<String, Item> definedBy,
+                                 Map<String, Set<Item>> readers, Set<String> carried,
+                                 Map<Item, Integer> position, Map<Item, Block> block,
+                                 SsaStatement combine) {
+        String value = widenedBytes.get(half);
+        Value.Memory load = value == null ? null : loadedBytes.get(value);
+        Item widening = definedBy.get(half);
+        Item loading = value == null ? null : definedBy.get(value);
+        if (load == null || widening == null || loading == null
+                || !onlyReader(readers, carried, value, widening)
+                || block.get(widening) != block.get(combine.item())
+                || block.get(loading) != block.get(combine.item())
+                || position.get(loading).intValue() > position.get(widening).intValue()
+                || position.get(widening).intValue() > position.get(combine.item()).intValue()) {
+            return;
+        }
+        if (writesMemoryBetween(block.get(loading), loading, combine.item())) {
+            return;
+        }
+        consumedLoads.add(value);
+        halfAccess.put(half, load);
+    }
+
+    /** Whether this value's one reader is this item, and nothing carries it as a φ operand. */
+    private static boolean onlyReader(Map<String, Set<Item>> readers, Set<String> carried,
+                                      String value, Item item) {
+        Set<Item> found = readers.get(value);
+        return !carried.contains(value) && found != null && found.size() == 1
+                && found.contains(item);
+    }
+
+    /** Whether anything between two statements could have written memory. */
+    private boolean writesMemoryBetween(Block block, Item from, Item to) {
+        boolean seen = false;
+        boolean wrote = false;
+        for (SsaStatement statement : form.statements(block)) {
+            if (statement.item() == to) {
+                return wrote;
+            }
+            if (seen && touchesMemory(statement.item())) {
+                wrote = true;
+            }
+            if (statement.item() == from) {
+                seen = true;
+            }
+        }
+        return true; // the combine was not found where it was said to be, so nothing is claimed
+    }
+
+    /**
+     * Whether this statement may have written memory, or needs its access to happen where it is.
+     *
+     * <p>A store writes, an inline block and a machine statement may write anywhere, and a volatile
+     * access is one the program needs to happen in its own place — so none of them is something a
+     * load can be moved across.
+     */
+    private static boolean touchesMemory(Item item) {
+        if (item instanceof Item.InlineAsm || item instanceof Item.Machine) {
+            return true;
+        }
+        if (item instanceof Item.Assign
+                && ((Item.Assign) item).place() instanceof Place.Memory) {
+            return true;
+        }
+        for (Effects.Occurrence occurrence : Effects.occurrences(item)) {
+            if (occurrence.isVolatile()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The two word values a statement puts together into one, the high one first, or null when the
+     * statement puts nothing together.
+     *
+     * <p>The shape is {@code (high shl 8) + low} — or the same with {@code * 256}, or with the two
+     * operands the other way round, or joined with {@code |}, which says the same thing when the
+     * fields cannot overlap.
+     */
+    private String[] combinedHalves(Item item) {
+        if (!(item instanceof Item.Assign)
+                || !(((Item.Assign) item).value() instanceof Value.Expr)) {
+            return null;
+        }
+        return combinedHalves(((Value.Expr) ((Item.Assign) item).value()).expression());
+    }
+
+    /** The same, for an expression: the two widened values a combine would read, or null. */
+    private String[] combinedHalves(Expression expression) {
+        if (!(expression instanceof Expression.Apply)) {
+            return null;
+        }
+        Expression.Apply apply = (Expression.Apply) expression;
+        if (!apply.operator().equals(Operator.ADD)
+                && !apply.operator().equals(Operator.OR)) {
+            return null;
+        }
+        String high = widenedValue(shiftedUp(apply.left()));
+        String low = widenedValue(apply.right());
+        if (high == null || low == null) {
+            high = widenedValue(shiftedUp(apply.right()));
+            low = widenedValue(apply.left());
+        }
+        if (high == null || low == null || high.equals(low)) {
+            return null;
+        }
+        return new String[] { high, low };
+    }
+
+    /** The word value this expression names, when a statement widened a byte into it. */
+    private String widenedValue(Expression expression) {
+        if (!(expression instanceof Expression.Leaf)) {
+            return null;
+        }
+        Value value = ((Expression.Leaf) expression).value();
+        if (!(value instanceof Value.Name)) {
+            return null;
+        }
+        String name = ((Value.Name) value).name();
+        return widenedBytes.containsKey(name) ? name : null;
+    }
+
+    /**
+     * Two bytes put together into a word, when the machine has an idiom for it.
+     *
+     * <p>What makes this an idiom and not a re-association is that both halves are <b>known</b> to be
+     * a byte with zeroes above it, which is a statement a program writes ({@code w = movzx x}) and
+     * nothing else says: a value whose type is a byte is widened before it gets here — that is what
+     * {@code xor ah, ah} is for — so being a byte is not the same thing as being known to be small.
+     * With both halves known, the word they make is the low byte of one in the high half and the low
+     * byte of the other in the low half, which on this machine is two moves.
+     *
+     * <p>Only where nothing is reading the flags, because the idiom is moves and the arithmetic it
+     * stands for defines them. The declaration is the target's ({@code keepsFlags}), and it is asked
+     * before the substitution rather than after: the flags are the machine's, not this class's.
+     */
+    private Expansion combinedBytes(Expression.Apply apply, String destination) {
+        if (flagsLiveHere) {
+            return null;
+        }
+        String[] halves = combinedHalves(apply);
+        if (halves == null) {
+            return null;
+        }
+        Expansion sequence = target.combineBytes(apply.position(),
+                virtual(destination, apply.position()),
+                halfOperand(halves[0], apply.position()),
+                halfOperand(halves[1], apply.position()));
+        if (sequence != null) {
+            requireFlagsMayBeLost(sequence.keepsFlags(), apply.position(), apply.operator(), false);
+        }
+        return sequence;
+    }
+
+    /**
+     * What a combine reads a half from: the access itself when the byte's own load is the combine's
+     * to make, and the register the byte is in otherwise.
+     */
+    private Operand halfOperand(String half, SourcePos where) {
+        Value.Memory load = halfAccess.get(half);
+        return load == null ? virtual(widenedBytes.get(half), where) : memory(load.operand());
+    }
+
+    /**
+     * What this expression shifts up by eight, or null when it is not that: the high half of the word
+     * a combine makes. Both spellings are accepted because the surface has both — {@code shl} says what
+     * it is, and {@code * 256} is what a person types — and each of them says the amount its own way.
+     */
+    private static Expression shiftedUp(Expression expression) {
+        if (!(expression instanceof Expression.Apply)) {
+            return null;
+        }
+        Expression.Apply apply = (Expression.Apply) expression;
+        long amount;
+        if (apply.operator().equals(Operator.SHIFT_LEFT)) {
+            amount = 8;
+        } else if (apply.operator().equals(Operator.MULTIPLY)
+                || apply.operator().equals(Operator.MULTIPLY_UNSIGNED)
+                || apply.operator().equals(Operator.MULTIPLY_SIGNED)) {
+            amount = 256;
+        } else {
+            return null;
+        }
+        Value by = literalOf(apply.right());
+        if (!(by instanceof Value.Number) || ((Value.Number) by).value() != amount) {
+            return null;
+        }
+        return apply.left();
     }
 
     /** The register a leaf already names, or null when it is not one. */

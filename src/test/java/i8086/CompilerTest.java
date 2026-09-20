@@ -168,6 +168,17 @@ public final class CompilerTest {
                 CompilerTest::loadsTheCellAgainAfterAStore);
         suite.add("Compiler loads the cell again after an interrupt",
                 CompilerTest::loadsTheCellAgainAfterAnInterrupt);
+        suite.add("Compiler puts two bytes into one word", CompilerTest::combinesTwoBytes);
+        suite.add("Compiler puts two computed bytes into one word",
+                CompilerTest::combinesComputedBytes);
+        suite.add("Compiler takes the bytes past a store that came before them",
+                CompilerTest::takesTheLoadsPastAnEarlierStore);
+        suite.add("Compiler leaves the load when a store stands between",
+                CompilerTest::leavesTheLoadWhenAStoreStandsBetween);
+        suite.add("Compiler leaves a widening that is read somewhere else",
+                CompilerTest::leavesAWideningThatIsReadTwice);
+        suite.add("Compiler leaves a sign-extended byte alone",
+                CompilerTest::leavesASignExtendedByteAlone);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -2252,6 +2263,199 @@ public final class CompilerTest {
                         + "    hi = word [e + 4]\n"
                         + "    volatile [0x42] = lo\n"
                         + "    volatile [0x44] = hi\n"
+                        + "    ret\n"));
+    }
+
+    // --- two bytes put together into a word --------------------------------
+
+    /**
+     * The idiom, on the shape a person writes it in: two bytes read from memory, one for the high
+     * half of the word and one for the low half. On this machine that is {@code ah} and {@code al},
+     * so it is two loads and a store — where the arithmetic it stands for is two widenings, a count in
+     * {@code cl}, a shift and an add, and where the widenings' zeroes are written over the moment the
+     * halves are set.
+     *
+     * <p>What makes the loads the combine's to make is that each byte has no other reader: the value
+     * is the half. Nothing between the load and the combine could have written the byte it reads, so
+     * the access is the same one either way and belongs where the half is wanted.
+     */
+    private static void combinesTwoBytes() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$p1: times 1 db 0\n"
+                        + "\n"
+                        + "$p2: times 1 db 0\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ah, byte [$p1]\n"
+                        + "    mov al, byte [$p2]\n"
+                        + "    mov [0x40], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n"
+                        + "$p1: pad 1\n$p2: pad 1\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    x = byte [$p1]\n"
+                        + "    y = byte [$p2]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x40] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And where the bytes come from something that is not a load, the combine reads the registers
+     * they are already in — still two moves, and no widening: the byte is in the register's low half,
+     * which is half of the word being built.
+     */
+    private static void combinesComputedBytes() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov cl, byte [0x42]\n"
+                        + "    inc dl\n"
+                        + "    add cl, 2\n"
+                        + "    mov ah, dl\n"
+                        + "    mov al, cl\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var a: u8\n    var b: u8\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    a = byte [0x40]\n"
+                        + "    b = byte [0x42]\n"
+                        + "    x = eval(a + 1)\n"
+                        + "    y = eval(b + 2)\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And a store that came <em>before</em> the loads is not in the way of either of them: the range the
+     * question is about starts at the load and ends at the combine, and a store outside it cannot have
+     * changed what either of them reads. Which is what makes the two halves two loads rather than two
+     * loads and two moves.
+     */
+    private static void takesTheLoadsPastAnEarlierStore() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x50]\n"
+                        + "    mov [0x52], ax\n"
+                        + "    mov ah, byte [0x40]\n"
+                        + "    mov al, byte [0x42]\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var keep: u16\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    keep = word [0x50]\n"
+                        + "    volatile [0x52] = keep\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The must-not for taking a load: a store between it and the combine may have written the byte,
+     * so the load happens where it was written and the combine reads the register. That is the same
+     * question {@code i8086.target.RepeatedLoads} asks of the code the allocator produced, asked of
+     * the statements, and it is the whole of what stands between this idiom and a wrong answer.
+     */
+    private static void leavesTheLoadWhenAStoreStandsBetween() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cl, byte [0x40]\n"
+                        + "    mov [0x50], cl\n"
+                        + "    mov ah, cl\n"
+                        + "    mov al, byte [0x42]\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    volatile [0x50] = x\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The must-not for consuming a widening: this one is read by another statement as well, so it is
+     * a value the program asked for and is emitted where it is written — while the combine, which
+     * wants the byte and not the word, still reads the byte.
+     */
+    private static void leavesAWideningThatIsReadTwice() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dl, byte [0x40]\n"
+                        + "    mov al, dl\n"
+                        + "    xor ah, ah\n"
+                        + "    mov cx, ax\n"
+                        + "    mov ah, dl\n"
+                        + "    mov al, byte [0x42]\n"
+                        + "    mov [0x44], ax\n"
+                        + "    mov [0x46], cx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movzx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
+                        + "    volatile [0x46] = w\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not that is about the widening itself: a sign-extended byte has ones above it when
+     * the byte is negative, and the high half of the word is where they would be — so the word this
+     * builds is not the word the arithmetic builds, and the arithmetic stays.
+     */
+    private static void leavesASignExtendedByteAlone() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov al, byte [0x40]\n"
+                        + "    mov cl, byte [0x42]\n"
+                        + "    cbw\n"
+                        + "    mov dx, ax\n"
+                        + "    mov al, cl\n"
+                        + "    xor ah, ah\n"
+                        + "    mov cl, 8\n"
+                        + "    shl dx, cl\n"
+                        + "    add dx, ax\n"
+                        + "    mov [0x44], dx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: i8\n    var y: u8\n"
+                        + "    var w: u16\n    var v: u16\n    var t: u16\n"
+                        + "    x = byte [0x40]\n"
+                        + "    y = byte [0x42]\n"
+                        + "    w = movsx x\n"
+                        + "    v = movzx y\n"
+                        + "    t = expr(w * 256 + v)\n"
+                        + "    volatile [0x44] = t\n"
                         + "    ret\n"));
     }
 

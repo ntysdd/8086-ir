@@ -43,7 +43,8 @@ The whole thing is written in Java 8, with no third-party runtime dependencies.
   to fit under 64K, and the 8086 has no cache to fill and no pipeline to stall.
   So the transformations that shape code are the ones that make it smaller —
   fewer instructions, shorter encodings, a memory operand instead of a
-  load/use/store sequence, implicit-operand forms (`cbw`, `cwd`, `lodsb`), and
+  load/use/store sequence, implicit-operand forms (`cbw`, `cwd`, `lodsb`, and the halves of a
+  register a word is built in), and
   the shortest jump that reaches its label. Where two candidates are the same
   size, the target's cost estimates break the tie. Speed is a tie-break, never
   the goal. Deliberately absent: loop unrolling, inlining for speed, and
@@ -180,9 +181,12 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    only. What comes out is a form the target can encode, which is what makes it
    verifiable. The read-flags operation is selected the same way: the target says
    what it has — `LAHF` or `PUSHF` on the 8086, which has no `SETcc`.
-   **Built for arithmetic, comparisons, control flow, loads, stores and the
-   machine's multiply and divide**; conversions, `setcc` and the target-provided
-   operations of `docs/ir.md` §11 are not there yet, and a byte access is refused
+   **Built for arithmetic, comparisons, control flow, loads, stores, the machine's multiply and
+   divide, and two bytes put together into one word** — the last one being the shape a program writes
+   as {@code (high shl 8) + low} over two bytes it has widened, which on this machine is two moves
+   into the halves of {@code ax} ({@code i8086.target.combineBytes} and the recognizer beside it in
+   selection); **conversions, `setcc` and the target-provided
+   operations of `docs/ir.md` §11 are not there yet**, and a byte access is refused
    with the reason.
 7. **Register allocation**: graph colouring over the target's small, heavily
    constrained register file, with pre-coloured physical registers for implicit

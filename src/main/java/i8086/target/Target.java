@@ -500,6 +500,24 @@ public interface Target {
     Expansion readState(SourcePos where, Operand destination, String register);
 
     /**
+     * A sequence that puts two bytes into one word, or null when this target has no idiom for it.
+     *
+     * <p>Both are values the compiler knows are a byte with zeroes above them, because a statement
+     * said so ({@link i8086.ir.Conversion#ZERO_EXTEND}), so the word they make is the low byte of one
+     * in the high half and the low byte of the other in the low half — and on a machine whose halves
+     * are addressable that is two moves, where the arithmetic it stands for is a shift and an add.
+     *
+     * <p>The destination is a value and the two sources are values, so which register each has is the
+     * allocator's to decide, and the copies that turn out to be unnecessary are its to drop. What the
+     * sequence does to the flags is its own business and is declared with it: selection substitutes
+     * this where nothing is reading them, and a machine whose idiom leaves the flags alone can say so
+     * by answering with an expansion that keeps them.
+     */
+    default Expansion combineBytes(SourcePos where, Operand destination, Operand high, Operand low) {
+        return null;
+    }
+
+    /**
      * The instruction that puts a zero of this width into a register ({@code docs/ir.md} §4.2).
      *
      * <p>{@code flagsMayBeRead} is the half of the question that is about the flags: a zero can be

@@ -1129,6 +1129,31 @@ public final class I8086 implements Target {
     }
 
     /**
+     * Two bytes into one word, which on this machine is half a register each.
+     *
+     * <p>{@code ah} and {@code al} are the two halves of the register arithmetic works in, so a word
+     * whose halves are already decided is two moves and no arithmetic at all — where the alternative,
+     * shifting one byte up by eight and adding the other, is a copy, a count in {@code cl} and three
+     * more instructions ({@code docs/ir.md} §6.1).
+     *
+     * <p>The copy out is stated even when the destination is {@code ax}, which is how the rest of this
+     * class writes a sequence: the allocator finds out and drops a register moved into itself, and the
+     * two bytes are values the allocator placed, so their halves are read where they are.
+     *
+     * <p>The flags afterwards are not the ones the addition would have left — a move writes none —
+     * which is what {@code keepsFlags} says, and selection only uses this where nothing is reading
+     * them.
+     */
+    @Override
+    public Expansion combineBytes(SourcePos where, Operand destination, Operand high, Operand low) {
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "ah"), high));
+        instructions.add(instruction(where, "mov", new Operand.Name(where, "al"), low));
+        instructions.add(instruction(where, "mov", destination, new Operand.Name(where, "ax")));
+        return new Expansion(instructions, false);
+    }
+
+    /**
      * Reading one of the machine's own registers into a value.
      *
      * <p>One instruction either way: this machine moves a register into a register, and a segment
