@@ -2178,8 +2178,8 @@ public final class CompilerTest {
      * rest of the pipeline rather than needing a block.
      */
     private static void keepsTheDriveNumberAcrossAnInterrupt() {
-        Assert.assertEquals("org 0x7c00\n\n$main:\n    mov al, dl\n    mov byte [$saved], al\n"
-                        + "    int 0x13\n    mov al, byte [$saved]\n    mov dl, al\n"
+        Assert.assertEquals("org 0x7c00\n\n$main:\n    mov byte [$saved], dl\n"
+                        + "    int 0x13\n    mov dl, byte [$saved]\n"
                         + "    jmp 0:0x7e00\n    ret\n\n$saved: times 1 db 0\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
                         + "    var drive: u8 in saved\n"

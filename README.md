@@ -383,8 +383,11 @@ Working today:
   tries` gives the value bytes to wait in, and the allocator uses them only when no
   register is left — a value that fits in one never touches them, so a home costs a
   program that does not need it nothing. A value in a home is loaded where it is read
-  and stored where it is written, through a register picked for that access; when that
-  register is taken, a value the program gave a home to moves into it to make room
+  and stored where it is written, through a register picked for that access — and picked
+  so that the move the access would otherwise need is a register moved into itself: a
+  clause that wants the value in `dl` has it loaded straight into `dl`, and a value defined
+  by a copy into its cell names the register the copy reads. When that register is taken, a
+  value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
 Not built yet, and refused with a reason rather than guessed at: a widening into a value

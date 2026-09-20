@@ -1425,7 +1425,15 @@ public final class RegisterAllocator {
                     }
                     Set<String> forbidden = new LinkedHashSet<String>(busy);
                     forbidden.addAll(destroyedBeforeLastMention(piece, value));
-                    String register = freeRegisterFor(value, forbidden);
+                    String register = partnerFor(piece, value, at);
+                    if (register != null && (reads(piece, value)
+                            ? forbidden.contains(register)
+                            : destroyedBeforeLastMention(piece, value).contains(register))) {
+                        register = null;
+                    }
+                    if (register == null) {
+                        register = freeRegisterFor(value, forbidden);
+                    }
                     if (register == null) {
                         return new Stuck(point, value);
                     }
@@ -1445,6 +1453,95 @@ public final class RegisterAllocator {
             }
         }
         return null;
+    }
+
+    /**
+     * The register this point moves a value in a cell to or from, when that register can be the
+     * scratch it is moved through.
+     *
+     * <p>A home costs a copy at every access where the register is already decided. A clause that
+     * wants a byte in {@code dl} is a load into a scratch and then a move — five bytes, where
+     * loading it straight into {@code dl} is four — and a value defined by a copy into a cell is the
+     * copy and then the store. Either way it is two instructions doing one, and what says so is the
+     * move being a register moved into itself, which the allocator already knows how to drop
+     * ({@link #isSelfCopy}). So the register the point wants the value in is the register to move it
+     * through.
+     *
+     * <p>What is answered here is only the register: whether it may be used is the caller's, because
+     * it depends on whether the point reads the value or writes it. A load writes the scratch and so
+     * may not destroy a live value; a store only reads it, and the register a store wants to name is
+     * the one the value being stored is already in — which is a live value, and the whole point.
+     */
+    private String partnerFor(Selection.Piece piece, String value, Map<String, String> at) {
+        for (Instruction instruction : piece.instructions()) {
+            List<Operand> operands = instruction.operands();
+            if (!instruction.mnemonic().equals("mov") || operands.size() != 2) {
+                continue;
+            }
+            String register = null;
+            if (mentions(operands.get(0), value)) {
+                register = registerOf(operands.get(1));
+            } else if (mentions(operands.get(1), value)) {
+                register = registerOf(operands.get(0));
+            }
+            if (register != null && registersFor(value).contains(register)
+                    && !at.containsValue(register)) {
+                return register;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The register an operand is in, as a word register, or null when it is not in one.
+     *
+     * <p>A name the selector wrote is a register and a byte name is half of one, which is the same
+     * pair of rules the machine's own answer uses ({@code Target#valueRegisterOf}). A value is in
+     * whatever the allocator gave it — the point this is asked at is after the colouring — and a
+     * value read through its low half is in that same register.
+     */
+    private String registerOf(Operand operand) {
+        if (operand instanceof Operand.Name) {
+            return target.valueRegisterOf(((Operand.Name) operand).name());
+        }
+        if (operand instanceof Operand.Virtual) {
+            return assigned.get(groupOf(((Operand.Virtual) operand).name()));
+        }
+        if (operand instanceof Operand.LowByte) {
+            return assigned.get(groupOf(((Operand.LowByte) operand).name()));
+        }
+        return null;
+    }
+
+    /** Whether this point reads the value anywhere, as opposed to only writing it. */
+    private boolean reads(Selection.Piece piece, String value) {
+        for (Instruction instruction : piece.instructions()) {
+            if (writes(instruction, value)) {
+                List<Operand> operands = instruction.operands();
+                for (int at = 1; at < operands.size(); at++) {
+                    if (mentions(operands.get(at), value)) {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            for (String name : mentioned(instruction)) {
+                if (groupOf(name).equals(value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Whether this operand mentions the value. */
+    private boolean mentions(Operand operand, String value) {
+        for (String name : names(operand)) {
+            if (groupOf(name).equals(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
