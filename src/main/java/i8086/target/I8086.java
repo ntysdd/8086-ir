@@ -850,6 +850,48 @@ public final class I8086 implements Target {
         return new Expansion(instructions, false);
     }
 
+    /**
+     * A division by a constant, where the constant makes it cheaper.
+     *
+     * <p>Dividing an unsigned value by a power of two is shifting it, and taking its remainder is
+     * masking it: four bytes where the machine's division is eight, and — the half that is not about
+     * bytes — no registers held. {@code div} keeps its answer in {@code ax} and {@code dx} and its
+     * divisor in a register, so the values around it are pushed out of four of the six registers this
+     * machine has, where a shift and a mask touch one.
+     *
+     * <p>A signed value is the case this is not: a shift rounds towards minus infinity and
+     * {@code idiv} towards zero, so {@code -1 / 2} is 0 where {@code sar} would make it -1. Correcting
+     * that costs more bytes than the division it replaces, so a signed division stays a division.
+     */
+    @Override
+    public Expansion divideByConstant(SourcePos where, Operand destination, Operand source,
+                                      long divisor, boolean signed, boolean remainder) {
+        if (divisor == 1) {
+            // Dividing by one is the answer itself, and its remainder is nothing at all. Both are a
+            // move, and the quotient's is one the allocator may find unnecessary.
+            Operand value = remainder
+                    ? new Operand.Number(where, 0, Numbers.spelling(0))
+                    : source;
+            return new Expansion(Collections.singletonList(
+                    instruction(where, "mov", destination, value)), false);
+        }
+        if (signed || divisor < 2 || (divisor & (divisor - 1)) != 0) {
+            return null; // only an unsigned power of two is a shift
+        }
+        if (remainder) {
+            return new Expansion(Collections.singletonList(instruction(where, "and", destination,
+                    new Operand.Number(where, divisor - 1, Numbers.spelling(divisor - 1)))), false);
+        }
+        int steps = 0;
+        for (long remaining = divisor; remaining > 1; remaining >>= 1) {
+            steps++;
+        }
+        // A division leaves the flags undefined, so a shift's flags are as good as any other, and
+        // saying so is what lets this stand where the division it replaces does (docs/ir.md §6.2).
+        Expansion shift = shiftByConstant(where, "shr", destination, source, steps);
+        return new Expansion(shift.instructions(), false);
+    }
+
     @Override
     public Expansion multiplyByConstant(SourcePos where, Operand destination, Operand source,
                                         long factor) {

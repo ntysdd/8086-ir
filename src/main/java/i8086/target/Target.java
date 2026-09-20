@@ -356,6 +356,25 @@ public interface Target {
                      boolean signed, boolean remainder);
 
     /**
+     * A sequence that divides by a constant, or null when this target has no trick for that value
+     * ({@code docs/ir.md} §6.2).
+     *
+     * <p>A divisor the program wrote out is one the compiler can look at, and some of them are worth
+     * more than the divide: a power of two is a shift, and a remainder of one is a mask — a quarter
+     * of the bytes, and none of the registers the machine's own division insists on for its answer.
+     * That is why the question is about a <em>constant</em>: a divisor that is a value is a division,
+     * and there is nothing to look at.
+     *
+     * <p>{@code signed} is the caller saying which division this is. A target that can only do this
+     * for one of them answers null for the other, because an arithmetic shift and the machine's
+     * division disagree about negative numbers.
+     */
+    default Expansion divideByConstant(SourcePos where, Operand destination, Operand source,
+                                       long divisor, boolean signed, boolean remainder) {
+        return null;
+    }
+
+    /**
      * The forms that do this operator, smallest first is not promised — the
      * caller sorts — but every form is one the machine really has.
      *

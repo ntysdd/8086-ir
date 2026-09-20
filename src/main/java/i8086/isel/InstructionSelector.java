@@ -1047,6 +1047,23 @@ public final class InstructionSelector {
     }
 
     /**
+     * Asks the target whether a divisor written out makes the division cheaper, and passes on what it
+     * says — nothing when the divisor is a value, or when the target has no trick for it.
+     *
+     * <p>{@code signed} is the answer to a different question that has to be settled first: an
+     * arithmetic shift and the machine's division disagree about negative numbers, so the target is
+     * told which one this is ({@code docs/ir.md} §6.2).
+     */
+    private Expansion divideByConstant(Operator operator, Operand destination, Operand source,
+                                       Operand divisor, boolean signed, SourcePos where) {
+        if (!operator.divides() || !(divisor instanceof Operand.Number)) {
+            return null;
+        }
+        return target.divideByConstant(where, destination, source,
+                ((Operand.Number) divisor).value(), signed, operator == Operator.REMAINDER);
+    }
+
+    /**
      * One operation the machine does in a register of its own, as the target declares it.
      *
      * <p>The destination is an operand rather than a name, because in a chain it is a register the
@@ -1101,6 +1118,15 @@ public final class InstructionSelector {
         Operand left = operandOf(operands.get(0));
         Operand right = operandOf(operands.get(1));
         Operand target0 = virtual(destination, where);
+
+        // A divisor the program wrote out is one the compiler can look at, and a power of two of one
+        // is a shift or a mask rather than a division: fewer bytes, and none of the registers the
+        // division insists on (docs/ir.md §6.2).
+        Expansion byConstant = divideByConstant(operator, target0, left, right, signed, where);
+        if (byConstant != null) {
+            return byConstant;
+        }
+
         if (multiplies) {
             // A literal is fine on either side: multiplication does not care, and the
             // target moves one it finds on the right.
@@ -1269,6 +1295,14 @@ public final class InstructionSelector {
         Operand inPlace = virtual(destination, where);
         Operand right = operandOf(second);
         boolean isSigned = signed != null && signed.booleanValue();
+
+        // The same question the two-operand path asks, for the case where the left side is already in
+        // the destination: a constant divisor may be cheaper than the division (docs/ir.md §6.2).
+        Expansion byConstant = divideByConstant(operator, inPlace, inPlace, right, isSigned, where);
+        if (byConstant != null) {
+            return byConstant;
+        }
+
         if (right instanceof Operand.Number) {
             // The machine takes a register, so the literal needs one; the sequence says which, and it
             // names it as a register everywhere it is used. Writing the value there instead would be

@@ -48,6 +48,10 @@ public final class CompilerTest {
                 CompilerTest::keepsTheCopiesAroundAnOperationWithAForm);
         suite.add("Compiler writes a literal into the register its sequence names",
                 CompilerTest::writesALiteralIntoTheRegisterItsSequenceNames);
+        suite.add("Compiler divides by a power of two by shifting",
+                CompilerTest::dividesByAPowerOfTwoByShifting);
+        suite.add("Compiler keeps dividing where a trick would be wrong",
+                CompilerTest::keepsDividingWhereATrickWouldBeWrong);
         suite.add("Compiler keeps a temporary for a tree on the right",
                 CompilerTest::keepsATemporaryForATreeOnTheRight);
         suite.add("Compiler compiles arithmetic from variables", CompilerTest::compilesArithmetic);
@@ -307,21 +311,89 @@ public final class CompilerTest {
      * A literal a sequence needs in a register is put there by the selector, and every use of it
      * names that register — because nothing else is keeping the two together. When the copy was
      * written as a value instead, the allocator placed it wherever it liked and the division divided
-     * by that register: the FAT12 offset below divided by whatever was in {@code cx}, silently.
+     * by that register, silently.
      *
-     * <p>The shape is worth having as a test beyond that: {@code (cluster * 3) / 2} is how a FAT12
-     * table is indexed, and the two constants in it are what the back end does least well.
+     * <p>The shape is how a table of fixed-size entries is walked — {@code bytes / 20} is an E820
+     * entry count — and twenty is not a power of two, so the division is a division.
      */
     private static void writesALiteralIntoTheRegisterItsSequenceNames() {
+        String assembly = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $bytes: u16\n    var $entries: u16\n"
+                + "    bytes = word [0x40]\n"
+                + "    entries = expr(bytes / 20)\n"
+                + "    [0x42] = entries\n"
+                + "    ret\n");
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov bx, 0x14\n"
+                        + "    mov ax, cx\n"
+                        + "    xor dx, dx\n"
+                        + "    div bx\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                assembly);
+        // Stated as a property as well, because this is the bug that was here: the register the
+        // constant went into and the register the division reads have to be the same one.
+        Assert.assertTrue(assembly.contains("mov bx, 0x14\n") && assembly.contains("div bx\n"),
+                "the constant is divided by from where it was put: " + assembly);
+    }
+
+    /**
+     * A divisor written out is one the compiler can look at, and a power of two of one is not a
+     * division at all: it is a shift for the quotient and a mask for the remainder
+     * ({@code docs/ir.md} §6.2).
+     *
+     * <p>Three real shapes, because the bytes are the point: a byte offset split into the sector it
+     * is in and where it is in that sector, a length rounded up to whole sectors, and the offset of a
+     * FAT12 entry. Each is a few bytes where the {@code div} instruction was eight or ten — and none
+     * of them holds {@code ax} or {@code dx}, which is the half of this that is not about bytes.
+     */
+    private static void dividesByAPowerOfTwoByShifting() {
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dx, word [0x40]\n"
+                        + "    and ax, 0x1ff\n"
+                        + "    mov cl, 9\n"
+                        + "    shr dx, cl\n"
+                        + "    mov [0x42], ax\n"
+                        + "    mov [0x44], dx\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $offset: u16\n    var $within: u16\n    var $sector: u16\n"
+                        + "    offset = word [0x40]\n"
+                        + "    within = eval(offset % 512)\n"
+                        + "    sector = eval(offset / 512)\n"
+                        + "    [0x42] = within\n"
+                        + "    [0x44] = sector\n"
+                        + "    ret\n"));
+
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    add ax, 0x1ff\n"
+                        + "    mov cl, 9\n"
+                        + "    shr ax, cl\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $size: u16\n    var $rounded: u16\n    var $sectors: u16\n"
+                        + "    size = word [0x40]\n"
+                        + "    rounded = eval(size + 511)\n"
+                        + "    sectors = eval(rounded / 512)\n"
+                        + "    [0x42] = sectors\n"
+                        + "    ret\n"));
+
         Assert.assertEquals("org 0x100\n"
                         + "\n"
                         + "$main:\n"
                         + "    mov cx, word [0x40]\n"
                         + "    mov ax, 3\n"
                         + "    mul cx\n"
-                        + "    mov bx, 2\n"
-                        + "    xor dx, dx\n"
-                        + "    div bx\n"
+                        + "    shr ax, 1\n"
                         + "    mov [0x42], ax\n"
                         + "    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
@@ -329,6 +401,81 @@ public final class CompilerTest {
                         + "    cluster = word [0x40]\n"
                         + "    off = expr(cluster * 3 / 2)\n"
                         + "    [0x42] = off\n"
+                        + "    ret\n"));
+
+        // Dividing by one is the value itself, so nothing is emitted for it at all.
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov ax, word [0x40]\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $x: u16\n    var $y: u16\n"
+                        + "    x = word [0x40]\n"
+                        + "    y = expr(x / 1)\n"
+                        + "    [0x42] = y\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the three cases that are still divisions, which is what makes the one above a rule rather
+     * than a habit: a **signed** value, where a shift and {@code idiv} disagree about negative
+     * numbers; a constant that is **not a power of two**; and a divisor that is a **value**, which
+     * the compiler cannot look at at all ({@code docs/ir.md} §6.2).
+     */
+    private static void keepsDividingWhereATrickWouldBeWrong() {
+        String signed = Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var $signed: i16\n    var $half: i16\n"
+                + "    signed = word [0x40]\n"
+                + "    half = eval(signed / 2)\n"
+                + "    [0x42] = half\n"
+                + "    ret\n");
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov bx, 2\n"
+                        + "    mov ax, cx\n"
+                        + "    cwd\n"
+                        + "    idiv bx\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                signed);
+
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov cx, word [0x40]\n"
+                        + "    mov bx, 7\n"
+                        + "    mov ax, cx\n"
+                        + "    xor dx, dx\n"
+                        + "    div bx\n"
+                        + "    mov [0x42], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $size: u16\n    var $parts: u16\n"
+                        + "    size = word [0x40]\n"
+                        + "    parts = eval(size / 7)\n"
+                        + "    [0x42] = parts\n"
+                        + "    ret\n"));
+
+        Assert.assertEquals("org 0x100\n"
+                        + "\n"
+                        + "$main:\n"
+                        + "    mov dx, word [0x40]\n"
+                        + "    mov cx, word [0x42]\n"
+                        + "    mov ax, dx\n"
+                        + "    xor dx, dx\n"
+                        + "    div cx\n"
+                        + "    mov [0x44], ax\n"
+                        + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var $size: u16\n    var $parts: u16\n    var $divisor: u16\n"
+                        + "    size = word [0x40]\n"
+                        + "    divisor = word [0x42]\n"
+                        + "    parts = eval(size / divisor)\n"
+                        + "    [0x44] = parts\n"
                         + "    ret\n"));
     }
 

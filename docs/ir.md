@@ -965,6 +965,18 @@ nothing else and cost nothing.
   — division is not speculatable (§5.5).
 * `%` is offered at the same widths as `/`, and costs nothing extra: `DIV`/`IDIV`
   already produce the remainder in `DX` beside the quotient in `AX`.
+* **A division by a constant power of two is not a division.** For an unsigned value `x / 512`
+  looks at the top bits and `x % 512` at the bottom ones, so the two are a shift and a mask: four
+  bytes where the `div` instruction is eight, and — the half of this that is not about bytes — no
+  register held. `div` keeps its answer in `ax` and `dx` and its divisor in a register, and none of
+  those can hold anything else while it runs.
+* **A signed value is the case that is not.** A shift rounds towards minus infinity and `idiv`
+  towards zero, so `-1 / 2` is 0 where `sar` would make it -1; the correcting sequence costs more
+  bytes than the division it replaces. Which of the two a division is, is the surface's to say
+  (§3.2); acting on it is the target's, and a target that cannot says so by answering nothing
+  (`Target#divideByConstant`). A divisor that is a **value** is a division whatever its width: there
+  is nothing for the compiler to look at.
+* Dividing by one is the value itself, so nothing is emitted for it.
 * v1 stops at 16 bits on purpose. A more convenient shape for wider division may
   be worth revisiting later; that is a note, not a plan, and nothing promises it.
 
