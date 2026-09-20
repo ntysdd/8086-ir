@@ -7,6 +7,8 @@ import i8086.asm.Size;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
 import i8086.ir.Operator;
+import i8086.isel.Selection;
+import i8086.ssa.SsaForm;
 
 import java.util.Collections;
 import java.util.List;
@@ -490,4 +492,24 @@ public interface Target {
      * same, so a target that has both answers with the shorter one for the width it is given.
      */
     Instruction zero(SourcePos where, Operand register, Size size, boolean flagsMayBeRead);
+
+    /**
+     * The cleanup this machine's own code needs, once every value has a register.
+     *
+     * <p>This is the target-specific tail {@code AGENTS.md} invariant 2 allows — at most three
+     * passes for one target, marked as such in the pipeline listing, living with the target rather
+     * than in the generic pass package. What it is for is stating an encoding-level fact where the
+     * alternative is another abstraction, and the reason it is <em>here</em>, after selection and
+     * allocation, is that the facts worth stating are about registers: which register a value was
+     * given is not known any earlier than this. The IR is passed along with the code because the
+     * questions a rewrite has to ask are questions about the program — whether the flags it is
+     * about to stop setting can be read anywhere afterwards, most of all — and a target that asks
+     * them of the form asks them once ({@code docs/ir.md} §4.2).
+     *
+     * <p>A target with nothing to say answers with the code it was given, and that is most of them:
+     * this is the place for a machine whose cheapest instructions are not its most general ones.
+     */
+    default Selection tail(SsaForm form, Selection selection) {
+        return selection;
+    }
 }

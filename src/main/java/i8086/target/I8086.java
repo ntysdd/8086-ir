@@ -8,6 +8,8 @@ import i8086.asm.Size;
 import i8086.ir.Comparison;
 import i8086.ir.Item;
 import i8086.ir.Operator;
+import i8086.isel.Selection;
+import i8086.ssa.SsaForm;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1055,6 +1057,15 @@ public final class I8086 implements Target {
                     new Operand.Number(where, 0, Numbers.spelling(0)));
         }
         return instruction(where, "xor", register, register);
+    }
+
+    /**
+     * A countdown is three instructions where this machine has one, and this is where that is
+     * said: see {@link CountedLoops} for what it looks for and what it asks first.
+     */
+    @Override
+    public Selection tail(SsaForm form, Selection selection) {
+        return CountedLoops.clean(form, selection);
     }
 
     /**

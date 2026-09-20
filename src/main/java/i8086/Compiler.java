@@ -121,7 +121,7 @@ public final class Compiler {
         Target target = targetOf(module);
         Selection selected = InstructionSelector.select(optimized, target);
         Selection allocated = RegisterAllocator.allocate(selected, target);
-        return AsmEmitter.emit(optimized.module(), allocated);
+        return AsmEmitter.emit(optimized.module(), target.tail(optimized, allocated));
     }
 
     /**

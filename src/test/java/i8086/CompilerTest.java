@@ -130,6 +130,16 @@ public final class CompilerTest {
                 CompilerTest::setsThreeSegmentsFromOneZero);
         suite.add("Compiler hands a clause a segment from the register a value is in",
                 CompilerTest::givesAClauseASegmentFromARegister);
+        suite.add("Compiler counts down with the machine's own loop",
+                CompilerTest::countsDownWithTheMachineLoop);
+        suite.add("Compiler counts down without the comparison",
+                CompilerTest::countsDownWithoutTheComparison);
+        suite.add("Compiler keeps the comparison when the flags are read after it",
+                CompilerTest::keepsTheComparisonWhenTheFlagsAreReadAfter);
+        suite.add("Compiler leaves the counted form alone when the body cannot be sized",
+                CompilerTest::leavesTheCountedFormAloneWhenTheBodyCannotBeSized);
+        suite.add("Compiler leaves the counted form alone when the loop is too long",
+                CompilerTest::leavesTheCountedFormAloneWhenTheLoopIsTooLong);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
         suite.add("Compiler reads the drive number the BIOS hands over",
@@ -1592,6 +1602,171 @@ public final class CompilerTest {
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    movreg ds, 0x1234\n"
                         + "    ret\n"));
+    }
+
+    // --- the countdown a loop pays for twice (the target's tail) -------------
+
+    /**
+     * The scan loop of every boot loader, done the way the machine does it: {@code loop}
+     * decrements {@code cx}, branches if the result is not zero, and touches no flag, so the three
+     * instructions the surface's three statements became are one and the five bytes are two.
+     *
+     * <p>The counter is in {@code cx} because that is the register the allocator gave it, and that
+     * is the whole reason this rewrite happens after allocation and not before selection:
+     * {@code loop} counts in one register and nowhere else, so what it is worth depends on where a
+     * value ended up.
+     */
+    private static void countsDownWithTheMachineLoop() {
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "$main:\n"
+                + "    mov bx, $parts\n"
+                + "    mov cx, 4\n"
+                + "\n"
+                + "$top:\n"
+                + "    mov al, byte [bx]\n"
+                + "    cmp al, 0x80\n"
+                + "    jz $stop\n"
+                + "    add bx, 0x10\n"
+                + "    loop $top\n"
+                + "\n"
+                + "$stop:\n"
+                + "    ret\n"
+                + "\n"
+                + "$parts: times 4 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var n: u16\n"
+                        + "    var flag: u8\n"
+                        + "    var base: u16\n"
+                        + "    base = $parts\n"
+                        + "    n = 4\n"
+                        + "$top:\n"
+                        + "    flag = byte [base]\n"
+                        + "    cmp flag, 0x80\n"
+                        + "    jz $stop\n"
+                        + "    base = eval(base + 16)\n"
+                        + "    n = eval(n - 1)\n"
+                        + "    cmp n, 0\n"
+                        + "    jnz $top\n"
+                        + "$stop:\n"
+                        + "    ret\n"
+                        + "\n"
+                        + "$parts: pad 4\n"));
+    }
+
+    /**
+     * The comparison is the byte that goes even where the counted instruction cannot: this counter
+     * is a byte, and {@code loop} counts in {@code cx} and nowhere else. What is left is a decrement
+     * and a branch, because the decrement has already said whether the result is zero.
+     */
+    private static void countsDownWithoutTheComparison() {
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "$main:\n"
+                + "    mov al, 4\n"
+                + "\n"
+                + "$top:\n"
+                + "    hlt\n"
+                + "    dec al\n"
+                + "    jnz $top\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var n: u8\n"
+                        + "    n = 4\n"
+                        + "$top:\n"
+                        + "    hlt\n"
+                        + "    n = eval(n - 1)\n"
+                        + "    cmp n, 0\n"
+                        + "    jnz $top\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * And the must-not: the flags the comparison leaves are read by a second branch, so the
+     * comparison is not a repeat of anything — it is the only thing that says what the second
+     * branch is asking about. Nothing here may be removed, and the second branch is what makes the
+     * difference between {@code test}, which clears the carry, and the decrement, which does not.
+     */
+    private static void keepsTheComparisonWhenTheFlagsAreReadAfter() {
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "$main:\n"
+                + "    mov ax, 3\n"
+                + "\n"
+                + "$top:\n"
+                + "    hlt\n"
+                + "    dec ax\n"
+                + "    test ax, ax\n"
+                + "    jnz $top\n"
+                + "    jz $other\n"
+                + "\n"
+                + "$other:\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    x = 3\n"
+                        + "$top:\n"
+                        + "    hlt\n"
+                        + "    x = eval(x - 1)\n"
+                        + "    cmp x, 0\n"
+                        + "    jnz $top\n"
+                        + "    jz $other\n"
+                        + "$other:\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The other must-not, and the reason the counted form is not simply "a countdown": how far
+     * {@code loop} reaches is a signed byte, and the bytes an inline block takes are not something
+     * this compiler knows — it is text it cannot read ({@code docs/ir.md} §9). So the block's loop
+     * keeps a decrement and a branch, and the comparison still goes.
+     */
+    private static void leavesTheCountedFormAloneWhenTheBodyCannotBeSized() {
+        Assert.assertEquals("org 0x100\n"
+                + "\n"
+                + "$main:\n"
+                + "    mov cx, 3\n"
+                + "\n"
+                + "$top:\n"
+                + "    nop\n"
+                + "    sub cx, 1\n"
+                + "    jnz $top\n"
+                + "    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var x: u16\n"
+                        + "    x = 3\n"
+                        + "$top:\n"
+                        + "    asm clobbers(ax) {\n        nop\n    }\n"
+                        + "    x = eval(x - 1)\n"
+                        + "    cmp x, 0\n"
+                        + "    jnz $top\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A loop body too long to count: seventeen stores and the countdown are more than a signed byte
+     * can reach, counted as generously as the widest instruction this machine has. The three
+     * instructions stay, and the comparison still goes — which is the half that needs no range.
+     */
+    private static void leavesTheCountedFormAloneWhenTheLoopIsTooLong() {
+        StringBuilder source = new StringBuilder("target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                + "    var n: u16\n    var x: u16\n"
+                + "    n = 4\n"
+                + "    x = word [0x40]\n"
+                + "$top:\n");
+        for (int at = 0; at < 17; at++) {
+            source.append("    volatile [0x").append(Integer.toHexString(0x50 + 2 * at))
+                    .append("] = x\n");
+        }
+        source.append("    n = eval(n - 1)\n")
+                .append("    cmp n, 0\n")
+                .append("    jnz $top\n")
+                .append("    ret\n");
+
+        String assembly = Compiler.compile("t.ir", source.toString());
+        Assert.assertFalse(assembly.contains("loop "),
+                "a byte of displacement cannot reach this far: " + assembly);
+        Assert.assertTrue(assembly.contains("    dec cx\n    jnz $top\n"), assembly);
     }
 
     // --- reading the machine's own registers (docs/ir.md §8.1) --------------

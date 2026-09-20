@@ -26,14 +26,18 @@ These hold for every change, with no exceptions and no "just for now".
    pass is expressible for any target because it *asks* the target, not because
    it already knows the answer.
 
-   The exception is deliberate and bounded: the last one to three passes of the
-   optimizer, immediately before instruction selection, may be target-specific.
-   Late peephole and cleanup work is exactly where encoding-level knowledge is
-   cheapest to state, and pretending otherwise buys an abstraction nobody needs.
-   Such a pass must be registered as target-specific for exactly one target,
-   must be visibly marked as such in the pipeline listing, and must not be
-   reachable from a target it does not belong to. The rest of the pipeline —
-   SSA, the analysis and transformation passes, isel, regalloc — stays generic.
+   The exception is deliberate and bounded: at most three passes of the back end
+   may be target-specific, and each of them runs where the facts it needs exist.
+   For the 8086 that is *after* allocation rather than before instruction
+   selection, because the fact cheapest to state there is about a register: a
+   value has none until the allocator has run, and what an instruction costs can
+   depend on which register it got. Late peephole and cleanup work is exactly
+   where encoding-level knowledge is cheapest to state, and pretending otherwise
+   buys an abstraction nobody needs. Such a pass must be registered as
+   target-specific for exactly one target, must be visibly marked as such in the
+   pipeline listing, and must not be reachable from a target it does not belong
+   to. The rest of the pipeline — SSA, the analysis and transformation passes,
+   isel, regalloc — stays generic.
 3. **No side effect may be lost or reordered.**
    Memory, flags, segment registers, I/O ports and interrupts are observable.
    An optimization may only remove or move an effect when the IR proves that

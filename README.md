@@ -150,14 +150,18 @@ Each step says where it stands: **built**, **partly**, or **planned**.
    list against the names written out here, so a pass added in one place and not
    the other fails the build. **Three built, the rest planned.**
 5. **Run the target-specific tail.** Real machines have quirks that are not
-   worth abstracting, and encoding-level knowledge is stated directly at the
-   end of the optimizer, immediately before instruction selection: at most
-   three target-specific passes, for the 8086 late peephole and cleanup work.
-   Each belongs to exactly one target, is marked as such in the pipeline
-   listing, and lives with that target rather than in the generic pass package.
-   **Planned.** Nothing here needs one yet: what this step is for — stating an
-   encoding fact where the alternative is another abstraction — is currently
-   stated in the target's own tables, where the forms and expansions live.
+   worth abstracting, and encoding-level knowledge is stated directly in a
+   target-specific pass: at most three, each belonging to exactly one target,
+   marked as such in the pipeline listing, and living with that target rather
+   than in the generic pass package. Where such a pass runs is the target's
+   answer, and the 8086's runs **last**, after allocation: the fact cheapest to
+   state there is about a register, and no value has one before the allocator has
+   run. `loop` counts in `cx` and nowhere else, so what a countdown loop costs
+   depends on where its counter ended up.
+   **Built: one pass, the 8086's** (`i8086.target.CountedLoops`) — a countdown
+   whose flags nothing else reads loses the comparison that repeats what the
+   decrement already said, and, where the counter is in `cx` and the loop is
+   short enough to count, the pair becomes the machine's own `loop`.
 6. **Instruction selection**: pick the instruction *form* — which instruction,
    which addressing mode — by size first, with the target's cost estimates
    breaking ties (*Optimised for size*, above). Byte-level encoding choices are
