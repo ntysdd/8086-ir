@@ -180,18 +180,19 @@ public final class I8086 implements Target {
     }
 
     /**
-     * The sixteen-bit register an eight-bit name is half of.
+     * The sixteen-bit register an eight-bit name is half of, and a register of its own otherwise.
      *
-     * <p>Nothing here can name half a register, so writing {@code cl} destroys
-     * {@code cx} as far as anything outside this class is concerned. A name that is
-     * not a register at all — a label — has no register holding it.
+     * <p>Nothing here can name half a register, so writing {@code cl} destroys {@code cx} as far as
+     * anything outside this class is concerned, and so does reading it: a value in {@code cx} is
+     * part of the {@code cl} a read of it is about. A name that is not a register at all — a label —
+     * has no register holding it, and neither do the registers no value is ever given: the segment
+     * registers, the stack pointer and {@code bp}.
      */
-    private static String valueRegisterOf(String name) {
+    @Override
+    public String valueRegisterOf(String name) {
         if (VALUE_REGISTERS.contains(name)) {
             return name;
         }
-        // Null for anything that is not a register at all — a label — and for the
-        // registers no value is ever given: the segment registers and the stack.
         return HALVES.get(name);
     }
 
@@ -882,6 +883,27 @@ public final class I8086 implements Target {
             return new Expansion(instructions, true);
         }
         instructions.add(instruction(where, "mov", new Operand.Name(where, name), value));
+        return new Expansion(instructions, true);
+    }
+
+    /**
+     * Reading one of the machine's own registers into a value.
+     *
+     * <p>One instruction either way: this machine moves a register into a register, and a segment
+     * register is no harder to read than to write — {@code mov ax, ds} is one instruction, and so is
+     * {@code mov al, dl}. The flags are left alone, so nothing about them has to be asked.
+     *
+     * <p>What makes the read say what the machine left in the register is the allocator's side of
+     * it, not this one: the registers a value can live in are kept out of the way up to this point
+     * ({@code docs/ir.md} §8.1).
+     */
+    @Override
+    public Expansion readState(SourcePos where, Operand destination, String register) {
+        if (!REGISTERS.contains(register)) {
+            return null;
+        }
+        List<Instruction> instructions = new ArrayList<Instruction>();
+        instructions.add(instruction(where, "mov", destination, new Operand.Name(where, register)));
         return new Expansion(instructions, true);
     }
 

@@ -34,6 +34,8 @@ public final class I8086Test {
         suite.add("I8086 writes only registers a value cannot live in",
                 I8086Test::writableStateHoldsNoValues);
         suite.add("I8086 says what an instruction destroys", I8086Test::destroyedRegisters);
+        suite.add("I8086 names the register a read has to find untouched",
+                I8086Test::readsNameTheWholeRegister);
         suite.add("I8086 counts half a register as the whole one", I8086Test::halvesCount);
         suite.add("I8086 says an instruction that writes nothing destroys nothing",
                 I8086Test::destroysNothing);
@@ -93,6 +95,46 @@ public final class I8086Test {
                             || register.startsWith("c") || register.startsWith("d"),
                     "only a register with a low byte names one: " + register);
         }
+    }
+
+    /**
+     * The register a value would have to be in for a read of this one to see it: the register itself
+     * for one a value can live in, the register a byte half belongs to, and nothing for the ones no
+     * value is ever given ({@code docs/ir.md} §8.1).
+     *
+     * <p>This is what a read is checked against — nothing of the compiler's may be in the register,
+     * because what the read asks for is what the machine left there — and it answers the way the
+     * clobber table does: nothing here can name half a register, so {@code dl} and {@code dx} are one
+     * register for this question.
+     */
+    private static void readsNameTheWholeRegister() {
+        Target target = Targets.byName("8086");
+        for (String register : target.valueRegisters()) {
+            Assert.assertEquals(register, target.valueRegisterOf(register));
+            String low = target.byteRegister(register);
+            if (low != null) {
+                Assert.assertEquals(register, target.valueRegisterOf(low));
+            }
+        }
+        Assert.assertEquals("ax", target.valueRegisterOf("ah"));
+        Assert.assertEquals("cx", target.valueRegisterOf("ch"));
+        // No value is ever given one of these, so there is nothing for a read of one to keep out.
+        for (String register : target.stateRegisters()) {
+            Assert.assertNull(target.valueRegisterOf(register),
+                    "no value can be in '" + register + "'");
+        }
+        Assert.assertNull(target.valueRegisterOf("cs"), "nor in cs, which nothing writes");
+        Assert.assertNull(target.valueRegisterOf("msg"), "a label holds no register");
+
+        // Reading one is one instruction on this machine, whichever register it is.
+        List<Instruction> instructions = target.readState(AT, new Operand.Virtual(AT, "x"), "dl")
+                .instructions();
+        Assert.assertEquals(1L, instructions.size());
+        Assert.assertEquals("mov", instructions.get(0).mnemonic());
+        Assert.assertNotNull(target.readState(AT, new Operand.Virtual(AT, "x"), "ds"),
+                "a segment register is read the same way");
+        Assert.assertNull(target.readState(AT, new Operand.Virtual(AT, "x"), "zz"),
+                "and nothing is read from a name that is not a register");
     }
 
     /**

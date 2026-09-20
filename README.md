@@ -329,7 +329,12 @@ Working today:
   needs for each (a segment register takes no immediate, so it goes through `ax`). It is a
   statement of its own rather than an assignment, because a name in the position an
   assignment writes cannot say whether it means the machine's register or a variable of that
-  name — which is what keeps `ds` an ordinary name (`docs/ir.md` §8.1).
+  name — which is what keeps `ds` an ordinary name. Read the other way round, the same word
+  gets a register *out*: `movreg drive, dl` is the drive number a BIOS hands a boot loader at
+  entry, and what it gives back is what the machine left there — so no value of the
+  compiler's may be in that register up to the read, and a read of a register the compiler's
+  own arithmetic has already written is refused rather than answered with it
+  (`docs/ir.md` §8.1).
 * **A far jump**, `jmp 0x0000:0x7E00`, which is how a boot loader hands control to a
   kernel — and it is a statement because the compiler then knows nothing after it
   runs (`docs/ir.md` §7.1).
@@ -365,9 +370,8 @@ Working today:
   register is taken, a value the program gave a home to moves into it to make room
   ([`docs/ir.md`](docs/ir.md) §3.1.2).
 
-Not built yet, and refused with a reason rather than guessed at: `movreg`'s other direction,
-reading a register into a value — which is how a boot loader would get the drive number the
-BIOS hands it in `dl` (§8.1). A widening into a value wider than a register (the answer is
+Not built yet, and refused with a reason rather than guessed at: a widening into a value
+wider than a register (the answer is
 two of them, and nothing in the back end can name a pair), `setcc`,
 a load inside an arithmetic operand, and the target-provided operations of
 [`docs/ir.md`](docs/ir.md) §11. The mode that keeps a home current, `writethrough`, is

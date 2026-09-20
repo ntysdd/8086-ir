@@ -196,7 +196,7 @@ public final class SsaBuilder {
             String defined = Effects.writtenVariable(item);
             if (defined != null) {
                 String version = fresh(defined, item.position());
-                renamed = Renamer.define((Item.Assign) renamed, version);
+                renamed = Renamer.define(renamed, version);
                 stacks.push(defined, version);
                 pushed.add(defined);
             }

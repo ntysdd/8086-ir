@@ -28,6 +28,12 @@ public final class IrVerifierTest {
         suite.add("Ir verifier accepts a label as an address", IrVerifierTest::acceptsLabelAsAddress);
         suite.add("Ir verifier accepts a same-width signedness change",
                 IrVerifierTest::acceptsSignednessChange);
+        suite.add("Ir verifier accepts a register read into a value of its width",
+                IrVerifierTest::acceptsRegisterReads);
+        suite.add("Ir verifier refuses a register read into the wrong width",
+                IrVerifierTest::refusesReadIntoTheWrongWidth);
+        suite.add("Ir verifier refuses a register read into something that is not a variable",
+                IrVerifierTest::refusesReadIntoWhatIsNotAVariable);
         suite.add("Ir verifier accepts the flag set in a clobber list",
                 IrVerifierTest::acceptsFlagsClobber);
         suite.add("Ir verifier refuses an unknown name", IrVerifierTest::refusesUnknownName);
@@ -356,6 +362,44 @@ public final class IrVerifierTest {
 
     private static void acceptsSignednessChange() {
         verify("    var signed: i16\n    var unsigned: u16\n    unsigned = 1\n    signed = unsigned\n");
+    }
+
+    /**
+     * A register is read into a value of its own width ({@code docs/ir.md} §8.1): a byte into a
+     * byte, a word into a word, whichever register of the machine it is — the registers a value
+     * cannot live in are read the same way as the ones it can.
+     */
+    private static void acceptsRegisterReads() {
+        verify("    var drive: u8\n    movreg drive, dl\n    movreg drive, ah\n"
+                + "    var seg: u16\n    movreg seg, ds\n    movreg seg, sp\n"
+                + "    var same: u16\n    movreg same, bx\n");
+    }
+
+    /**
+     * The width rule is the one both sides of an assignment follow, and the refusal says which of
+     * the two is which ({@code docs/ir.md} §8.1, §3.2).
+     */
+    private static void refusesReadIntoTheWrongWidth() {
+        Assert.assertTrue(Assert.assertThrows(CompileError.class,
+                () -> verify("    var x: u16\n    movreg x, dl\n"))
+                .getMessage().contains("byte"), "a word read out of a byte register");
+        Assert.assertTrue(Assert.assertThrows(CompileError.class,
+                () -> verify("    var y: u8\n    movreg y, bx\n"))
+                .getMessage().contains("byte"), "a byte read out of a word register");
+    }
+
+    /**
+     * What a register is read into is a value of the program's, so it has to be a variable: a label
+     * is an address, and a name nobody declared is nothing at all.
+     */
+    private static void refusesReadIntoWhatIsNotAVariable() {
+        Assert.assertTrue(Assert.assertThrows(CompileError.class,
+                () -> verify("    var drive: u8\n    movreg drive, dl\nmsg: db 0\n"
+                        + "    movreg msg, dl\n"))
+                .getMessage().contains("label"), "a label");
+        Assert.assertTrue(Assert.assertThrows(CompileError.class,
+                () -> verify("    var drive: u8\n    movreg drive, dl\n    movreg other, dl\n"))
+                .getMessage().contains("unknown name"), "a name nobody declared");
     }
 
     private static void acceptsFlagsClobber() {

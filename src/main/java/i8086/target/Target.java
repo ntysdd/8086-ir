@@ -235,6 +235,19 @@ public interface Target {
     String byteRegister(String register);
 
     /**
+     * The register a value would have to be in for this one's content to be part of it, or null
+     * when no value can be in the register at all.
+     *
+     * <p>What a statement that reads one of the machine's own registers needs said about it: the
+     * register holds what the machine left there, so nothing of the compiler's may be in it
+     * ({@code docs/ir.md} §8.1). Nothing here can name half a register, so a value in {@code dx} and
+     * the {@code dl} a read is about are the same register and the answer for {@code dl} is
+     * {@code dx} — and {@code ds} or {@code sp}, where no value is ever put, answer with null,
+     * because there is nothing to keep out.
+     */
+    String valueRegisterOf(String register);
+
+    /**
      * How many bytes a register is, or zero when the name is not one of this target's registers.
      *
      * <p>What a {@code with} clause is checked against: the value put into a register has to fit it,
@@ -387,4 +400,15 @@ public interface Target {
      * {@code movreg ds, cs} reaches here.
      */
     Expansion writeState(SourcePos where, String name, Operand value);
+
+    /**
+     * A sequence that reads one of this target's own registers into a value, or null when this
+     * target cannot read that one ({@code docs/ir.md} §8.1).
+     *
+     * <p>The other direction of {@link #writeState}, and here for the same reason: which
+     * instruction reads a register, and whether one does, is the machine's business. On this
+     * machine it is one {@code mov} — a value register or a segment register moves into a value
+     * directly — and a machine on which it is more says so by answering with the sequence.
+     */
+    Expansion readState(SourcePos where, Operand destination, String register);
 }

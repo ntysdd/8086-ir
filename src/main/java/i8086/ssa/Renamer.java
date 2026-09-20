@@ -57,6 +57,14 @@ final class Renamer {
             return Item.MovReg.fromValue(item.position(), movreg.name(),
                     rename(movreg.value(), versions));
         }
+        if (item instanceof Item.MovRegRead) {
+            // The register is the machine's and is not renamed; what the statement defines is a
+            // value like any other (docs/ir.md §8.1).
+            Item.MovRegRead read = (Item.MovRegRead) item;
+            String version = versions.of(read.variable());
+            return version == null ? item
+                    : new Item.MovRegRead(item.position(), version, read.register());
+        }
         if (item instanceof Item.Machine) {
             // A statement's clause reads values, so they are renamed like any other read
             // ({@code docs/ir.md} §11).
@@ -87,8 +95,19 @@ final class Renamer {
         return renamed;
     }
 
-    /** Names the place an assignment writes, now that its version is known. */
-    static Item define(Item.Assign assign, String version) {
+    /**
+     * Names the value a definition defines, now that its version is known.
+     *
+     * <p>Two items define a value: an assignment, whose place is a name — memory is not renamed,
+     * so a store defines nothing — and a {@code movreg} reading a register, whose value is the name
+     * on its left ({@code docs/ir.md} §8.1).
+     */
+    static Item define(Item item, String version) {
+        if (item instanceof Item.MovRegRead) {
+            Item.MovRegRead read = (Item.MovRegRead) item;
+            return new Item.MovRegRead(read.position(), version, read.register());
+        }
+        Item.Assign assign = (Item.Assign) item;
         Place.Name place = (Place.Name) assign.place();
         return new Item.Assign(assign.position(), new Place.Name(place.position(), version),
                 assign.value());

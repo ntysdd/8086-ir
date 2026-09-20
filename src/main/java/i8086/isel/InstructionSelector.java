@@ -248,7 +248,12 @@ public final class InstructionSelector {
             out.add(new Instruction(item.position(), machine.mnemonic(), given));
             return;
         }
-        if (item instanceof Item.MovReg) {            emitMovReg((Item.MovReg) item);
+        if (item instanceof Item.MovReg) {
+            emitMovReg((Item.MovReg) item);
+            return;
+        }
+        if (item instanceof Item.MovRegRead) {
+            emitMovRegRead((Item.MovRegRead) item);
             return;
         }
         if (item instanceof Item.FarJump) {
@@ -376,6 +381,26 @@ public final class InstructionSelector {
         if (sequence == null) {
             throw new CompileError(movreg.position(),
                     "this target has no way to set '" + movreg.name() + "' (docs/ir.md §8.1)");
+        }
+        out.addAll(sequence.instructions());
+    }
+
+    /**
+     * {@code movreg drive, dl}: one of the machine's own registers, read into a value
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>What the instruction is, is the target's answer, the same way the write direction's is: on
+     * this machine a register moves into a value in one {@code mov}, and a machine where it takes a
+     * sequence says so itself. What the value is read into is a virtual register like every other
+     * destination, so where it ends up is still the allocator's to decide — and the allocator is
+     * the one that has to keep other values out of the register being read.
+     */
+    private void emitMovRegRead(Item.MovRegRead read) {
+        Expansion sequence = target.readState(read.position(),
+                virtual(read.variable(), read.position()), read.register());
+        if (sequence == null) {
+            throw new CompileError(read.position(),
+                    "this target has no way to read '" + read.register() + "' (docs/ir.md §8.1)");
         }
         out.addAll(sequence.instructions());
     }

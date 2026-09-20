@@ -43,10 +43,13 @@ public final class Liveness {
 
     private final List<Set<String>> liveBefore;
     private final List<Set<String>> liveAfter;
+    private final List<List<Integer>> predecessors;
 
-    private Liveness(List<Set<String>> liveBefore, List<Set<String>> liveAfter) {
+    private Liveness(List<Set<String>> liveBefore, List<Set<String>> liveAfter,
+                     List<List<Integer>> predecessors) {
         this.liveBefore = Collections.unmodifiableList(liveBefore);
         this.liveAfter = Collections.unmodifiableList(liveAfter);
+        this.predecessors = Collections.unmodifiableList(predecessors);
     }
 
     /**
@@ -112,7 +115,29 @@ public final class Liveness {
                 }
             }
         }
-        return new Liveness(liveBefore, liveAfter);
+        return new Liveness(liveBefore, liveAfter, predecessors(successors));
+    }
+
+    /**
+     * The edges the other way round, which is the direction a question about what has run uses.
+     *
+     * <p>Kept in the order the points were written rather than the order the edges were found, so
+     * that a walk over them is a property of the program ({@code AGENTS.md}, invariant 6).
+     */
+    private static List<List<Integer>> predecessors(List<List<Integer>> successors) {
+        List<List<Integer>> incoming = new ArrayList<List<Integer>>();
+        for (int i = 0; i < successors.size(); i++) {
+            incoming.add(new ArrayList<Integer>());
+        }
+        for (int point = 0; point < successors.size(); point++) {
+            for (Integer next : successors.get(point)) {
+                incoming.get(next.intValue()).add(Integer.valueOf(point));
+            }
+        }
+        for (List<Integer> before : incoming) {
+            Collections.sort(before);
+        }
+        return incoming;
     }
 
     /**
@@ -218,5 +243,36 @@ public final class Liveness {
         Set<String> alive = new LinkedHashSet<String>(liveBefore.get(point));
         alive.addAll(liveAfter.get(point));
         return alive;
+    }
+
+    /** The points that run straight into this one, in the order they were written. */
+    public List<Integer> predecessors(int point) {
+        return predecessors.get(point);
+    }
+
+    /**
+     * The points that can reach this one, itself included, in the order they were written.
+     *
+     * <p>The question a statement about machine state is asked in: what can have run before it is
+     * what can have written what it reads ({@code docs/ir.md} §8.1). A point reaches itself, and
+     * that is not a formality — what a point writes is written before what it reads, so a value
+     * defined at the read is in the way of the register it reads exactly as much as one defined
+     * earlier ({@code docs/ir.md} §5.1).
+     */
+    public Set<Integer> pointsReaching(int point) {
+        Set<Integer> found = new LinkedHashSet<Integer>();
+        List<Integer> pending = new ArrayList<Integer>();
+        found.add(Integer.valueOf(point));
+        pending.add(Integer.valueOf(point));
+        while (!pending.isEmpty()) {
+            for (Integer before : predecessors(pending.remove(pending.size() - 1).intValue())) {
+                if (found.add(before)) {
+                    pending.add(before);
+                }
+            }
+        }
+        List<Integer> inOrder = new ArrayList<Integer>(found);
+        Collections.sort(inOrder);
+        return new LinkedHashSet<Integer>(inOrder);
     }
 }

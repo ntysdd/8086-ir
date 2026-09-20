@@ -48,8 +48,10 @@ public final class IrParserTest {
         suite.add("Ir parser reads a home and prints it back", IrParserTest::roundTripsHomes);
         suite.add("Ir parser reads a segment move and prints it back",
                 IrParserTest::roundTripsSegmentMoves);
-        suite.add("Ir parser refuses a name movreg cannot write",
-                IrParserTest::refusesStateMovsegCannotWrite);
+        suite.add("Ir parser reads a register read and prints it back",
+                IrParserTest::roundTripsMovRegReads);
+        suite.add("Ir parser refuses a movreg whose operand is not a register",
+                IrParserTest::refusesMovregWithoutARegister);
         suite.add("Ir parser reads a 'with' clause and prints it back",
                 IrParserTest::roundTripsTheWithClause);
         suite.add("Ir parser refuses a mode with no home to apply to",
@@ -423,30 +425,76 @@ public final class IrParserTest {
                 refused.getMessage());
     }
 
-    /** A name that is not a register this statement can write, refused where it is written. */
-    private static void refusesStateMovsegCannotWrite() {
-        CompileError cs = Assert.assertRefused("test.ir:4:8",
+    /**
+     * The other direction of {@code movreg}: a value on the left and a register on the right
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>Which direction a statement is comes from the first name — one of the registers a value
+     * cannot live in is a write, and anything else is a value — so the register position is the
+     * second one, and what says the name there is the machine's is that it is bare: the author's
+     * variable of that name would be written {@code $dl}. A name on the left is a value and can be
+     * anything, which is why {@code movreg dl, dl} reads the machine's {@code dl} into a variable
+     * the author happens to have called {@code dl}.
+     */
+    private static void roundTripsMovRegReads() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    var $dl: u8\n"
+                + "    var $seg: u16\n"
+                + "    movreg $dl, dl\n"
+                + "    movreg $seg, ds\n"
+                + "    ret\n";
+        Assert.assertEquals(program, IrPrinter.print(parse(program)));
+
+        Module module = parse(program);
+        Item.MovRegRead drive = (Item.MovRegRead) module.items().get(3);
+        Assert.assertEquals("dl", drive.variable());
+        Assert.assertEquals("dl", drive.register());
+        Item.MovRegRead seg = (Item.MovRegRead) module.items().get(4);
+        Assert.assertEquals("seg", seg.variable());
+        Assert.assertEquals("ds", seg.register());
+
+        // Input is liberal and output is canonical, so the unmarked form is the same statement —
+        // and it is not the write direction, because the name on the left is a value and not a
+        // register this machine can write (docs/ir.md §3.1.1).
+        Assert.assertEquals(program, IrPrinter.print(parse("target 8086\norg 0x100\nentry main\n\n"
+                + "main:\n    var dl: u8\n    var seg: u16\n    movreg dl, dl\n"
+                + "    movreg seg, ds\n    ret\n")));
+    }
+
+    /**
+     * A {@code movreg} whose second operand is not a register is refused where that operand is, and
+     * the refusal names the two things a writer could have meant: a register a value can live in,
+     * which a {@code with} clause writes, and the machine state {@code movreg} writes when the
+     * register comes first ({@code docs/ir.md} §8.1, §11).
+     */
+    private static void refusesMovregWithoutARegister() {
+        // 'cs' is a register this machine has but not one a module can set, so with the read
+        // direction built the name is a value and the operand after it is what is wrong.
+        CompileError state = Assert.assertRefused("test.ir:4:12",
                 () -> parse("target 8086\norg 0\nentry a\nmovreg cs, 0\n"));
-        Assert.assertTrue(cs.getMessage().contains("is not a register 'movreg' can write"),
-                cs.getMessage());
-        Assert.assertTrue(cs.getMessage().contains("ds, es, ss, sp, bp"),
-                "and says which registers it can write: " + cs.getMessage());
+        Assert.assertTrue(state.getMessage().contains("is not a register this machine has"),
+                state.getMessage());
+        Assert.assertTrue(state.getMessage().contains("ds, es, ss, sp, bp"),
+                "and says which registers the other direction writes: " + state.getMessage());
 
         // A register a *value* can live in is the other statement's business, and the refusal says
         // so, because that is exactly the question an author writing this line is asking.
-        CompileError register = Assert.assertRefused("test.ir:4:8",
+        CompileError register = Assert.assertRefused("test.ir:4:12",
                 () -> parse("target 8086\norg 0\nentry a\nmovreg ax, 0\n"));
         Assert.assertTrue(register.getMessage().contains("'with' clause"),
                 register.getMessage());
 
-        // And the other direction is a construct that is specified and not built, which is said as
-        // such rather than being mis-parsed (docs/ir.md §8.1).
-        CompileError read = Assert.assertRefused("test.ir:4:8",
-                () -> parse("target 8086\norg 0\nentry a\nmovreg drive, dl\n"));
-        Assert.assertTrue(read.getMessage().startsWith("not implemented yet:"),
-                read.getMessage());
-        Assert.assertTrue(read.getMessage().contains("reading a register into a value"),
-                read.getMessage());
+        // A number is not a register either, and a '$' says the name is the author's.
+        Assert.assertTrue(Assert.assertRefused("test.ir:4:15",
+                () -> parse("target 8086\norg 0\nentry a\nmovreg drive, 5\n"))
+                .getMessage().contains("nothing to read into 'drive'"), "a number");
+        Assert.assertTrue(Assert.assertRefused("test.ir:5:15",
+                () -> parse("target 8086\norg 0\nentry a\nvar dl: u8\nmovreg drive, $dl\n"))
+                .getMessage().contains("written with a '$'"), "a forced name");
     }
 
     private static void reproducesCanonical() {

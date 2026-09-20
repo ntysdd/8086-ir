@@ -93,6 +93,8 @@ public final class IrPrinter {
             printVar(text, (Item.Var) item, target);
         } else if (item instanceof Item.MovReg) {
             printMovReg(text, (Item.MovReg) item, target);
+        } else if (item instanceof Item.MovRegRead) {
+            printMovRegRead(text, (Item.MovRegRead) item, target);
         } else if (item instanceof Item.Assign) {
             printAssign(text, (Item.Assign) item, target);
         } else if (item instanceof Item.Eval) {
@@ -199,6 +201,19 @@ public final class IrPrinter {
             text.append(printValue(movreg.value(), target));
         }
         text.append('\n');
+    }
+
+    /**
+     * {@code movreg x, dl}: a register read into a value, written the way the parser reads it back
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>The register is printed bare because it is the machine's, and the value it is read into is
+     * printed the way every value is — marked when the author chose the name — which is what makes
+     * the text of a program that also has a variable called {@code dl} unambiguous.
+     */
+    private static void printMovRegRead(StringBuilder text, Item.MovRegRead read, Target target) {
+        text.append(INDENT).append("movreg ").append(name(read.variable(), target)).append(", ")
+                .append(read.register()).append('\n');
     }
 
     private static void printAssign(StringBuilder text, Item.Assign assign, Target target) {

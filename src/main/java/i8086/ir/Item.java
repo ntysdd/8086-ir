@@ -366,6 +366,45 @@ public abstract class Item {
     }
 
     /**
+     * {@code movreg drive, dl}: reading one of the machine's own registers into a value
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>The other direction of {@link MovReg}, and a statement of its own for the same reason: a
+     * name in a value position cannot say whether it means the machine's register or a variable of
+     * that name, and here the register stands in the position that says so — the second one, where
+     * a bare name is the machine's and the author's variable of that name is written {@code $dl}.
+     *
+     * <p>What it defines is a value like any other, so SSA renames the name on the left; the
+     * register on the right is not a value at all, and it is read as the machine left it. That is a
+     * promise the compiler can only keep by writing nothing of its own there: a value that happened
+     * to be in this one would be what the read returned, and so would the working of a sequence the
+     * target declares for an operation the machine does in named registers — {@code div} leaves its
+     * remainder in {@code dx}. A value can be moved out of the way and a sequence cannot, so the
+     * first is the allocator's to place and the second is a refusal ({@code docs/ir.md} §8.1).
+     */
+    public static final class MovRegRead extends Item {
+
+        private final String variable;
+        private final String register;
+
+        public MovRegRead(SourcePos position, String variable, String register) {
+            super(position);
+            this.variable = variable;
+            this.register = register;
+        }
+
+        /** The value the register is read into, which is a variable of the module's. */
+        public String variable() {
+            return variable;
+        }
+
+        /** The register read, which is one of the machine's own. */
+        public String register() {
+            return register;
+        }
+    }
+
+    /**
      * An assignment: {@code x = 5}, {@code [p] = x}, {@code p = msg}.
      *
      * <p>The two sides must have the same width. Signedness may differ, because

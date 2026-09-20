@@ -188,8 +188,8 @@ The two prefixes are worth stating plainly, and the list that goes with them:
   that name has to say so and is written `$ax` (`docs/asm.md` §3). The IR surface has no
   such exception in a value position, because it has no registers there: `var ax: u16`
   is a variable, and it is written `$ax` like every other name. It has one in the
-  positions where a statement names a register — `movreg`'s source (§8.1) and the
-  register position of a `with` clause (§11) — and there a bare name is the machine's,
+  positions where a statement names a register — the second operand of `movreg` (§8.1) and
+  the register position of a `with` clause (§11) — and there a bare name is the machine's,
   which is the same rule for the same reason: a name the author wants is written `$ax`.
 * **What cannot be a name** is only what is not a word at all: a name the compiler
   generated, and a spelling no name can have.
@@ -1162,7 +1162,8 @@ of its own does settle it, and what that buys is that **nothing is reserved**:
 `var ds: u16` declares a variable like any other name, `ds = 0` assigns it, and only
 `movreg` reaches the register. `flags` stays the one predeclared name (§4.1).
 
-A name in the second position is read the way the assembly text reads one (§3.1.1): a bare
+A name in the second position — a register position in both directions (§3.1.1) — is read
+the way the assembly text reads one: a bare
 name this machine has a register for **is** that register, and a name the author wants is
 written `$cs`. Canonical text therefore has no name that could be two things, because the
 printer writes the `$` on everything the author chose. So `movreg ds, cs` copies the code
@@ -1173,13 +1174,49 @@ actually running in — and a program that has a variable called `cs` writes
 Writing one of these registers is an effect like a store and not a definition of a value,
 so SSA renames nothing about it (§2.3), and it leaves the flags alone.
 
-**The other direction is specified and not built.** A program also needs to *read* a
-register into a value, and the case that matters is the one a boot loader meets at entry:
-the BIOS hands the drive number over in `dl`, and today nothing outside an inline block can
-name it. That direction is `movreg drive, dl` — a value on the left and a register on the
-right — and it is safe for the same reason the write is: the read *defines* the value, and
-the register is free the moment the copy is made, so there is no interval to keep. Nothing
-is built for it yet; the parser refuses it and says so.
+**The other direction reads a register into a value**, and the case it exists for is the one
+a boot loader meets at entry: the BIOS hands the drive number over in `dl`.
+
+```
+var drive: u8
+movreg drive, dl
+```
+
+Which direction a statement is comes from the first operand, the same way the write direction
+reads it: one of the registers above is that register, and anything else is a value — which
+makes the statement a read of the register in the second position. So `movreg drive, dl` reads
+the machine's `dl` into `drive`, `movreg dl, dl` reads it into a variable the author called
+`dl`, and an author with a variable called `sp` writes `movreg $sp, dl`, because a bare name
+there is the machine's. A name that is not one of the registers a module can write is
+therefore a value here rather than a spelling mistake. What the register is read into has to be
+a variable of the register's own width — a byte into a byte half, a word into a word — and
+reading one straight into memory is not something this surface says: put it in a variable and
+store that.
+
+**What the compiler promises is what the machine left in the register**, and it keeps that
+promise by writing nothing of its own there. That is two rules, because the compiler writes a
+register for two reasons:
+
+* **A value.** A value lives in a register for a stretch of code, and one that happened to be
+  in this register would be what the read returned. So the register is closed to every value
+  that could already have been written into it — every value alive or defined at a point that
+  can reach the read, which is everything the compiler can have written before it on some
+  path — and it is open again afterwards: the copy is what defines the value the read
+  produces, so there is no interval to keep. A value with nowhere else to go is a refusal that
+  names the read as the reason, and so is a register the allocator would have picked to move a
+  value into and out of its home (§3.1.2).
+* **A sequence the target declares.** `div` leaves its quotient in `ax` and its remainder in
+  `dx`, and a shift of more than one wants its count in `cl`; no other register will do, so
+  there is nothing to move out of the way. A read of a register such a sequence has written is
+  therefore **refused**, and the message says which register is in the way and what to do. What
+  puts a register back in the machine's hands is a statement that says what goes into one: a
+  `with` clause, which the program writes, and a clobber list, which says the machine has left
+  something there. That is what makes the case this statement exists for work — the answer
+  `int 0x13` leaves in a register is read after it, whatever the compiler did before — and it
+  is why a register the program has just written is read back like any other.
+
+Reading a register is not an effect: nothing about the machine changes, so a read whose value
+nobody uses goes away like any other dead definition.
 
 **`bp` is on the list on purpose, and the reason is worth writing down.** The allocator
 does not use it: it is left out of the register classes because it is where a frame pointer
@@ -1533,8 +1570,10 @@ code is still not spellable, and that is §12 item 12.
   statement's, and afterwards they hold whatever it left there — for `int 0x13`, the BIOS's
   answer. Reading one back into a value is `movreg`'s other direction (§8.1).
 
-**Not built** is the other direction of §8.1: reading a register into a value, which is what a
-clip-board call's *result* needs when the answer is not a flag. The clause itself is built.
+**The other direction of §8.1 is built**: reading a register into a value, which is what a
+clip-board call's *result* needs when the answer is not a flag — `movreg status, ah` after the
+statement, and the register is the machine's again from the moment the clause writes it. The
+clause itself is built.
 
 ### 11.1 What to do when a value has to live across a call — [decided]
 
@@ -1627,8 +1666,10 @@ Collected for greppability; each is marked **[open]** at its point of use above.
 
     **The interface half is now spelled**, by the `with` clause of §11: a statement that
     talks to the outside world can be given its arguments, and because the write and the
-    read are inside one item, nothing is pinned to give it them. `movreg` (§8.1) is the
-    other direction, reading a register into a value, which needs no pinning either.
+    read are inside one item, nothing is pinned to give it them. And the other direction
+    is built too: `movreg` (§8.1) reads a register into a value, which needs no pinning
+    either — what it needs is that nothing of the compiler's is in the register, and that
+    is a rule about where values may live rather than about holding one in place.
 
     What is still missing is a value that has to **stay** in a register across a stretch
     of code — a loop that keeps its argument in `dl`, a value the compiler must not move

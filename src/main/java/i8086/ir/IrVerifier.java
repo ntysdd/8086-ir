@@ -183,6 +183,10 @@ public final class IrVerifier {
             checkMovReg((Item.MovReg) item);
             return flagsDefined;
         }
+        if (item instanceof Item.MovRegRead) {
+            checkMovRegRead((Item.MovRegRead) item);
+            return flagsDefined;
+        }
         if (item instanceof Item.FarJump) {
             Item.FarJump far = (Item.FarJump) item;
             require(far.segment() <= 0xFFFF, item.position(),
@@ -546,6 +550,28 @@ public final class IrVerifier {
         require(bytes == null || bytes.intValue() == SEGMENT_BYTES, value.position(),
                 "a " + bytes + "-byte value does not fit in '" + movreg.name() + "', which is one "
                         + "word wide (docs/ir.md §8.1)");
+    }
+
+    /**
+     * {@code movreg x, dl}: reading one of the machine's registers into a value
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>Two things have to hold, and both are about the module rather than about the target. What
+     * the register is read into has to be a variable — the register is the machine's and the name
+     * on the left is the program's — and its width has to be the register's, which is the rule an
+     * assignment's two sides follow: a value is as wide as the register it lives in, and a read
+     * that wrote half of one would be a read into nothing.
+     */
+    private void checkMovRegRead(Item.MovRegRead read) {
+        Type type = variable(read.variable(), read.position());
+        require(target.isRegister(read.register()), read.position(),
+                "'" + read.register() + "' is not a register this machine has, so there is nothing "
+                        + "to read here (docs/ir.md §8.1)");
+        int bytes = target.registerBytes(read.register());
+        require(type.bytes() == bytes, read.position(),
+                "a " + type.spelling() + " is " + type.bytes() + " byte(s) wide and '"
+                        + read.register() + "' is " + bytes + ": a register is read into a value of "
+                        + "its own width (docs/ir.md §8.1)");
     }
 
     private void checkCompare(Item.Compare compare) {

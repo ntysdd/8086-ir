@@ -159,6 +159,10 @@ public final class Effects {
             if (movreg.value() != null) {
                 valueNames(movreg.value(), found);
             }
+        } else if (item instanceof Item.MovRegRead) {
+            // The other direction of the same statement: the register is the machine's, so the
+            // only name here is the value it is read into (docs/ir.md §8.1).
+            found.add(new Occurrence(((Item.MovRegRead) item).variable(), true, item.position()));
         }
         for (Item.Argument argument : argumentsOf(item)) {
             // A clause reads what it puts into the registers, which is what keeps the value
@@ -183,11 +187,13 @@ public final class Effects {
     }
 
     /**
-     * The variable an assignment writes, or null when it writes memory or
-     * nothing at all.
+     * The variable a definition defines, or null when the item defines no value: a store writes
+     * memory, and the write direction of {@code movreg} writes machine state.
      *
-     * <p>A store is not a definition of a value: memory is not renamed, so
-     * nothing in SSA has to be named for it ({@code docs/ir.md} §3.1).
+     * <p>A store is not a definition of a value: memory is not renamed, so nothing in SSA has
+     * to be named for it ({@code docs/ir.md} §3.1). A {@code movreg} that reads a register is a
+     * definition of the variable it reads it into, which is what SSA renames and what keeps the
+     * value alive until it is read ({@code docs/ir.md} §8.1).
      */
     public static String writtenVariable(Item item) {
         if (item instanceof Item.Assign) {
@@ -195,6 +201,9 @@ public final class Effects {
             if (place instanceof Place.Name) {
                 return ((Place.Name) place).name();
             }
+        }
+        if (item instanceof Item.MovRegRead) {
+            return ((Item.MovRegRead) item).variable();
         }
         return null;
     }

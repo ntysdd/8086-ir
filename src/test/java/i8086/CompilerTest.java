@@ -84,6 +84,21 @@ public final class CompilerTest {
                 CompilerTest::keepsValuesOutOfTheSegmentScratch);
         suite.add("Compiler keeps a segment set up that nothing reads",
                 CompilerTest::keepsSegmentationState);
+        suite.add("Compiler reads the drive number the BIOS hands over",
+                CompilerTest::readsTheDriveNumber);
+        suite.add("Compiler reads the machine's segmentation state",
+                CompilerTest::readsSegmentationState);
+        suite.add("Compiler keeps values out of the register a read asks for",
+                CompilerTest::keepsValuesOutOfTheRegisterItReads);
+        suite.add("Compiler keeps a scratch register off a read",
+                CompilerTest::keepsScratchRegistersOffARead);
+        suite.add("Compiler refuses a read of a register it has already written",
+                CompilerTest::refusesAReadOfARegisterTheCompilerWrote);
+        suite.add("Compiler reads what the machine left after an interrupt",
+                CompilerTest::readsWhatTheMachineLeftAfterAnInterrupt);
+        suite.add("Compiler keeps the drive number across an interrupt",
+                CompilerTest::keepsTheDriveNumberAcrossAnInterrupt);
+        suite.add("Compiler drops a read nobody uses", CompilerTest::dropsAReadNobodyUses);
         suite.add("Compiler puts a byte value in its home", CompilerTest::putsAByteValueInItsHome);
         suite.add("Compiler compiles the control-flow sugar", CompilerTest::compilesSugar);
         suite.add("Compiler reads through a pointer and writes through a label",
@@ -732,6 +747,198 @@ public final class CompilerTest {
         Assert.assertEquals("org 0x100\n\n$main:\n    mov ax, 0x1234\n    mov ds, ax\n    ret\n",
                 Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
                         + "    movreg ds, 0x1234\n"
+                        + "    ret\n"));
+    }
+
+    // --- reading the machine's own registers (docs/ir.md §8.1) --------------
+
+    /**
+     * The other direction of {@code movreg}: the drive number the BIOS hands a boot loader in
+     * {@code dl}, read into a value the program can use ({@code docs/ir.md} §8.1).
+     *
+     * <p>The copy is a real instruction and not a register moved into itself: the register is kept
+     * free for what the machine left there, so the value is read into another one of the four
+     * registers that can hold a byte.
+     */
+    private static void readsTheDriveNumber() {
+        Assert.assertEquals("org 0x7c00\n\n$main:\n    mov al, dl\n    mov [0x500], al\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
+                        + "    var drive: u8\n"
+                        + "    movreg drive, dl\n"
+                        + "    [0x500] = drive\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A register no value can live in is read the same way and needs nothing kept out of it: the
+     * machine's own segmentation state is one {@code mov}, and what a loader does with it is carry
+     * it around as a value ({@code docs/ir.md} §8.1).
+     */
+    private static void readsSegmentationState() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    mov ax, ds\n    mov [0x500], ax\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var seg: u16\n"
+                        + "    movreg seg, ds\n"
+                        + "    [0x500] = seg\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * The whole reason the read direction exists, in one program: the BIOS hands a boot loader the
+     * drive number in {@code dl}, the loader has to keep it across an interrupt that destroys every
+     * register, and the next stage wants it in {@code dl} again ({@code docs/ir.md} §8.1).
+     *
+     * <p>The value lives in the cell the declaration gave it exactly while the interrupt is in the
+     * way, and nowhere else — which is what a home is for, and what says the read composes with the
+     * rest of the pipeline rather than needing a block.
+     */
+    private static void keepsTheDriveNumberAcrossAnInterrupt() {
+        Assert.assertEquals("org 0x7c00\n\n$main:\n    mov al, dl\n    mov byte [$saved], al\n"
+                        + "    int 0x13\n    mov al, byte [$saved]\n    mov dl, al\n"
+                        + "    jmp 0:0x7e00\n    ret\n\n$saved: times 1 db 0\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x7c00\nentry $main\n\n$main:\n"
+                        + "    var drive: u8 in saved\n"
+                        + "    movreg drive, dl\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx)\n"
+                        + "    jmp 0:0x7e00 with dl = drive\n"
+                        + "    ret\n"
+                        + "\nsaved: pad 1\n"));
+    }
+
+    /**
+     * A read asks for what the machine left in the register, so the compiler keeps its own values
+     * out of it — and that is not free: {@code dx} is one of the four registers a byte value can
+     * live in, and a program that needs all four while a read still has to find {@code dl} untouched
+     * is refused rather than given a register the read would then see. The same program without the
+     * read compiles, which is what says the read is what took the register away.
+     */
+    private static void keepsValuesOutOfTheRegisterItReads() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    var a: u8\n"
+                + "    var b: u8\n"
+                + "    var c: u8\n"
+                + "    var drive: u8\n"
+                + "$loop:\n"
+                + "    movreg drive, dl\n"
+                + "    a = byte [0x501]\n"
+                + "    b = byte [0x502]\n"
+                + "    c = byte [0x503]\n"
+                + "    [0x510] = a\n"
+                + "    [0x511] = b\n"
+                + "    [0x512] = c\n"
+                + "    [0x514] = drive\n"
+                + "    jmp $loop\n";
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("read.ir", program));
+        Assert.assertTrue(refused.getMessage().contains("is what a 'movreg' reads"),
+                "the register is asked for by the read: " + refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("dx"), refused.getMessage());
+
+        String without = program.replace("    movreg drive, dl\n",
+                "    drive = byte [0x500]\n");
+        String assembly = Compiler.compile("free.ir", without);
+        Assert.assertTrue(assembly.contains("mov dl, byte [0x501]"),
+                "and with nothing reading the machine, dl is a register like any other: " + assembly);
+    }
+
+    /**
+     * A scratch register is a write of the compiler's like any other, so a register a read can still
+     * ask for is not one it may pick — here the value in the cell needs a register to be got at, and
+     * the only one left is the one {@code movreg} reads ({@code docs/ir.md} §8.1, §3.1.2).
+     */
+    private static void keepsScratchRegistersOffARead() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    var a: u8 in cell\n"
+                + "    var b: u8\n"
+                + "    var c: u8\n"
+                + "    var drive: u8\n"
+                + "$loop:\n"
+                + "    movreg drive, dl\n"
+                + "    a = byte [0x501]\n"
+                + "    b = byte [0x502]\n"
+                + "    c = byte [0x503]\n"
+                + "    [0x510] = a\n"
+                + "    [0x511] = b\n"
+                + "    [0x512] = c\n"
+                + "    [0x514] = drive\n"
+                + "    jmp $loop\n"
+                + "\n"
+                + "cell: pad 1\n";
+        CompileError refused = Assert.assertThrows(CompileError.class,
+                () -> Compiler.compile("scratch.ir", program));
+        Assert.assertTrue(refused.getMessage().contains("has to hold what a 'movreg' reads"),
+                refused.getMessage());
+
+        String without = program.replace("    movreg drive, dl\n",
+                "    drive = byte [0x500]\n");
+        Compiler.compile("free.ir", without);
+    }
+
+    /**
+     * What a read would return must be the machine's, and the compiler writes registers for its own
+     * reasons: {@code div} leaves the remainder in {@code dx}, and no other register will do. So a
+     * read of that register after such an operation is refused with a position, rather than answered
+     * with the compiler's own arithmetic ({@code docs/ir.md} §8.1).
+     */
+    private static void refusesAReadOfARegisterTheCompilerWrote() {
+        String program = "target 8086\n"
+                + "org 0x100\n"
+                + "entry $main\n"
+                + "\n"
+                + "$main:\n"
+                + "    var a: u16\n"
+                + "    var b: u16\n"
+                + "    var q: u16\n"
+                + "    var drive: u8\n"
+                + "    a = 100\n"
+                + "    b = 7\n"
+                + "    q = eval(a / b)\n"
+                + "    movreg drive, dl\n"
+                + "    [0x500] = q\n"
+                + "    [0x502] = drive\n"
+                + "    ret\n";
+        CompileError refused = Assert.assertRefused("read.ir:13:5",
+                () -> Compiler.compile("read.ir", program));
+        Assert.assertTrue(refused.getMessage().contains("'dl' is read here"),
+                refused.getMessage());
+        Assert.assertTrue(refused.getMessage().contains("already written 'dx'"),
+                refused.getMessage());
+    }
+
+    /**
+     * A statement that says what goes into a register puts it back in the machine's hands: the
+     * answer an interrupt leaves there is read after it, whatever the compiler did before
+     * ({@code docs/ir.md} §8.1).
+     */
+    private static void readsWhatTheMachineLeftAfterAnInterrupt() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    int 0x13\n    mov cl, ah\n"
+                        + "    mov [0x500], cl\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var status: u8\n"
+                        + "    int 0x13 clobbers(ax, bx, cx, dx)\n"
+                        + "    movreg status, ah\n"
+                        + "    [0x500] = status\n"
+                        + "    ret\n"));
+    }
+
+    /**
+     * A read nobody uses is not an instruction: what it produces is a value, and a value with no
+     * reader is what dead value elimination is for. Reading a register has no effect of its own —
+     * nothing about the machine changes — so nothing has to be kept for it.
+     */
+    private static void dropsAReadNobodyUses() {
+        Assert.assertEquals("org 0x100\n\n$main:\n    ret\n",
+                Compiler.compile("t.ir", "target 8086\norg 0x100\nentry $main\n\n$main:\n"
+                        + "    var drive: u8\n"
+                        + "    movreg drive, dl\n"
                         + "    ret\n"));
     }
 

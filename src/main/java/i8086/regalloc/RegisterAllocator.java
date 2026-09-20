@@ -110,6 +110,28 @@ public final class RegisterAllocator {
      */
     private final List<Map<String, String>> scratches = new ArrayList<Map<String, String>>();
 
+    /**
+     * The register each point reads from the machine, by point: the name as it was written, and only
+     * where a value could be in it at all ({@code docs/ir.md} §8.1).
+     */
+    private final Map<Integer, String> readRegisters = new LinkedHashMap<Integer, String>();
+
+    /**
+     * The registers the reads a point can still reach need free.
+     *
+     * <p>What a read asks for is the machine's content, and a scratch register the allocator picks
+     * for a value in a home writes over exactly that — so a register a read can still ask for is not
+     * one to pick ({@code docs/ir.md} §8.1).
+     */
+    private final Map<Integer, Set<String>> registersReadLater =
+            new LinkedHashMap<Integer, Set<String>>();
+
+    /**
+     * The registers a read needs free, so that a refusal can say that is why and not guess at a
+     * clobber list the program never wrote ({@code docs/ir.md} §8.1).
+     */
+    private final Set<String> readHolds = new LinkedHashSet<String>();
+
     private RegisterAllocator(Target target) {
         this.target = target;
     }
@@ -128,6 +150,9 @@ public final class RegisterAllocator {
         }
         takeHomes(selection);
         keepValuesOutOfWrittenCells();
+        takeReadRegisters();
+        keepValuesOutOfReadRegisters();
+        requireTheReadRegistersAreTheMachines();
         colour();
 
         List<Selection.Piece> pieces = new ArrayList<Selection.Piece>();
@@ -605,6 +630,142 @@ public final class RegisterAllocator {
     }
 
     /**
+     * Where the machine's own registers are read, and which register each read needs free
+     * ({@code docs/ir.md} §8.1).
+     *
+     * <p>The register that has to be free is the target's answer and not the name that was written:
+     * nothing here can name half a register, so a read of {@code dl} is about {@code dx}. A register
+     * no value is ever given — the segmentation state and the stack — answers with null, because
+     * nothing the compiler does is ever in it.
+     *
+     * <p>Two rules come out of this, and they are the two ways the compiler can have written the
+     * register before the read: it puts values in registers, which
+     * {@link #keepValuesOutOfReadRegisters} keeps out of this one, and it picks scratch registers
+     * for values in homes, which {@link #assignScratches} will not pick from here.
+     */
+    private void takeReadRegisters() {
+        for (int point = 0; point < liveness.points(); point++) {
+            String register = readRegister(selection.pieces().get(point).item());
+            if (register == null) {
+                continue;
+            }
+            String held = target.valueRegisterOf(register);
+            if (held == null) {
+                continue; // a register no value can be in, so one the compiler never writes
+            }
+            readRegisters.put(Integer.valueOf(point), register);
+            readHolds.add(held);
+            for (Integer before : liveness.pointsReaching(point)) {
+                Set<String> needed = registersReadLater.get(before);
+                if (needed == null) {
+                    needed = new LinkedHashSet<String>();
+                    registersReadLater.put(before, needed);
+                }
+                needed.add(held);
+            }
+        }
+    }
+
+    /** The register a point reads from the machine, or null when it reads none. */
+    private static String readRegister(Item item) {
+        return item instanceof Item.MovRegRead ? ((Item.MovRegRead) item).register() : null;
+    }
+
+    /**
+     * Keeps values out of the registers a statement reads from the machine.
+     *
+     * <p>A read asks for the content the machine left in the register, and a value the compiler put
+     * there is what it would get instead ({@code docs/ir.md} §8.1). What is in the way is not only
+     * what is alive at the read: a value that ended before it was still written there, and nothing
+     * clears a register when a value dies. So the register is closed to every value alive, or
+     * defined, at any point that can reach the read — that is everything the compiler can have
+     * written before it on some path — while a value defined afterwards may use the register: the
+     * copy the read makes is what defines the one value there, and the register is the machine's
+     * only up to the read.
+     */
+    private void keepValuesOutOfReadRegisters() {
+        for (Map.Entry<Integer, String> read : readRegisters.entrySet()) {
+            String register = target.valueRegisterOf(read.getValue());
+            for (Integer earlier : liveness.pointsReaching(read.getKey().intValue())) {
+                Selection.Piece piece = selection.pieces().get(earlier.intValue());
+                for (String name : liveness.liveAt(earlier.intValue())) {
+                    forbid(groupOf(name), register);
+                }
+                String defined = Effects.writtenVariable(piece.item());
+                if (defined != null) {
+                    forbid(groupOf(defined), register);
+                }
+            }
+        }
+    }
+
+    /**
+     * Refuses a read of a register the compiler has already written.
+     *
+     * <p>A value can be kept out of a read's way, but a sequence cannot. The machine insists on
+     * particular registers for some operations — {@code div} leaves its quotient in {@code ax} and
+     * its remainder in {@code dx}, a shift of more than one wants its count in {@code cl} — and what
+     * the target declares for those is the compiler's own work and not the machine's. A read that
+     * would return that work is refused, because the arithmetic in it is nobody's answer.
+     *
+     * <p>What puts a register back in the machine's hands is an item that says what goes into a
+     * register: a {@code with} clause, which the program writes, and a clobber list, which says the
+     * machine has left something there. That is what makes the case this direction exists for work —
+     * the answer an interrupt leaves in a register is read after it, whatever the compiler did
+     * before, and a register the program has just written is read back.
+     */
+    private void requireTheReadRegistersAreTheMachines() {
+        int points = liveness.points();
+        List<Set<String>> dirty = new ArrayList<Set<String>>();
+        for (int point = 0; point < points; point++) {
+            dirty.add(new LinkedHashSet<String>());
+        }
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int point = 0; point < points; point++) {
+                Set<String> before = new LinkedHashSet<String>();
+                for (Integer earlier : liveness.predecessors(point)) {
+                    before.addAll(dirty.get(earlier.intValue()));
+                }
+                Selection.Piece piece = selection.pieces().get(point);
+                Set<String> after = new LinkedHashSet<String>(before);
+                if (isAnInterface(piece.item())) {
+                    after.removeAll(destroyed(piece));
+                } else {
+                    after.addAll(destroyed(piece));
+                }
+                if (!after.equals(dirty.get(point))) {
+                    dirty.set(point, after);
+                    changed = true;
+                }
+            }
+        }
+        for (Map.Entry<Integer, String> read : readRegisters.entrySet()) {
+            String register = target.valueRegisterOf(read.getValue());
+            if (dirty.get(read.getKey().intValue()).contains(register)) {
+                throw new CompileError(selection.pieces().get(read.getKey().intValue()).position(),
+                        "'" + read.getValue() + "' is read here, and the compiler has already "
+                                + "written '" + register + "': the way this machine does something "
+                                + "this program asked for uses registers nothing else will do, so "
+                                + "what is in it now is the compiler's own working and not what the "
+                                + "machine left. Read it earlier, or after a statement that puts "
+                                + "something into the register — an interrupt, which says the machine "
+                                + "has left its answer there (docs/ir.md §8.1)");
+            }
+        }
+    }
+
+    /**
+     * Whether an item's writes are the program's rather than the compiler's: a statement that says
+     * what goes into its registers, and one whose clobber list says what the machine has left.
+     */
+    private static boolean isAnInterface(Item item) {
+        return item instanceof Item.Machine || item instanceof Item.InlineAsm
+                || item instanceof Item.FarJump;
+    }
+
+    /**
      * Whether a value fits in a register, which is what a home holds.
      *
      * <p>A home is moved in and out with a machine access, so the value has to be one of the two
@@ -840,6 +1001,13 @@ public final class RegisterAllocator {
             }
         }
         Set<String> forbidden = keepOut.get(value);
+        Set<String> destroyed = new LinkedHashSet<String>();
+        Set<String> held = new LinkedHashSet<String>();
+        if (forbidden != null) {
+            for (String register : forbidden) {
+                (readHolds.contains(register) ? held : destroyed).add(register);
+            }
+        }
         return new CompileError(positions.get(value),
                 "there is no register left for '" + selection.variableOf(value) + "': "
                         + (blockers.isEmpty()
@@ -848,10 +1016,14 @@ public final class RegisterAllocator {
                         : "it is alive at the same time as " + blockers + ", and "
                         + (taken.size() == 1 ? "that one" : "those") + " hold "
                         + taken)
-                        + (forbidden == null || forbidden.isEmpty() ? ""
-                        : "; something it has to live across destroys " + forbidden
+                        + (destroyed.isEmpty() ? ""
+                        : "; something it has to live across destroys " + destroyed
                         + ", so say what it really destroys with 'clobbers(...)', or write the "
                         + "value to memory and read it into a name of its own afterwards")
+                        + (held.isEmpty() ? ""
+                        : "; and " + held + " is what a 'movreg' reads, which asks for what the "
+                        + "machine left there, so no value may be in it up to that point "
+                        + "(docs/ir.md §8.1)")
                         + homeProblem(value)
                         + byteProblem(value)
                         + ": this allocation does not spill, because a program that needs "
@@ -1031,6 +1203,12 @@ public final class RegisterAllocator {
             Map<String, String> at = scratches.get(point);
             Set<String> busy = registersInUse(point);
             busy.addAll(destroyed(piece));
+            // A register some read can still ask for is the machine's until that read: a scratch
+            // writes over what it would return (docs/ir.md §8.1).
+            Set<String> readLater = registersReadLater.get(Integer.valueOf(point));
+            if (readLater != null) {
+                busy.addAll(readLater);
+            }
             for (Instruction instruction : piece.instructions()) {
                 for (String name : mentioned(instruction)) {
                     String value = groupOf(name);
@@ -1209,7 +1387,11 @@ public final class RegisterAllocator {
                 "there is no register free to move '" + selection.variableOf(stuck.value)
                         + "' between its home '" + inHome.get(stuck.value) + "' and the machine "
                         + "here: " + blockers + " are alive at this point and hold every register "
-                        + "the machine has, and a register is freed here only by moving a value "
+                        + "the machine has"
+                        + (readHolds.isEmpty() ? ""
+                        : ", and " + readHolds + " has to hold what a 'movreg' reads "
+                        + "(docs/ir.md §8.1)")
+                        + ", and a register is freed here only by moving a value "
                         + "into a home the program declared, which none of them has "
                         + "(docs/ir.md §3.1.2, §8.2)");
     }

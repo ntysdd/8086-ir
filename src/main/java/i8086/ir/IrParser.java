@@ -829,49 +829,69 @@ public final class IrParser {
     }
 
     /**
-     * {@code movreg ds, 0} — putting a value into one of the machine's own registers
+     * {@code movreg ds, 0} — the machine's own registers, in either direction
      * ({@code docs/ir.md} §8.1).
      *
-     * <p>Which of the two directions a statement is comes from the first name: one of the registers
-     * a value cannot live in is a write, and anything else is a value, which makes the statement a
-     * read — the direction that is not built yet, and refused as such rather than mis-parsed. A
-     * bare register name is the machine's here and the author's variable of that name is written
-     * {@code $ax}, which is the rule the assembly text has and for the same reason: in this
-     * position a bare name spelled like a register would otherwise be two things (§3.1.1).
+     * <p>Which direction a statement is comes from the first name: one of the registers a value
+     * cannot live in is a write, and anything else is a value, which makes the statement a read of
+     * the register in the second position. That position is a register position in both directions,
+     * and there a bare name means the machine's register while the author's variable of that name is
+     * written {@code $dl} — the rule the assembly text has, and for the same reason (§3.1.1).
      */
     private Item parseMovReg() {
         Token keyword = next();
-        Token name = expect(TokenKind.IDENT, "a machine register, or a variable to read one into");
-        if (name.forced() || !target.stateRegisters().contains(name.name())) {
-            throw new CompileError(name.position(), movRegRefusal(name));
+        if (startsMemoryOperand()) {
+            throw new CompileError(peek().position(),
+                    "a register is read into a value and not into memory: read it into a variable "
+                            + "and store that (docs/ir.md §8.1)");
         }
+        Token name = expect(TokenKind.IDENT, "a machine register, or a variable to read one into");
         expectPunct(",");
-        Item item = movRegFrom(keyword, name);
+        Item item = !name.forced() && target.stateRegisters().contains(name.name())
+                ? movRegFrom(keyword, name)
+                : movRegInto(keyword, name);
         endOfLine();
         return item;
     }
 
     /**
-     * Why this {@code movreg} is not something the surface can read: a name that is not state a
-     * module can set, or the direction that is not built yet.
+     * {@code movreg drive, dl}: reading one of the machine's own registers into a value
+     * ({@code docs/ir.md} §8.1).
      *
-     * <p>The two are told apart by what follows the name, because an author who wrote
-     * {@code movreg drive, dl} meant the read and an author who wrote {@code movreg dss, 0} made a
-     * spelling mistake — and the two deserve different sentences.
+     * <p>The register is in the position that makes it the machine's, so a name that is not
+     * {@code $}-forced and is one this target has is the register and nothing else — the author's
+     * variable of that name would be written {@code $dl}. Anything else is refused with
+     * {@link #readRegisterProblem}, because a statement that reads a register and has no register
+     * to read is not a statement.
      */
-    private String movRegRefusal(Token name) {
-        Token source = tokenAt(1); // the operand after the comma, which expect() has passed
-        if (!name.forced() && source.is(TokenKind.IDENT) && target.isRegister(source.name())) {
-            return "not implemented yet: 'movreg' reading a register into a value; it writes "
-                    + target.stateRegisters() + " so far (docs/ir.md §8.1)";
+    private Item movRegInto(Token keyword, Token place) {
+        Token source = peek();
+        if (!source.is(TokenKind.IDENT) || source.forced() || !target.isRegister(source.name())) {
+            throw new CompileError(source.position(), readRegisterProblem(place, source));
         }
-        return "'" + name.text() + "' is not a register 'movreg' can write; it writes "
-                + target.stateRegisters() + ": the machine's own registers that a value cannot "
-                + "live in (docs/ir.md §8.1)"
-                + (target.valueRegisters().contains(name.name())
-                ? "; a register a value can live in is written by the 'with' clause of the "
-                + "statement it is an argument of (docs/ir.md §11)"
-                : "");
+        next();
+        return new Item.MovRegRead(keyword.position(), place.name(), source.name());
+    }
+
+    /**
+     * Why there is no register to read here, said in a way the writer can act on.
+     *
+     * <p>Two things a writer at this point could have meant — a register a value can live in, which
+     * a {@code with} clause writes, and the machine state {@code movreg} writes when the register
+     * comes first — are named rather than guessed at, because the operand that is wrong does not say
+     * which of them was meant.
+     */
+    private String readRegisterProblem(Token place, Token source) {
+        String problem = "'" + source.text() + "' is not a register this machine has, so there is "
+                + "nothing to read into '" + place.text() + "' (docs/ir.md §8.1)";
+        if (!place.forced() && target.valueRegisters().contains(place.name())) {
+            return problem + "; a register a value can live in is written by the 'with' clause of "
+                    + "the statement it is an argument of (docs/ir.md §11)";
+        }
+        return problem + "; 'movreg' reads one of the machine's own registers into a value, as in "
+                + "'movreg drive, dl' — a name written with a '$' is the author's variable, not a "
+                + "register — and writes the state " + target.stateRegisters() + " when the "
+                + "register comes first";
     }
 
     /**
